@@ -31,9 +31,10 @@ import updater as UPD
 import timecheck as TC
 import backup as BK
 import casefile as CF
+import anim
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "1.9"
+APP_VERSION = "2.0"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
 ACCENT = "#007aff"
 FAILED = object()
@@ -1564,6 +1565,12 @@ class MainWindow(QMainWindow):
                                          ("Расчёты", "calc"), ("Карта дела", "board"))):
             a = mv.addAction(name, lambda key=key: self.open_case_tab(key))
             a.setShortcut(f"Ctrl+{i + 1}")
+        a_anim = mv.addAction("Анимации")
+        a_anim.setCheckable(True)
+        a_anim.setChecked(anim.ENABLED)
+        a_anim.toggled.connect(lambda on: (settings().setValue("animations", "1" if on else "0"),
+                                           setattr(anim, "ENABLED", on)))
+        mv.addSeparator()
         a0 = mv.addAction("Без дела — просто PDF", lambda: self.enter_loose())
         a0.setShortcut("Ctrl+0")
         mt = mb.addMenu("Инструменты")
@@ -1780,6 +1787,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         for w in (self.cases_page, self.loose_page, self.help_page):
             self.stack.addWidget(w)
+        self.stack.currentChanged.connect(lambda *_: anim.fade_in(self.stack.currentWidget()))
 
         self.banner = QPushButton()
         self.banner.setObjectName("banner")
@@ -2022,7 +2030,7 @@ class MainWindow(QMainWindow):
             return
         self._update_info = info
         self.update_lbl.setText(f"Доступна новая версия {APP_NAME} {info['version']} (у вас {APP_VERSION}).")
-        self.update_bar.show()
+        anim.slide_down(self.update_bar)
         if not silent:
             self.show_update_notes()
 
@@ -2870,6 +2878,7 @@ class MainWindow(QMainWindow):
         more.setMenu(mm)
         tabs.setCornerWidget(more, Qt.TopRightCorner)
         tabs.currentChanged.connect(self._on_case_tab)
+        tabs.currentChanged.connect(lambda *_: anim.fade_in(tabs.currentWidget()))
 
     def _on_case_tab(self, i):
         tabs = self.cases_page.tabs
@@ -2930,9 +2939,12 @@ class MainWindow(QMainWindow):
             if self.cases_page.cid != cid:
                 self.cases_page.select_case(cid)
             self.stack.setCurrentWidget(self.cases_page)
+            changed = self.overview.cid != cid
             self._ensure_ws(cid)
             self._mount_parts()
             self.overview.set_case(cid)
+            if changed:                                    # другое дело — мягко проявить содержимое
+                anim.fade_in(self.cases_page.tabs.currentWidget())
         finally:
             self._entering = False
 
@@ -3045,8 +3057,12 @@ class MainWindow(QMainWindow):
         self.show_calc(2)
 
     def set_banner(self, text):
+        was = self.banner.isVisible()
         self.banner.setText(text)
-        self.banner.setVisible(bool(text))
+        if text and not was and self.isVisible():
+            anim.slide_down(self.banner)
+        else:
+            self.banner.setVisible(bool(text))
 
     def refresh_cases(self):
         if self.cases_page:
@@ -4069,6 +4085,7 @@ QTreeWidget::item, QTreeView::item {{ padding: 3px 2px; }}
 QTableWidget::item:selected, QTreeWidget::item:selected, QListWidget::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; }}
 QTreeView::branch {{ background: transparent; }}
 QTreeView::branch:selected {{ background: {t['accent_soft']}; }}
+QTreeWidget, QTreeView {{ selection-background-color: {t['accent_soft']}; selection-color: {t['text']}; }}
 QHeaderView {{ background: transparent; border: none; }}
 QHeaderView::section {{ background: {t['panel']}; color: {t['muted']}; border: none; border-bottom: 1px solid {t['border']};
     padding: 7px 6px; font-size: 9pt; font-weight: 600; }}
@@ -4273,8 +4290,20 @@ def main():
                                                        app.topLevelWidgets() if hasattr(w, "refresh_theme")]))
     except Exception:
         pass
+    anim.ENABLED = str(settings().value("animations", "1")) != "0"
+    splash = None
+    if anim.ENABLED:                            # заставка, пока открывается главное окно
+        splash = anim.Splash(QIcon(resource("app.ico")).pixmap(256, 256), APP_NAME, APP_VERSION,
+                             dark=T.get("name") == "dark")
+        splash.start()
+        anim.wait(450)
     w = MainWindow()
-    w.show()
+    if splash:
+        w.setWindowOpacity(0.0)
+        w.show()
+        splash.finish(w)
+    else:
+        w.show()
     files = [a for a in sys.argv[1:] if os.path.isfile(a)]
     if files:
         QTimer.singleShot(100, lambda: w.open_paths(files, replace=True))

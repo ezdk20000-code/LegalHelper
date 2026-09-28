@@ -1168,10 +1168,59 @@ def template_fields(path):
     return list(dict.fromkeys(n.strip() for n in names))
 
 
+BLOCK_PREFIXES = ("Сторона_", "Пункты_", "Блок_")     # поля-блоки: занимают весь абзац, могут быть пустыми
+
+
+def _strip_bullet(line):
+    # «1) текст», «2. текст», «- текст» → «текст»; даты вроде «01.02.2026 — …» не трогаем
+    return re.sub(r"^\s*(?:\d{1,3}[.)](?=\s)|[-–—•*](?=\s))\s*", "", line).strip()
+
+
+def _expand_blocks(d, values):
+    """Абзац, состоящий только из {Поля}: многострочное значение — отдельными абзацами с тем же оформлением
+    («Пункты_…» — с нумерацией 1), 2)…); пустое значение поля-блока — абзац убирается."""
+    import copy
+    for p in list(_iter_paragraphs(d)):
+        m = re.fullmatch(r"\s*\{([^{}\n]{1,60})\}\s*", p.text)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        if name not in values:
+            continue
+        val = str(values[name] or "")
+        lines = [x.rstrip() for x in val.split("\n")]
+        if name.startswith("Пункты_"):
+            lines = [f"{i}) {_strip_bullet(x)}" for i, x in enumerate([x for x in lines if x.strip()], 1)]
+            if not lines:                        # пустой раздел плана — строки, чтобы дописать от руки
+                lines = ["_" * 58, "_" * 58]
+        else:
+            lines = [x for x in lines if x.strip()] if name.startswith(BLOCK_PREFIXES) else lines
+        if not lines:
+            if name.startswith(BLOCK_PREFIXES):
+                p._p.getparent().remove(p._p)
+            continue
+        runs = p.runs
+        runs[0].text = lines[0]
+        for r in runs[1:]:
+            r.text = ""
+        anchor = p._p
+        for line in lines[1:]:
+            el = copy.deepcopy(p._p)
+            anchor.addnext(el)
+            anchor = el
+            from docx.text.paragraph import Paragraph
+            q = Paragraph(el, p._parent)
+            q.paragraph_format.space_before = 0          # отступ сверху — только у первой строки блока
+            q.runs[0].text = line
+            for r in q.runs[1:]:
+                r.text = ""
+
+
 def fill_template(path, values, out):
     """Заменить {Поле} значениями. Форматирование берётся у первого фрагмента абзаца с полем."""
     import docx
     d = docx.Document(path)
+    _expand_blocks(d, values)
     for p in _iter_paragraphs(d):
         full = p.text
         if "{" not in full:

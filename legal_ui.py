@@ -1440,6 +1440,11 @@ class ReminderPopup(QDialog):
         row.addWidget(done)
         v.addLayout(row)
 
+    def showEvent(self, e):
+        super().showEvent(e)
+        import anim
+        anim.window_fade(self, 0.0, 1.0, 260)
+
     def _refresh(self):
         try:
             self.main.overview.load_reminders()
@@ -2823,6 +2828,149 @@ def case_output_dir(cid):
     return str(d)
 
 
+PARTY_TYPES = {
+    "Физическое лицо": [("ФИО", "Иванов Иван Иванович"), ("Дата_рождения", "01.01.1980"),
+                        ("Место_рождения", "г. Москва"), ("Адрес", "Адрес места жительства (регистрации)"),
+                        ("Паспорт", "серия и номер, кем и когда выдан"), ("СНИЛС", ""), ("ИНН", ""),
+                        ("Телефон", ""), ("Email", "")],
+    "Индивидуальный предприниматель": [("ФИО", "Иванов Иван Иванович"), ("ОГРНИП", ""), ("ИНН", ""),
+                                       ("Дата_рождения", ""), ("Место_рождения", ""), ("Адрес", "Адрес места жительства"),
+                                       ("Телефон", ""), ("Email", "")],
+    "Организация (ООО, АО…)": [("Форма", "ООО"), ("Наименование", "Ромашка — без кавычек и формы"), ("ОГРН", ""),
+                               ("ИНН", ""), ("КПП", ""), ("Адрес", "Адрес юридического лица"), ("Телефон", ""),
+                               ("Email", "")],
+    "Госорган / иное": [("Наименование", "Полное наименование"), ("Реквизиты", "ОГРН, ИНН и др."), ("Адрес", ""),
+                        ("Телефон", ""), ("Email", "")],
+}
+ORG_FORMS = {"ООО": "Общество с ограниченной ответственностью", "АО": "Акционерное общество",
+             "ПАО": "Публичное акционерное общество", "НАО": "Непубличное акционерное общество",
+             "АНО": "Автономная некоммерческая организация", "ГУП": "Государственное унитарное предприятие",
+             "МУП": "Муниципальное унитарное предприятие", "ТСЖ": "Товарищество собственников жилья",
+             "СНТ": "Садоводческое некоммерческое товарищество"}
+PARTY_LABELS = {"Истец": "Истец", "Ответчик": "Ответчик", "Третье_лицо": "Третье лицо",
+                "Третье_лицо_2": "Третье лицо", "Заявитель": "Заявитель", "Заявитель_жалобы": "Заявитель жалобы"}
+
+
+def initials(fio):
+    parts = fio.split()
+    if len(parts) < 2:
+        return fio
+    return parts[0] + " " + "".join(p[0] + "." for p in parts[1:3])
+
+
+def guess_party(name):
+    """Тип и поля по строке из карточки дела («ООО «Ромашка»», «ИП Сидоров С.С.», «Петров П.П.»)."""
+    n = (name or "").strip()
+    if not n:
+        return {}
+    import re as _re
+    m = _re.match(r"^(ООО|АО|ПАО|НАО|АНО|ГУП|МУП|ТСЖ|СНТ)\s+[«\"]?(.+?)[»\"]?$", n)
+    if m:
+        return {"type": "Организация (ООО, АО…)", "Форма": m.group(1), "Наименование": m.group(2)}
+    m = _re.match(r"^(?:ИП|Индивидуальный предприниматель)\s+(.+)$", n)
+    if m:
+        return {"type": "Индивидуальный предприниматель", "ФИО": m.group(1)}
+    return {"type": "Физическое лицо", "ФИО": n}
+
+
+class PartyEditor(QFrame):
+    """Сторона для шапки документа: тип (физлицо / ИП / организация / иное) и реквизиты по ст. 125 АПК, 131 ГПК."""
+
+    def __init__(self, role, data=None):
+        super().__init__()
+        self.role = role
+        self.setObjectName("card")
+        self.values = dict(data or {})
+        v = QVBoxLayout(self)
+        v.setContentsMargins(14, 10, 14, 10)
+        h = QHBoxLayout()
+        lab = QLabel(PARTY_LABELS.get(role, role.replace("_", " ")))
+        lab.setObjectName("subtitle")
+        h.addWidget(lab)
+        h.addStretch(1)
+        self.kind = QComboBox()
+        self.kind.addItems(list(PARTY_TYPES))
+        self.kind.setCurrentText(self.values.get("type") or "Физическое лицо")
+        self.kind.currentTextChanged.connect(self._rebuild)
+        h.addWidget(self.kind)
+        v.addLayout(h)
+        self.form = QFormLayout()
+        self.form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        v.addLayout(self.form)
+        self.edits = {}
+        self._rebuild()
+
+    def _rebuild(self, *_):
+        self._collect()
+        while self.form.rowCount():
+            self.form.removeRow(0)
+        self.edits = {}
+        for key, hint in PARTY_TYPES[self.kind.currentText()]:
+            if key == "Форма":
+                e = QComboBox()
+                e.setEditable(True)
+                e.addItems(list(ORG_FORMS))
+                e.setCurrentText(self.values.get(key, "ООО"))
+            else:
+                e = QLineEdit(self.values.get(key, ""))
+                e.setPlaceholderText(hint)
+            self.form.addRow(key.replace("_", " ").replace("Email", "E-mail"), e)
+            self.edits[key] = e
+
+    def _collect(self):
+        for k, e in getattr(self, "edits", {}).items():
+            self.values[k] = (e.currentText() if isinstance(e, QComboBox) else e.text()).strip()
+        if hasattr(self, "kind"):
+            self.values["type"] = self.kind.currentText()
+
+    def data(self):
+        self._collect()
+        return dict(self.values)
+
+    def names(self):
+        """(полное наименование для шапки, краткое — для текста)."""
+        v = self.data()
+        t = v.get("type")
+        if t == "Организация (ООО, АО…)":
+            name = v.get("Наименование", "").strip("«»\" ")
+            if not name:
+                return "", ""
+            form = v.get("Форма", "")
+            return f"{ORG_FORMS.get(form, form)} «{name}»", f"{form} «{name}»"
+        if t == "Индивидуальный предприниматель":
+            fio = v.get("ФИО", "")
+            return (f"Индивидуальный предприниматель {fio}", f"ИП {initials(fio)}") if fio else ("", "")
+        name = v.get("ФИО") or v.get("Наименование") or ""
+        return name, name
+
+    def block(self):
+        """Текст блока для шапки: «Истец: …» и реквизиты — каждая строка отдельно."""
+        full, _short = self.names()
+        if not full:
+            return ""
+        v = self.data()
+        lines = [f"{PARTY_LABELS.get(self.role, self.role.replace('_', ' '))}: {full}"]
+        born = ", ".join(x for x in (v.get("Дата_рождения") and f"дата рождения: {v['Дата_рождения']}",
+                                     v.get("Место_рождения") and f"место рождения: {v['Место_рождения']}") if x)
+        ids = ", ".join(f"{k} {v[k]}" for k in ("ОГРН", "ОГРНИП", "ИНН", "КПП", "СНИЛС") if v.get(k))
+        if born:
+            lines.append(born[0].upper() + born[1:])
+        if v.get("Паспорт"):
+            lines.append(f"Паспорт: {v['Паспорт']}")
+        if ids:
+            lines.append(ids)
+        if v.get("Реквизиты"):
+            lines.append(v["Реквизиты"])
+        if v.get("Адрес"):
+            label = "Адрес" if v.get("type", "").startswith(("Организация", "Госорган")) else "Место жительства"
+            lines.append(f"{label}: {v['Адрес']}")
+        contacts = ", ".join(x for x in (v.get("Телефон") and f"тел.: {v['Телефон']}",
+                                         v.get("Email") and f"e-mail: {v['Email']}") if x)
+        if contacts:
+            lines.append(contacts[0].upper() + contacts[1:])
+        return "\n".join(lines)
+
+
 class TemplateDialog(QDialog):
     """Библиотека шаблонов + заполнение полями дела и реквизитами."""
 
@@ -2854,14 +3002,16 @@ class TemplateDialog(QDialog):
         self.tree.currentItemChanged.connect(self.on_pick)
         lv.addWidget(self.tree, 1)
         row = QHBoxLayout()
-        b_add = QPushButton("+ Свой шаблон…")
+        b_add = QPushButton("+ Свой…")
         b_add.setToolTip("Добавить документ Word с полями в фигурных скобках, например {Суд}, {Номер_дела}")
         b_add.clicked.connect(self.add_own)
         b_dir = QPushButton("Папка")
         b_dir.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(templates_dir())))
         self.b_word = QPushButton("Изменить в Word")
+        self.b_word.setToolTip("Открыть выбранный шаблон в Word, чтобы поправить текст")
         self.b_word.clicked.connect(self.edit_in_word)
         for b in (b_add, b_dir, self.b_word):
+            b.setObjectName("compact")
             row.addWidget(b)
         lv.addLayout(row)
         root.addWidget(left)
@@ -3009,18 +3159,55 @@ class TemplateDialog(QDialog):
         vals = self.values_known()
         empty = 0
         import templates_lib as TL
+        self.parties = {}
+        roles = [n[len("Сторона_"):] for n in names if n.startswith("Сторона_")]
+        for role in roles:
+            data = self.party_store.get(role) or guess_party(self._party_default(role, vals))
+            pe = PartyEditor(role, data)
+            self.form.addRow(pe)
+            self.parties[role] = pe
         for n in names:
-            e = QLineEdit(vals.get(n, ""))
-            e.setPlaceholderText(TL.FIELD_HINTS.get(n, ""))
+            if n.startswith("Сторона_") or n in roles:
+                continue                               # краткое имя стороны берётся из её карточки
+            if n.startswith(("Пункты_", "Блок_")):
+                e = QPlainTextEdit(vals.get(n, ""))
+                e.setPlaceholderText(TL.FIELD_HINTS.get(n, "Каждый пункт — с новой строки"))
+                e.setFixedHeight(92 if n.startswith("Пункты_") else 78)
+                e.text = e.toPlainText                  # единый способ прочитать значение
+            else:
+                e = QLineEdit(vals.get(n, ""))
+                e.setPlaceholderText(TL.FIELD_HINTS.get(n, ""))
             if not e.text():
                 empty += 1
-            self.form.addRow(n.replace("_", " "), e)
+            self.form.addRow(n.replace("Пункты_", "").replace("Блок_", "").replace("_", " "), e)
             self.edits[n] = e
         cid = self.case.currentData()
         self.note.setText((f"Заполнено из дела и реквизитов: {len(names) - empty} из {len(names)}. "
                            if names else "В шаблоне нет полей. ") +
                           ("Пустые поля останутся в документе как есть — их можно дописать в Word."
                            if empty else "") + ("" if cid else "  Выберите дело, чтобы подставить его данные."))
+
+    @property
+    def party_store(self):
+        try:
+            store = json.loads(M.settings().value(f"tpl_vals/{self.case.currentData() or 0}", "{}") or "{}")
+        except Exception:
+            store = {}
+        return {k[6:]: v for k, v in store.items() if k.startswith("party:") and isinstance(v, dict)}
+
+    def _party_default(self, role, vals):
+        """Кто в этой роли по карточке дела: доверитель — по «Статусу доверителя», иначе оппонент / третьи лица."""
+        status = (vals.get("Статус_доверителя") or "Истец").lower()
+        client, opp = vals.get("Доверитель", ""), vals.get("Оппонент", "")
+        if role in ("Заявитель", "Заявитель_жалобы"):
+            return client
+        if role == "Истец":
+            return client if status.startswith(("истец", "заявител")) else opp
+        if role == "Ответчик":
+            return opp if status.startswith(("истец", "заявител")) else client
+        if role == "Третье_лицо":
+            return vals.get("Третьи_лица", "")
+        return ""
 
     def edit_profile(self):
         if ProfileDialog(self).exec():
@@ -3049,6 +3236,10 @@ class TemplateDialog(QDialog):
             return
         cid = self.case.currentData()
         vals = {k: e.text().strip() for k, e in self.edits.items()}
+        blocks = {k: v for k, v in vals.items() if k.startswith(L.BLOCK_PREFIXES)}   # пустые блоки — убрать абзац
+        for role, pe in getattr(self, "parties", {}).items():
+            blocks[f"Сторона_{role}"] = pe.block()
+            vals[role] = pe.names()[1]
         # запомнить введённое вручную для этого дела
         known = set(profile_values()) | (set(db().template_values(cid)) if cid else set())
         store = {}
@@ -3057,6 +3248,8 @@ class TemplateDialog(QDialog):
         except Exception:
             pass
         store.update({k: v for k, v in vals.items() if v and k not in known})
+        for role, pe in getattr(self, "parties", {}).items():
+            store[f"party:{role}"] = pe.data()
         M.settings().setValue(f"tpl_vals/{cid or 0}", json.dumps(store, ensure_ascii=False))
         M.settings().setValue("tpl/pdf", "true" if self.c_pdf.isChecked() else "false")
         out_dir = case_output_dir(cid)
@@ -3067,7 +3260,7 @@ class TemplateDialog(QDialog):
             out = os.path.join(out_dir, L.clean_filename(f"{base} ({k})") + ".docx")
             k += 1
         try:
-            L.fill_template(self.path, {k: v for k, v in vals.items() if v}, out)
+            L.fill_template(self.path, {**{k: v for k, v in vals.items() if v}, **blocks}, out)
         except Exception as e:
             return self.main.error("Не удалось создать документ", e)
         if cid:

@@ -177,7 +177,7 @@ def main():
             ("07_f107", lambda: U.tool_f107(w), None),
             ("08_anonymize", lambda: U.tool_anonymize(w), None),
             ("09_preflight", lambda: U.tool_preflight(w), None),
-            ("10_templates", lambda: U.tool_template(w, cid), (1000, 640)),
+            ("10_templates", lambda: U.tool_template(w, cid, "Исковое заявление (АПК)"), (1040, 760)),
             ("11_profile", lambda: U.tool_profile(w), None)):
         dialog_shot(name, opener, size)
     w.show_calc(0)
