@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Раздел «Справка»: полное руководство по программе с иллюстрациями (папка help/img)."""
+"""Раздел «Справка»: энциклопедия по программе — разделы, статьи, поиск, иллюстрации (папка help/img)."""
 import os
 import sys
 import re
 import html
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QUrl, QTimer
 from PySide6.QtWidgets import (QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QTextBrowser)
+                               QListWidgetItem, QTextBrowser, QTreeWidget, QTreeWidgetItem)
 
 M = None   # модуль pdf_master (задаётся при создании страницы)
 
@@ -508,68 +508,209 @@ e-mail — для всех. Доверитель и оппонент подст�
 ]
 
 
-def build_html(t, serif):
-    body = "".join(f'<a name="{cid}"></a><h1>{html.escape(title)}</h1>{content}<hr>' for cid, title, content in CHAPTERS)
-    return f"""<html><head><style>
-body {{ color: {t['text']}; font-size: 10.5pt; }}
-h1 {{ font-family: '{serif}'; font-size: 22pt; font-weight: normal; margin-top: 22px; margin-bottom: 8px; }}
-h3 {{ font-size: 12pt; margin-top: 18px; margin-bottom: 4px; color: {t['text']}; }}
-p, li {{ line-height: 150%; }}
+def _css(t, serif):
+    return f"""<style>
+body {{ color: {t['text']}; font-size: 11.5pt; }}
+h1 {{ font-family: '{serif}'; font-size: 24pt; font-weight: normal; margin-top: 4px; margin-bottom: 10px; }}
+h2 {{ font-size: 15pt; margin-top: 18px; margin-bottom: 6px; }}
+h3 {{ font-size: 12.5pt; margin-top: 18px; margin-bottom: 4px; color: {t['text']}; }}
+p, li {{ line-height: 155%; }}
+li {{ margin-bottom: 4px; }}
 p.pic {{ margin-top: 10px; margin-bottom: 2px; line-height: 100%; }}
-p.cap {{ color: {t['muted']}; font-size: 9pt; margin-top: 2px; margin-bottom: 14px; }}
+p.cap {{ color: {t['muted']}; font-size: 9.5pt; margin-top: 2px; margin-bottom: 14px; }}
+p.crumbs {{ color: {t['muted']}; font-size: 10pt; margin-bottom: 2px; }}
+p.nav {{ margin-top: 26px; font-size: 11pt; }}
+a {{ color: {t['accent']}; text-decoration: none; }}
 table.grid td {{ border-bottom: 1px solid {t['border']}; vertical-align: top; }}
 table.tip td {{ background: {t['note_bg']}; color: {t['note_text']}; border-left: 3px solid {t['accent']}; }}
-span.key {{ background: {t['alt']}; border: 1px solid {t['input_border']}; font-family: monospace; font-size: 9pt; }}
-code {{ background: {t['alt']}; font-size: 9.5pt; }}
-hr {{ border: none; background: {t['border']}; height: 1px; margin-top: 26px; }}
-</style></head><body>{body}</body></html>"""
+table.cards td {{ background: {t['alt']}; vertical-align: top; }}
+span.key {{ background: {t['alt']}; border: 1px solid {t['input_border']}; font-family: monospace; font-size: 9.5pt; }}
+span.hit {{ background: {t['note_bg']}; font-weight: bold; }}
+code {{ background: {t['alt']}; font-size: 10pt; }}
+hr {{ border: none; background: {t['border']}; height: 1px; margin-top: 22px; }}
+</style>"""
+
+
+def build_html(t, serif):
+    """Вся справка одной страницей (для печати и старых вызовов)."""
+    body = "".join(f'<a name="{cid}"></a><h1>{html.escape(title)}</h1>{content}<hr>' for cid, title, content in CHAPTERS)
+    return f"<html><head>{_css(t, serif)}</head><body>{body}</body></html>"
+
+
+# =============================================================================
+#  Энциклопедия: разделы → (группы →) статьи
+# =============================================================================
+ICONS = {"start": "👋", "home": "🏠", "cases": "📁", "document": "📄", "editor": "✏️", "court": "⚖️",
+         "materials": "🗂️", "templates": "📝", "board": "🧠", "calc": "🧮", "tools": "🧰", "settings": "⚙️"}
+
+
+def _text(s):
+    return html.unescape(re.sub(r"<[^>]+>", " ", s))
+
+
+def _split(cid, content, title=""):
+    """Глава → статьи по заголовкам <h3>; текст до первого заголовка — «Коротко: <глава>»."""
+    parts = re.split(r"(<h3>.*?</h3>)", content, flags=re.S)
+    arts = []
+    if _text(parts[0]).strip():
+        arts.append({"id": cid, "title": f"Коротко: {title}" if title else "Коротко о разделе", "html": parts[0]})
+    for n, k in enumerate(range(1, len(parts), 2), 1):
+        arts.append({"id": f"{cid}-{n}", "title": _text(parts[k]).strip(), "html": parts[k + 1]})
+    return arts
+
+
+def _tool_article(cat, key, label, tip_text):
+    import help_content as HC
+    steps_, advice = HC.HOWTO.get(key, ([], ""))
+    body = f"<p><b>{html.escape(tip_text)}.</b></p>"
+    if steps_:
+        body += "<h3>Как сделать</h3>" + steps(*steps_)
+    if advice:
+        body += tip("💡 " + advice)
+    extra = _HELP_EXTRA.get(key)
+    if extra:
+        body += f"<h3>Подробнее</h3>{extra}"
+    if cat not in ("Калькуляторы",):
+        body += "<p>" + HC.WHERE.format(cat=html.escape(cat), name=html.escape(label)) + "</p>"
+    return {"id": f"tool-{key}", "title": label, "html": body}
+
+
+_HELP_EXTRA = {}          # длинные пояснения из legal_ui.HELP (подставляются при создании страницы)
+
+
+def build_sections(tools=(), help_texts=None):
+    import help_content as HC
+    _HELP_EXTRA.clear()
+    for k, (_t, txt) in (help_texts or {}).items():
+        _HELP_EXTRA[k] = txt
+    secs = [{"id": "learn", "title": "🎓 Обучение", "items": [
+        {"id": "learn-tour", "title": "Пройти обучение со стрелками", "html": (
+            "<p>Программа сама покажет <b>стрелкой</b>, куда нажать, а вы сделаете это своими руками — так "
+            "запоминается лучше всего. Около десяти минут.</p>"
+            + tip("Обучение идёт на <b>«Учебном деле»</b> с примерами файлов. Ваши настоящие дела не "
+                  "затрагиваются, а учебное дело в конце можно удалить одной кнопкой.")
+            + "<h3>Чему научитесь</h3>" + bullets(
+                "выбирать дело и переходить по его вкладкам;",
+                "собирать документы в <b>«PDF дела»</b> — двойным щелчком и перетаскиванием мышкой;",
+                "добавлять файлы с компьютера;",
+                "удалять, поворачивать и переставлять страницы, сворачивать файлы;",
+                "вписывать текст прямо в PDF в редакторе страницы;",
+                "сохранять PDF дела; где комплект для подачи, таймер и справка.")
+            + "<p style='font-size:14pt'><a href='lh:tutorial'><b>▶  Начать обучение</b></a></p>"
+            + "<p>Можно пропустить любой шаг или закончить в любой момент — кнопка «Пропустить обучение».</p>")},
+        {"id": "learn-quick", "title": "Быстрый старт за 5 минут", "html": (
+            "<p>Самое главное — по шагам:</p>" + steps(*HC.QUICKSTART))},
+        {"id": "learn-mouse", "title": "Мышь и клавиши: азбука", "html": (
+            "<table class='grid' cellpadding='6'>" + "".join(
+                f"<tr><td><b>{a}</b></td><td>{b}</td></tr>" for a, b in (
+                    ("Щелчок", "Один раз нажать левую кнопку мыши — выбрать."),
+                    ("Двойной щелчок", "Быстро нажать левую кнопку два раза — открыть."),
+                    ("Правый щелчок", "Нажать правую кнопку — появится меню действий."),
+                    ("Перетащить", "Зажать левую кнопку, передвинуть мышь, отпустить."),
+                    ("Ctrl + щелчок", "Выделить несколько страниц или документов по одному."),
+                    ("Shift + щелчок", "Выделить подряд — от первого до того, по которому щёлкнули."),
+                    (keys("Ctrl+Z"), "Отменить последнее действие."),
+                    (keys("Ctrl+S"), "Сохранить."),
+                    (keys("Delete"), "Удалить выделенное."),
+                    (keys("F3"), "Показать или скрыть страницу крупно."))) + "</table>")},
+    ]}]
+    groups = []
+    for cat, items in tools:
+        groups.append({"id": f"grp-{cat}", "title": cat, "group": True,
+                       "items": [_tool_article(cat, k, label, tip_) for k, label, tip_ in items]})
+    for cid, title, content in CHAPTERS:
+        secs.append({"id": f"sec-{cid}", "chapter": cid, "title": f"{ICONS.get(cid, '•')} {title}",
+                     "items": _split(cid, content, title)})
+        if cid == "tools" and groups:                  # сразу за обзором инструментов — каждый по шагам
+            secs.append({"id": "alltools", "title": "🪜 Каждый инструмент по шагам", "items": groups})
+    secs.append({"id": "faq", "title": "❓ Частые вопросы",
+                 "items": [{"id": f"faq-{n}", "title": q, "html": f"<p>{a}</p>"} for n, (q, a) in enumerate(HC.FAQ)]})
+    secs.append({"id": "glossary", "title": "📖 Словарь", "items": [{
+        "id": "glossary-all", "title": "Словарь терминов", "html": "<table class='grid' cellpadding='6'>" + "".join(
+            f"<tr><td width='28%'><b>{html.escape(a)}</b></td><td>{b}</td></tr>" for a, b in HC.GLOSSARY) + "</table>"}]})
+    return secs
+
+
+def flat_articles(secs):
+    out = []
+    for s in secs:
+        for it in s["items"]:
+            if it.get("group"):
+                for a in it["items"]:
+                    out.append((s, it, a))
+            else:
+                out.append((s, None, it))
+    return out
 
 
 class HelpPage(QWidget):
-    """Раздел «Справка»: оглавление, поиск, руководство с иллюстрациями."""
+    """Справка-энциклопедия: разделы и статьи слева, статья справа, поиск по всему тексту."""
 
     def __init__(self, main_module):
         super().__init__()
         global M
         M = main_module
         self.setObjectName("page")
+        U = sys.modules.get("legal_ui")
+        self.secs = build_sections(getattr(M, "TOOLS", ()), getattr(U, "HELP", {}) if U else {})
+        self.flat = flat_articles(self.secs)
+        self.by_id = {a["id"]: (s, g, a) for s, g, a in self.flat}
+        self.current = None                   # id открытой статьи или None — стартовая страница
         h = QHBoxLayout(self)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(0)
         left = QWidget()
         left.setObjectName("navigator")
-        left.setFixedWidth(270)
+        left.setFixedWidth(300)
         lv = QVBoxLayout(left)
         lv.setContentsMargins(16, 18, 10, 12)
         self.on_back = None                   # главное окно подставляет «вернуться туда, где были»
+        self.on_contact = None
+        self.on_tutorial = None
+        top = QHBoxLayout()
         back = QPushButton("←  Назад")
         back.setToolTip("Вернуться к делу (Esc)")
         back.setCursor(Qt.PointingHandCursor)
         back.clicked.connect(lambda: self.on_back and self.on_back())
-        lv.addWidget(back, 0, Qt.AlignLeft)
+        top.addWidget(back)
+        home = QPushButton("🏠  Начало")
+        home.setToolTip("Стартовая страница справки")
+        home.clicked.connect(self.show_start)
+        top.addWidget(home)
+        top.addStretch(1)
+        lv.addLayout(top)
         from PySide6.QtGui import QShortcut, QKeySequence
         QShortcut(QKeySequence("Esc"), self, activated=lambda: self.on_back and self.on_back())
         t = QLabel("Справка")
         t.setObjectName("title")
         lv.addWidget(t)
-        sub = QLabel("Как пользоваться программой")
+        sub = QLabel(f"Энциклопедия: {len(self.flat)} статей")
         sub.setObjectName("hint")
         lv.addWidget(sub)
-        lv.addSpacing(6)
+        lv.addSpacing(4)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Поиск по справке")
-        self.search.returnPressed.connect(self.find_next)
-        self.search.textChanged.connect(self.filter_toc)
+        self.search.setPlaceholderText("🔍  Поиск: объединить, подпись, срок…")
+        self.search.setClearButtonEnabled(True)
+        self.search.returnPressed.connect(self.open_first_hit)
+        self._stimer = QTimer(self)
+        self._stimer.setSingleShot(True)
+        self._stimer.setInterval(250)
+        self._stimer.timeout.connect(self.do_search)
+        self.search.textChanged.connect(lambda _t: self._stimer.start())
         lv.addWidget(self.search)
-        self.toc = QListWidget()
+        self.toc = QTreeWidget()
         self.toc.setObjectName("helptoc")
-        for cid, title, _c in CHAPTERS:
-            it = QListWidgetItem(title)
-            it.setData(Qt.UserRole, cid)
-            self.toc.addItem(it)
-        self.toc.itemClicked.connect(lambda it: self.go(it.data(Qt.UserRole)))
+        self.toc.setHeaderHidden(True)
+        self.toc.setIndentation(14)
+        self.toc.setWordWrap(True)
+        self.toc.itemClicked.connect(self._toc_clicked)
+        self._fill_toc()
         lv.addWidget(self.toc, 1)
-        self.on_contact = None
+        tut = QPushButton("🎓  Пройти обучение")
+        tut.setObjectName("primary")
+        tut.setToolTip("Программа стрелками покажет, что и как делать")
+        tut.clicked.connect(self.start_tutorial)
+        lv.addWidget(tut)
         contact = QPushButton("✉️  Связаться с разработчиком")
         contact.setToolTip("Почта axis.juris@bk.ru, Telegram @axis_juris")
         contact.clicked.connect(lambda: self.on_contact and self.on_contact())
@@ -581,38 +722,250 @@ class HelpPage(QWidget):
         h.addWidget(left)
         self.view = QTextBrowser()
         self.view.setObjectName("helptext")
-        self.view.setOpenExternalLinks(True)
+        self.view.setOpenLinks(False)
+        self.view.anchorClicked.connect(self._link)
         self.view.setSearchPaths([help_dir()])
         self.view.document().setDocumentMargin(34)
         h.addWidget(self.view, 1)
-        self.refresh_theme()
-        self.toc.setCurrentRow(0)
+        self.show_start()
 
+    # ---- оглавление
+    def _fill_toc(self):
+        self.toc.clear()
+        self.items = {}
+        for s in self.secs:
+            top = QTreeWidgetItem([s["title"]])
+            f = top.font(0)
+            f.setBold(True)
+            top.setFont(0, f)
+            top.setData(0, Qt.UserRole, ("sec", s["id"]))
+            self.toc.addTopLevelItem(top)
+            self.items[s["id"]] = top
+            for it in s["items"]:
+                if it.get("group"):
+                    g = QTreeWidgetItem([it["title"]])
+                    g.setData(0, Qt.UserRole, ("grp", it["id"]))
+                    top.addChild(g)
+                    self.items[it["id"]] = g
+                    for a in it["items"]:
+                        c = QTreeWidgetItem([a["title"]])
+                        c.setToolTip(0, a["title"])
+                        c.setData(0, Qt.UserRole, ("art", a["id"]))
+                        g.addChild(c)
+                        self.items[a["id"]] = c
+                else:
+                    c = QTreeWidgetItem([it["title"]])
+                    c.setToolTip(0, it["title"])
+                    c.setData(0, Qt.UserRole, ("art", it["id"]))
+                    top.addChild(c)
+                    self.items[it["id"]] = c
+
+    def _toc_clicked(self, item, _col):
+        kind, key = item.data(0, Qt.UserRole)
+        if kind == "art":
+            self.open_article(key)
+        else:
+            item.setExpanded(not item.isExpanded())
+            if kind == "sec":
+                self.show_section(key)
+
+    # ---- страницы
+    def _page(self, body):
+        pos = 0
+        self.view.setHtml(f"<html><head>{_css(M.T, M.SERIF)}</head><body>{body}</body></html>")
+        self.view.verticalScrollBar().setValue(pos)
+
+    def show_start(self):
+        self.current = None
+        self.search.blockSignals(True)
+        self.search.clear()
+        self.search.blockSignals(False)
+        self._filter(None)
+        cells = []
+        for s in self.secs:
+            n = sum(len(i["items"]) if i.get("group") else 1 for i in s["items"])
+            first = [i for i in s["items"] if not i.get("group")][:3] or \
+                [a for g in s["items"] if g.get("group") for a in g["items"]][:3]
+            links = "<br>".join(f"<a href='lh:a/{a['id']}'>{html.escape(a['title'])}</a>" for a in first)
+            cells.append(f"<td width='33%' style='padding:12px'><a href='lh:s/{s['id']}'><b style='font-size:13pt'>"
+                         f"{html.escape(s['title'])}</b></a><br><span style='color:{M.T['muted']}'>{n} стат."
+                         f"</span><br>{links}</td>")
+        rows = "".join("<tr>" + "".join(cells[k:k + 3]) + "</tr>" for k in range(0, len(cells), 3))
+        self._page(
+            "<h1>Справка LegalHelper</h1>"
+            "<p>Здесь описана каждая функция программы — простыми словами, по шагам и с картинками. "
+            "Слева — разделы, сверху — поиск: напишите, что хотите сделать («объединить», «подпись», «сжать»).</p>"
+            + tip("<b>Впервые в программе?</b> &nbsp;<a href='lh:tutorial'>▶ Пройдите обучение со стрелками</a> — "
+                  "программа сама покажет, куда нажимать. Или прочитайте "
+                  "<a href='lh:a/learn-quick'>«Быстрый старт за 5 минут»</a>.")
+            + "<h2>Разделы</h2><table class='cards' width='100%' cellspacing='8'>" + rows + "</table>"
+            + "<h2>Чаще всего ищут</h2>" + bullets(*(
+                f"<a href='lh:a/{k}'>{html.escape(self.by_id[k][2]['title'])}</a>"
+                for k in ("tool-merge", "tool-delete", "tool-rotate", "tool-edit", "tool-sign", "tool-compress",
+                          "tool-word2pdf", "tool-pdf2word", "faq-0", "faq-2") if k in self.by_id)))
+        self.toc.clearSelection()
+
+    def show_section(self, sid):
+        s = next((x for x in self.secs if x["id"] == sid), None)
+        if not s:
+            return
+        self.current = None
+        lst = []
+        for it in s["items"]:
+            if it.get("group"):
+                lst.append(f"<h3>{html.escape(it['title'])}</h3>" + bullets(*(
+                    f"<a href='lh:a/{a['id']}'>{html.escape(a['title'])}</a>" for a in it["items"])))
+            else:
+                lst.append(f"<li><a href='lh:a/{it['id']}'>{html.escape(it['title'])}</a></li>")
+        body = "".join(x if x.startswith("<h3>") else "" for x in lst)
+        plain = "".join(x for x in lst if x.startswith("<li>"))
+        self._page(f"<p class='crumbs'><a href='lh:start'>Справка</a></p><h1>{html.escape(s['title'])}</h1>"
+                   + (f"<ul>{plain}</ul>" if plain else "") + body)
+
+    def open_article(self, aid, highlight=None):
+        if aid not in self.by_id:
+            return
+        s, g, a = self.by_id[aid]
+        self.current = aid
+        k = next(i for i, x in enumerate(self.flat) if x[2]["id"] == aid)
+        prev = self.flat[k - 1][2] if k > 0 else None
+        nxt = self.flat[k + 1][2] if k + 1 < len(self.flat) else None
+        crumbs = f"<a href='lh:start'>Справка</a> › <a href='lh:s/{s['id']}'>{html.escape(s['title'])}</a>"
+        if g:
+            crumbs += f" › {html.escape(g['title'])}"
+        nav = []
+        if prev:
+            nav.append(f"<a href='lh:a/{prev['id']}'>← {html.escape(prev['title'])}</a>")
+        if nxt:
+            nav.append(f"<a href='lh:a/{nxt['id']}'>{html.escape(nxt['title'])} →</a>")
+        self._page(f"<p class='crumbs'>{crumbs}</p><h1>{html.escape(a['title'])}</h1>{a['html']}<hr>"
+                   f"<p class='nav'>{' &nbsp;&nbsp;·&nbsp;&nbsp; '.join(nav)}</p>")
+        it = self.items.get(aid)
+        if it:
+            p = it.parent()
+            while p:
+                p.setExpanded(True)
+                p = p.parent()
+            self.toc.setCurrentItem(it)
+        if highlight:
+            self.view.moveCursor(self.view.textCursor().MoveOperation.Start)
+            self.view.find(highlight)
+
+    def _link(self, url):
+        u = url.toString()
+        if u == "lh:start":
+            self.show_start()
+        elif u == "lh:tutorial":
+            self.start_tutorial()
+        elif u.startswith("lh:a/"):
+            self.open_article(u[5:], self.search.text().strip() or None)
+        elif u.startswith("lh:s/"):
+            self.show_section(u[5:])
+        elif u.startswith("#"):
+            self.view.scrollToAnchor(u[1:])
+        else:
+            from PySide6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(url)
+
+    def start_tutorial(self):
+        if self.on_tutorial:
+            self.on_tutorial()
+
+    # ---- поиск
+    def _filter(self, ids):
+        """ids=None — показать всё; иначе только эти статьи (и их разделы)."""
+        for s in self.secs:
+            top = self.items[s["id"]]
+            any_top = False
+            for i in range(top.childCount()):
+                ch = top.child(i)
+                kind, key = ch.data(0, Qt.UserRole)
+                if kind == "grp":
+                    vis_g = False
+                    for j in range(ch.childCount()):
+                        c = ch.child(j)
+                        ok = ids is None or c.data(0, Qt.UserRole)[1] in ids
+                        c.setHidden(not ok)
+                        vis_g |= ok
+                    ch.setHidden(not vis_g)
+                    ch.setExpanded(ids is not None and vis_g)
+                    any_top |= vis_g
+                else:
+                    ok = ids is None or key in ids
+                    ch.setHidden(not ok)
+                    any_top |= ok
+            top.setHidden(not any_top)
+            top.setExpanded(ids is not None and any_top)
+
+    def search_hits(self, q):
+        q = q.lower().strip()
+        if not q:
+            return []
+        words = [w for w in re.split(r"\s+", q) if w]
+        hits = []
+        for s, g, a in self.flat:
+            title = a["title"].lower()
+            text = _text(a["html"]).lower()
+            if all(w in title or w in text for w in words):
+                score = sum(3 if w in title else 1 for w in words)
+                pos = min((text.find(w) for w in words if w in text), default=-1)
+                snip = ""
+                if pos >= 0:
+                    raw = _text(a["html"])
+                    snip = raw[max(0, pos - 60): pos + 140].strip()
+                hits.append((score, s, g, a, snip))
+        hits.sort(key=lambda h: -h[0])
+        return hits
+
+    def do_search(self):
+        q = self.search.text().strip()
+        if not q:
+            self.found.setText("")
+            self._filter(None)
+            return self.show_start()
+        hits = self.search_hits(q)
+        self._last_hits = hits
+        self._filter({h[3]["id"] for h in hits})
+        self.found.setText(f"Найдено статей: {len(hits)}. Enter — открыть первую." if hits else "Ничего не найдено. "
+                           "Попробуйте другое слово.")
+        items = []
+        for _sc, s, g, a, snip in hits[:60]:
+            sn = html.escape(snip)
+            for w in re.split(r"\s+", q.lower()):
+                if w:
+                    sn = re.sub(re.escape(html.escape(w)), lambda m: f"<span class='hit'>{m.group(0)}</span>", sn,
+                                flags=re.I)
+            where = s["title"] + (f" › {g['title']}" if g else "")
+            items.append(f"<p><a href='lh:a/{a['id']}'><b style='font-size:12.5pt'>{html.escape(a['title'])}</b></a>"
+                         f"<br><span style='color:{M.T['muted']}'>{html.escape(where)}</span><br>…{sn}…</p>")
+        self.current = None
+        self._page(f"<p class='crumbs'><a href='lh:start'>Справка</a></p><h1>Поиск: «{html.escape(q)}»</h1>"
+                   + ("".join(items) if items else "<p>Ничего не найдено. Попробуйте другое слово или посмотрите "
+                                                    "<a href='lh:s/faq'>Частые вопросы</a>.</p>"))
+
+    def open_first_hit(self):
+        self._stimer.stop()
+        self.do_search()
+        hits = getattr(self, "_last_hits", [])
+        if hits:
+            self.open_article(hits[0][3]["id"], self.search.text().strip())
+
+    # ---- совместимость
     def refresh_theme(self):
         pos = self.view.verticalScrollBar().value()
-        self.view.setHtml(build_html(M.T, M.SERIF))
+        if self.current:
+            self.open_article(self.current)
+        elif self.search.text().strip():
+            self.do_search()
+        else:
+            self.show_start()
         self.view.verticalScrollBar().setValue(pos)
 
     def go(self, cid):
-        self.view.scrollToAnchor(cid)
-
-    def _plain(self, content):
-        return re.sub(r"<[^>]+>", " ", content).lower()
-
-    def filter_toc(self, text):
-        q = text.lower().strip()
-        hits = 0
-        for i, (_cid, title, content) in enumerate(CHAPTERS):
-            ok = not q or q in title.lower() or q in self._plain(content)
-            self.toc.item(i).setHidden(not ok)
-            hits += ok and bool(q)
-        self.found.setText(f"Найдено в главах: {hits}. Enter — к следующему месту." if q else "")
-        if q:
-            self.view.moveCursor(self.view.textCursor().MoveOperation.Start)
-            self.view.find(q)
-
-    def find_next(self):
-        q = self.search.text().strip()
-        if q and not self.view.find(q):
-            self.view.moveCursor(self.view.textCursor().MoveOperation.Start)
-            self.view.find(q)
+        """Открыть раздел по старому номеру главы или статью по id."""
+        if cid in self.by_id:
+            return self.open_article(cid)
+        s = next((x for x in self.secs if x.get("chapter") == cid or x["id"] == cid), None)
+        if s:
+            first = s["items"][0]
+            self.open_article(first["items"][0]["id"] if first.get("group") else first["id"])

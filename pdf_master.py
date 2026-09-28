@@ -34,9 +34,10 @@ import casefile as CF
 import anim
 import timer_widget as TW
 import extwatch
+import tutorial
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "2.6"
+APP_VERSION = "2.7"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -1093,6 +1094,7 @@ class PageEditor(QDialog):
         b_fit = QPushButton("По ширине")
         b_undo = QPushButton("Отменить (Ctrl+Z)")
         b_close = QPushButton("Готово")
+        self.b_close = b_close
         b_close.setObjectName("primary")
         for b in (b_zo, b_zi):
             b.setFixedWidth(36)
@@ -1769,6 +1771,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(3000, lambda: self.check_updates(silent=True))
         QTimer.singleShot(8000, self.daily_backup)
         QTimer.singleShot(12000, self.cleanup_in_background)
+        self.tutor = None
+        QTimer.singleShot(2500, lambda: tutorial.offer(self))
         self.extwatch = extwatch.ExtWatch(self)
         self.extwatch.changed.connect(self.on_external_changed)
         self.case_sync_timer = QTimer(self)
@@ -1905,6 +1909,7 @@ class MainWindow(QMainWindow):
             ml.addSeparator()
         mh = mb.addMenu("Справка")
         a_help = mh.addAction("Руководство пользователя", lambda: self.show_section(3))
+        mh.addAction("🎓 Обучение (пошагово, со стрелками)", lambda: tutorial.start(self))
         a_help.setShortcut("F1")
         self.addAction(a_help)
         mh.addSeparator()
@@ -2032,6 +2037,7 @@ class MainWindow(QMainWindow):
         self.help_page = H.HelpPage(sys.modules[__name__])
         self.help_page.on_back = self.leave_help
         self.help_page.on_contact = self.contact_dev
+        self.help_page.on_tutorial = lambda: tutorial.start(self)
         for w in (self.cases_page, self.calc_page):
             w.setObjectName("page")
         self.navigator = CaseNavigator(self)          # старая панель: не показывается
@@ -2066,6 +2072,7 @@ class MainWindow(QMainWindow):
         # щелчок по уже выбранному делу (например, из справки) тоже возвращает к делу
         self.cases_page.list.itemClicked.connect(self._on_case_selected)
         b_help = QPushButton("?   Справка — как пользоваться")
+        self.b_help_link = b_help
         b_help.setObjectName("sidelink")
         b_help.setCursor(Qt.PointingHandCursor)
         b_help.clicked.connect(lambda: self.show_section(3))
@@ -2568,7 +2575,14 @@ class MainWindow(QMainWindow):
     def toast(self, text, ms=2600):
         """Заметное короткое сообщение поверх рабочей области («✓ Сохранено»)."""
         host = self.docarea if self.docarea.isVisible() else self
+        old = getattr(self, "_toast", None)
+        if old is not None:                       # новая подсказка заменяет прежнюю, а не ложится поверх
+            try:
+                old.deleteLater()
+            except RuntimeError:
+                pass
         lab = QLabel(text, host)
+        self._toast = lab
         lab.setObjectName("toast")
         lab.setWordWrap(True)
         lab.setAlignment(Qt.AlignCenter)
@@ -3482,7 +3496,11 @@ class MainWindow(QMainWindow):
             sel = self.selected()
             index = sel[0] if sel else 0
         ed = PageEditor(self, index, mode)
-        ed.exec()
+        self._editor = ed
+        try:
+            ed.exec()
+        finally:
+            self._editor = None
         if ed.changed:
             self.after_change(keep_selection=[ed.index])
 
@@ -3571,6 +3589,7 @@ class MainWindow(QMainWindow):
 
     def _add_view_button(self):
         b = QToolButton()
+        self.view_btn = b
         b.setText("Вид ▾")
         b.setObjectName("toolsbtn")
         b.setPopupMode(QToolButton.InstantPopup)
@@ -5162,6 +5181,11 @@ QListWidget#helptoc {{ background: transparent; border: none; }}
 QListWidget#helptoc::item {{ padding: 8px 10px; border-radius: 8px; margin: 1px 0; }}
 QListWidget#helptoc::item:hover {{ background: {t['hover']}; }}
 QListWidget#helptoc::item:selected {{ background: {A}; color: white; }}
+QTreeWidget#helptoc {{ background: transparent; border: none; font-size: 10.5pt; show-decoration-selected: 0; }}
+QTreeWidget#helptoc::branch {{ background: transparent; }}
+QTreeWidget#helptoc::item {{ padding: 5px 4px; border-radius: 7px; margin: 1px 0; }}
+QTreeWidget#helptoc::item:hover {{ background: {t['hover']}; }}
+QTreeWidget#helptoc::item:selected {{ background: {A}; color: white; }}
 
 /* кнопки: основная — залитая синяя, остальные — серые с синим текстом, как в iOS */
 QPushButton {{ padding: 7px 13px; border: none; border-radius: 9px; background: {t['fill']}; color: {A}; font-weight: 500; }}

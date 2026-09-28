@@ -2,7 +2,7 @@
 "files": [
 {
 "path": "CHANGELOG.md",
-"size": 34150
+"size": 38869
 },
 {
 "path": "README.md",
@@ -289,8 +289,12 @@
 "size": 254722
 },
 {
+"path": "help_content.py",
+"size": 30304
+},
+{
 "path": "help_ui.py",
-"size": 61065
+"size": 80317
 },
 {
 "path": "installer.iss",
@@ -314,7 +318,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 267776
+"size": 268968
 },
 {
 "path": "requirements.txt",
@@ -345,8 +349,12 @@
 "size": 11168
 },
 {
+"path": "tutorial.py",
+"size": 35622
+},
+{
 "path": "update.bat",
-"size": 12719
+"size": 12773
 },
 {
 "path": "updater.py",
@@ -354,7 +362,7 @@
 },
 {
 "path": "version.json",
-"size": 845
+"size": 764
 }
 ]
 }
