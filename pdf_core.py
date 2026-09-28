@@ -245,13 +245,54 @@ def image_bytes(path):
     return bytes(ba), img.width(), img.height()
 
 
-PAGE_MODES = ["A4 (ориентация по картинке)", "A4 книжная", "A4 альбомная",
-              "Letter", "По размеру изображения"]
+# Форматы бумаги: название -> (ширина, высота) в мм, книжная ориентация
+PAPER_SIZES = {
+    "A3 (297×420 мм)": (297, 420),
+    "A4 (210×297 мм)": (210, 297),
+    "A5 (148×210 мм)": (148, 210),
+    "A6 (105×148 мм)": (105, 148),
+    "A2 (420×594 мм)": (420, 594),
+    "A1 (594×841 мм)": (594, 841),
+    "A0 (841×1189 мм)": (841, 1189),
+    "B4 (250×353 мм)": (250, 353),
+    "B5 (176×250 мм)": (176, 250),
+    "Letter (216×279 мм)": (215.9, 279.4),
+    "Legal (216×356 мм)": (215.9, 355.6),
+    "Tabloid (279×432 мм)": (279.4, 431.8),
+    "Конверт C5 (162×229 мм)": (162, 229),
+    "Конверт DL (110×220 мм)": (110, 220),
+}
+CUSTOM_SIZE = "Свой размер…"
+ORIENTATIONS = ["Автоматически", "Книжная", "Альбомная"]
+FIT_MODES = ["Вписать, сохраняя пропорции", "Растянуть на весь лист", "Без масштабирования (по центру)"]
+
+IMAGE_SIZE = "По размеру изображения"
+PAGE_MODES = list(PAPER_SIZES) + [IMAGE_SIZE, CUSTOM_SIZE]
 
 
-def images_to_pdf(paths, page_mode=PAGE_MODES[0], margin_mm=0, progress=None):
+def paper_points(size_name, orientation="Книжная", like_w=None, like_h=None, custom_mm=(210, 297)):
+    """Размер листа в пунктах. «Автоматически» — ориентация как у образца (like_w × like_h)."""
+    w, h = custom_mm if size_name == CUSTOM_SIZE else PAPER_SIZES[size_name]
+    w, h = w * MM, h * MM
+    if orientation == "Альбомная":
+        w, h = max(w, h), min(w, h)
+    elif orientation == "Книжная":
+        w, h = min(w, h), max(w, h)
+    elif like_w and like_h and (like_w > like_h) != (w > h):   # автоматически
+        w, h = h, w
+    return w, h
+
+
+def images_to_pdf(paths, page_mode="A4 (210×297 мм)", margin_mm=0, progress=None,
+                  orientation="Автоматически", custom_mm=(210, 297)):
+    # совместимость со старыми названиями
+    legacy = {"A4 (ориентация по картинке)": ("A4 (210×297 мм)", "Автоматически"),
+              "A4 книжная": ("A4 (210×297 мм)", "Книжная"),
+              "A4 альбомная": ("A4 (210×297 мм)", "Альбомная"),
+              "Letter": ("Letter (216×279 мм)", orientation)}
+    if page_mode in legacy:
+        page_mode, orientation = legacy[page_mode]
     out = fitz.open()
-    a4w, a4h = fitz.paper_size("a4")
     m = margin_mm * MM
     for k, p in enumerate(paths):
         data, w, h = image_bytes(p)
@@ -260,17 +301,84 @@ def images_to_pdf(paths, page_mode=PAGE_MODES[0], margin_mm=0, progress=None):
             if max(w, h) * scale > 3000:          # не больше ~1 м
                 scale = 3000 / max(w, h)
             pw, ph = w * scale + 2 * m, h * scale + 2 * m
-        elif page_mode == "A4 книжная":
-            pw, ph = a4w, a4h
-        elif page_mode == "A4 альбомная":
-            pw, ph = a4h, a4w
-        elif page_mode == "Letter":
-            pw, ph = fitz.paper_size("letter")
         else:
-            pw, ph = (a4h, a4w) if w > h else (a4w, a4h)
+            pw, ph = paper_points(page_mode, orientation, w, h, custom_mm)
         page = out.new_page(width=pw, height=ph)
         page.insert_image(fitz.Rect(m, m, pw - m, ph - m), stream=data, keep_proportion=True)
         _tick(progress, k + 1, len(paths))
+    return out
+
+
+def page_size_label(page):
+    """Человекочитаемый размер страницы: «A4 книжная (210×297 мм)»."""
+    w, h = page.rect.width / MM, page.rect.height / MM
+    orient = "альбомная" if w > h else "книжная"
+    a, b = sorted((w, h))
+    for name, (pw, ph) in PAPER_SIZES.items():
+        if abs(a - pw) < 3 and abs(b - ph) < 3:
+            return f"{name.split(' (')[0]} {orient} ({w:.0f}×{h:.0f} мм)"
+    return f"{w:.0f}×{h:.0f} мм"
+
+
+def _normalize_page(doc, page):
+    """Сделать видимую область = всему листу без поворота (обрезка и поворот «впечатываются»)."""
+    try:
+        kind, val = doc.xref_get_key(page.xref, "CropBox")
+        if kind == "array":
+            nums = [float(v) for v in val.strip("[]").split()]
+            if len(nums) == 4:
+                page.set_mediabox(fitz.Rect(nums))
+    except Exception:
+        pass
+    if page.rotation:
+        try:
+            page.remove_rotation()
+        except Exception:
+            pass
+
+
+def resize_pages(doc, pages, size_name, orientation="Автоматически", fit=FIT_MODES[0],
+                 margin_mm=0, custom_mm=(210, 297), progress=None):
+    """Привести страницы к формату бумаги. Возвращает новый документ.
+    Содержимое масштабируется (текст остаётся векторным и доступным для поиска).
+    Аннотации и поля форм на изменяемых страницах предварительно «вшиваются»."""
+    pages = set(pages if pages is not None else range(doc.page_count))
+    src = fitz.open("pdf", doc.tobytes())
+    try:
+        src.bake(annots=True, widgets=True)
+    except Exception:
+        pass
+    out = fitz.open()
+    out.set_metadata(doc.metadata or {})
+    m = margin_mm * MM
+    total = src.page_count
+    for i in range(total):
+        sp = src[i]
+        if i in pages:
+            _normalize_page(src, sp)
+        if i not in pages:
+            out.insert_pdf(doc, from_page=i, to_page=i)       # без изменений, с аннотациями
+        else:
+            vw, vh = sp.rect.width, sp.rect.height              # видимый размер (с учётом поворота)
+            pw, ph = paper_points(size_name, orientation, vw, vh, custom_mm)
+            np_ = out.new_page(width=pw, height=ph)
+            box = fitz.Rect(m, m, pw - m, ph - m)
+            if fit.startswith("Растянуть"):
+                np_.show_pdf_page(box, src, i, keep_proportion=False)
+            elif fit.startswith("Без"):
+                cx, cy = (box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2
+                r = fitz.Rect(cx - vw / 2, cy - vh / 2, cx + vw / 2, cy + vh / 2)
+                np_.show_pdf_page(r, src, i)
+            else:
+                np_.show_pdf_page(box, src, i, keep_proportion=True)
+        _tick(progress, i + 1, total)
+    # закладки: номера страниц не меняются
+    try:
+        toc = doc.get_toc(simple=False)
+        if toc:
+            out.set_toc(toc)
+    except Exception:
+        pass
     return out
 
 

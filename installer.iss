@@ -1,6 +1,8 @@
-\xef\xbb\xbf; Скрипт установщика Inno Setup 6 для «PDF Мастер»
+﻿\xef\xbb\xbf; Скрипт установщика Inno Setup 6 для «PDF Мастер»
 #define MyAppName "PDF Мастер"
-#define MyAppVersion "1.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.1"
+#endif
 #define MyAppExe "PDFMaster.exe"
 
 [Setup]
@@ -20,6 +22,10 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesInstallIn64BitMode=x64compatible
+CloseApplications=force
+UsePreviousAppDir=yes
+UsePreviousPrivileges=yes
+VersionInfoVersion={#MyAppVersion}
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
@@ -27,6 +33,10 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "openwith"; Description: "Добавить «PDF Мастер» в меню «Открыть с помощью» для PDF"; GroupDescription: "Интеграция:"
+
+[InstallDelete]
+; убрать библиотеки старой версии перед установкой новой
+Type: filesandordirs; Name: "{app}\_internal"
 
 [Files]
 Source: "dist\PDFMaster\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

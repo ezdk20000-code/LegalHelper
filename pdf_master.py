@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 import pdf_core as C
 
 APP_NAME = "PDF Мастер"
-APP_VERSION = "1.0"
+APP_VERSION = "1.1"
 ACCENT = "#d9363e"
 FAILED = object()
 PDF_FILTER = "PDF (*.pdf)"
@@ -34,6 +34,50 @@ OPEN_FILTER = ("Все поддерживаемые (*.pdf *.jpg *.jpeg *.png *.
                "PDF (*.pdf);;Изображения (*.jpg *.jpeg *.png *.bmp *.gif *.tif *.tiff *.webp);;"
                "Документы Office (*.doc *.docx *.rtf *.odt *.xls *.xlsx *.ppt *.pptx);;Все файлы (*)")
 IMG_FILTER = "Изображения (*.jpg *.jpeg *.png *.bmp *.gif *.tif *.tiff *.webp)"
+
+
+def data_dir():
+    """Папка для журналов и настроек: %LOCALAPPDATA%\\PDFMaster (или ~/.pdfmaster)."""
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    d = os.path.join(base, "PDFMaster" if os.environ.get("LOCALAPPDATA") else ".pdfmaster")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def log_path():
+    return os.path.join(data_dir(), "errors.log")
+
+
+def log_error(title, exc=None, tb=None):
+    """Записать ошибку в журнал (его можно прислать для исправления)."""
+    try:
+        import datetime, platform
+        text = tb or ("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)) if exc else "")
+        p = log_path()
+        if os.path.exists(p) and os.path.getsize(p) > 2_000_000:      # не разрастаться
+            os.replace(p, p + ".old")
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(f"\n===== {datetime.datetime.now():%Y-%m-%d %H:%M:%S} | {APP_NAME} {APP_VERSION} | "
+                    f"PyMuPDF {fitz.VersionBind} | {platform.platform()}\n{title}\n{text}\n")
+    except Exception:
+        pass
+
+
+def glyph_icon(ch, color, size=22):
+    """Иконка из символа нужного цвета (видна и на светлой, и на тёмной теме)."""
+    pm = QPixmap(size * 2, size * 2)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    f = QFont()
+    f.setPixelSize(int(size * 1.6))
+    f.setBold(True)
+    p.setFont(f)
+    p.setPen(QColor(color))
+    p.drawText(pm.rect(), Qt.AlignCenter, ch)
+    p.end()
+    pm.setDevicePixelRatio(2)
+    return QIcon(pm)
 
 
 def resource(name):
@@ -135,7 +179,7 @@ class OptionsDialog(QDialog):
     """Универсальный диалог параметров.
     fields: (ключ, подпись, тип, значение_по_умолчанию, доп)"""
 
-    def __init__(self, parent, title, fields, note=None, ok_text="Выполнить"):
+    def __init__(self, parent, title, fields, note=None, ok_text="Выполнить", depends=None):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumWidth(460)
@@ -159,6 +203,23 @@ class OptionsDialog(QDialog):
                 form.addRow("", w)
             else:
                 form.addRow(label + ":", w)
+        # depends: {поле: (управляющее_поле, функция(значение) -> bool)} — включать поле по условию
+        for dep, (ctrl, cond) in (depends or {}).items():
+            cw = self.w[ctrl][1]
+            dw = self.w[dep][1]
+            lbl = form.labelForField(dw)
+
+            def upd(*_, cw=cw, dw=dw, lbl=lbl, cond=cond):
+                on = bool(cond(cw.currentText() if isinstance(cw, QComboBox) else
+                               cw.isChecked() if isinstance(cw, QCheckBox) else cw.text()))
+                dw.setEnabled(on)
+                if lbl:
+                    lbl.setEnabled(on)
+            if isinstance(cw, QComboBox):
+                cw.currentTextChanged.connect(upd)
+            elif isinstance(cw, QCheckBox):
+                cw.toggled.connect(upd)
+            upd()
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Ok).setText(ok_text)
         bb.button(QDialogButtonBox.Cancel).setText("Отмена")
@@ -230,8 +291,8 @@ class OptionsDialog(QDialog):
         return v
 
     @staticmethod
-    def ask(parent, title, fields, note=None, ok_text="Выполнить"):
-        d = OptionsDialog(parent, title, fields, note, ok_text)
+    def ask(parent, title, fields, note=None, ok_text="Выполнить", depends=None):
+        d = OptionsDialog(parent, title, fields, note, ok_text, depends)
         return d.values() if d.exec() == QDialog.Accepted else None
 
 
@@ -312,7 +373,7 @@ class PageList(QListWidget):
         super().paintEvent(e)
         if self.count() == 0:
             p = QPainter(self.viewport())
-            p.setPen(QColor("#8a8f98"))
+            p.setPen(QColor(T["muted"]))
             f = p.font()
             f.setPointSize(13)
             p.setFont(f)
@@ -1068,7 +1129,8 @@ TOOLS = [
         ("rotate", "Повернуть PDF", "Повернуть все или выбранные страницы"),
         ("delete", "Удалить страницы", "Удалить страницы по номерам"),
         ("extract", "Извлечь страницы", "Сохранить выбранные страницы в новый файл"),
-        ("blank", "Вставить пустую страницу", "Добавить чистый лист после выбранной страницы"),
+        ("pagesize", "Размер страниц (A4, A5, Letter…)", "Привести страницы к нужному формату бумаги и ориентации"),
+        ("blank", "Вставить пустую страницу", "Добавить чистый лист нужного формата после выбранной страницы"),
         ("reverse", "Обратный порядок", "Развернуть порядок страниц"),
     ]),
     ("Оптимизация", [
@@ -1157,6 +1219,7 @@ class MainWindow(QMainWindow):
         self.a_saveas = act("Сохранить как…", self.save_as, QKeySequence.SaveAs)
         self.a_undo = act("Отменить", self.undo, QKeySequence.Undo, QStyle.SP_ArrowBack)
         self.a_redo = act("Повторить", self.redo, QKeySequence.Redo, QStyle.SP_ArrowForward)
+        self.theme_icons()
         self.a_rl = act("↺ Влево", lambda: self.rotate_selected(-90), "Ctrl+L", tip="Повернуть влево")
         self.a_rr = act("↻ Вправо", lambda: self.rotate_selected(90), "Ctrl+R", tip="Повернуть вправо")
         self.a_del = act("Удалить", self.delete_selected, QKeySequence.Delete, QStyle.SP_TrashIcon,
@@ -1184,6 +1247,16 @@ class MainWindow(QMainWindow):
         me.addSeparator()
         for a in (self.a_rl, self.a_rr, self.a_del, self.a_dup, self.a_blank, self.a_extract, self.a_edit):
             me.addAction(a)
+        mv = mb.addMenu("Вид")
+        mtheme = mv.addMenu("Тема оформления")
+        grp = QActionGroup(self)
+        cur = theme_choice()
+        for key, label in THEME_NAMES.items():
+            a = mtheme.addAction(label)
+            a.setCheckable(True)
+            a.setChecked(key == cur)
+            grp.addAction(a)
+            a.triggered.connect(lambda _=False, k=key: self.set_theme(k))
         mt = mb.addMenu("Инструменты")
         for cat, items in TOOLS:
             sub = mt.addMenu(cat)
@@ -1191,10 +1264,14 @@ class MainWindow(QMainWindow):
                 sub.addAction(label, getattr(self, "tool_" + key))
         mh = mb.addMenu("Справка")
         mh.addAction("Как пользоваться", self.tool_organize)
+        mh.addAction("Установить обновление из архива…", self.install_update)
+        mh.addAction("Журнал ошибок", self.show_error_log)
+        mh.addSeparator()
         mh.addAction("О программе", lambda: QMessageBox.about(
-            self, APP_NAME, f"<b>{APP_NAME}</b> {APP_VERSION}<br>Настольный редактор PDF.<br><br>"
+            self, APP_NAME, f"<b>{APP_NAME}</b> версия {APP_VERSION}<br>Настольный редактор PDF.<br><br>"
             "Работает без интернета, файлы никуда не отправляются.<br>"
-            "Основано на PyMuPDF (MuPDF), Qt (PySide6), pdf2docx, openpyxl, python-pptx."))
+            "Основано на PyMuPDF (MuPDF), Qt (PySide6), pdf2docx, openpyxl, python-pptx.<br><br>"
+            f"Журнал ошибок: {log_path()}"))
         tb.addSeparator()
         for a in (self.a_undo, self.a_redo):
             tb.addAction(a)
@@ -1263,18 +1340,103 @@ class MainWindow(QMainWindow):
     def update_status(self):
         n = self.doc.page_count
         sel = len(self.pages.selectedItems())
-        self.status_lbl.setText(f"Страниц: {n}" + (f"   ·   выбрано: {sel}" if sel else "") + "  ")
+        size = ""
+        idx = self.selected() if sel else ([0] if n else [])
+        if idx:
+            try:
+                labels = {C.page_size_label(self.doc[i]) for i in idx[:200]}
+                size = "   ·   " + (labels.pop() if len(labels) == 1 else "разные размеры")
+            except Exception:
+                size = ""
+        self.status_lbl.setText(f"Страниц: {n}" + (f"   ·   выбрано: {sel}" if sel else "") + size + "  ")
 
     def msg(self, text, ms=6000):
         self.statusBar().showMessage(text, ms)
 
     def error(self, title, exc):
+        log_error(title, exc)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
         box.setWindowTitle(APP_NAME)
         box.setText(f"{title}\n\n{exc}")
         box.setDetailedText("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
         box.exec()
+
+    # ------------------------------------------------------------- тема
+    def set_theme(self, choice):
+        settings().setValue("theme", choice)
+        apply_theme(QApplication.instance(), choice)
+        self.refresh_theme()
+
+    def theme_icons(self):
+        self.a_undo.setIcon(glyph_icon("↶", T["text"]))
+        self.a_redo.setIcon(glyph_icon("↷", T["text"]))
+
+    def refresh_theme(self):
+        """Перерисовать миниатюры (подписи номеров рисуются цветом темы)."""
+        self.theme_icons()
+        try:
+            self.refresh_all(keep_selection=self.selected())
+        except Exception:
+            self.pages.viewport().update()
+
+    # ------------------------------------------------------------- обновление и журнал
+    def install_update(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Архив с обновлением PDF Мастер",
+                                           os.path.join(os.path.expanduser("~"), "Downloads"), "ZIP (*.zip)")
+        if not p:
+            return
+        import zipfile, time
+        try:
+            with zipfile.ZipFile(p) as z:
+                names = [n for n in z.namelist() if n.replace("\\", "/").endswith("update.bat")]
+                if not names:
+                    raise ValueError("В архиве нет файла update.bat — это не архив обновления PDF Мастер.")
+                dest = os.path.join(tempfile.gettempdir(), f"PDFMaster_update_{int(time.time())}")
+                z.extractall(dest)
+        except Exception as e:
+            return self.error("Не удалось распаковать обновление", e)
+        bat = os.path.join(dest, min(names, key=len))
+        if QMessageBox.question(
+                self, APP_NAME, "Программа закроется, в отдельном окне пройдёт сборка и установка новой версии "
+                                "(первый раз — до 10–15 минут, дальше быстрее).\nПосле этого программа откроется "
+                                "сама.\n\nПродолжить?") != QMessageBox.Yes:
+            return
+        if not self.maybe_save():
+            return
+        try:
+            if C.IS_WIN:
+                subprocess.Popen(["cmd", "/c", "start", "Обновление PDF Мастер", "cmd", "/c", bat],
+                                 cwd=os.path.dirname(bat), creationflags=0x00000008)   # DETACHED_PROCESS
+            else:
+                subprocess.Popen(["sh", bat], cwd=os.path.dirname(bat))
+        except Exception as e:
+            return self.error("Не удалось запустить обновление", e)
+        self.modified = False
+        QApplication.quit()
+
+    def show_error_log(self):
+        p = log_path()
+        if not os.path.exists(p) or os.path.getsize(p) == 0:
+            QMessageBox.information(self, APP_NAME, "Ошибок пока не было — журнал пуст.")
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle(APP_NAME)
+        box.setText("Если что-то работает неправильно, пришлите этот файл (или его конец) — "
+                    "по нему можно найти и исправить ошибку.\n\n" + p)
+        b_open = box.addButton("Показать файл в папке", QMessageBox.ActionRole)
+        b_copy = box.addButton("Скопировать последние ошибки", QMessageBox.ActionRole)
+        box.addButton("Закрыть", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is b_open:
+            if C.IS_WIN:
+                subprocess.Popen(["explorer", "/select,", p])
+            else:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(p)))
+        elif box.clickedButton() is b_copy:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                QApplication.clipboard().setText(f.read()[-15000:])
+            self.msg("Последние ошибки скопированы — вставьте их в чат (Ctrl+V)")
 
     def need_doc(self):
         if self.doc.page_count == 0:
@@ -1445,10 +1607,10 @@ class MainWindow(QMainWindow):
         else:
             p.setBrush(QColor("#ffffff"))
             p.drawRect(QRectF(x, y, w, h))
-        p.setPen(QPen(QColor("#c9ccd1"), 1))
+        p.setPen(QPen(QColor(T["thumb_border"]), 1))
         p.setBrush(Qt.NoBrush)
         p.drawRect(QRectF(x, y, w, h))
-        p.setPen(QColor("#3a3f47"))
+        p.setPen(QColor(T["text"]))
         f = QFont()
         f.setPointSize(9)
         p.setFont(f)
@@ -1782,6 +1944,8 @@ class MainWindow(QMainWindow):
         m.addAction("Переместить в конец", lambda: self.move_pages("end"))
         m.addAction("Дублировать", self.duplicate_selected)
         m.addAction("Вставить пустую страницу после", self.insert_blank)
+        m.addAction("Пустая страница другого формата…", self.tool_blank)
+        m.addAction("Изменить размер страниц (A4, A5…)…", self.tool_pagesize)
         m.addAction("Вставить файл после…", self.insert_file_after)
         m.addSeparator()
         m.addAction("Извлечь в новый PDF…", self.extract_selected)
@@ -1879,7 +2043,64 @@ class MainWindow(QMainWindow):
                 self.error("Неверные номера страниц", e)
 
     def tool_blank(self):
-        self.insert_blank()
+        if not self.need_doc():
+            return
+        same = "Как у выбранной страницы"
+        v = OptionsDialog.ask(self, "Вставить пустую страницу", [
+            ("size", "Формат", "combo", same, [same] + list(C.PAPER_SIZES) + [C.CUSTOM_SIZE]),
+            ("orient", "Ориентация", "combo", None, C.ORIENTATIONS),
+            ("w", "Ширина, мм", "float", 210, (10, 5000)),
+            ("h", "Высота, мм", "float", 297, (10, 5000)),
+            ("count", "Количество страниц", "int", 1, (1, 500)),
+        ], ok_text="Вставить", depends={
+            "orient": ("size", lambda t: t != same),
+            "w": ("size", lambda t: t == C.CUSTOM_SIZE),
+            "h": ("size", lambda t: t == C.CUSTOM_SIZE)})
+        if not v:
+            return
+        sel = self.selected()
+        after = sel[-1] if sel else self.doc.page_count - 1
+        ref = self.doc[after].rect
+        if v["size"] == same:
+            w, h = ref.width, ref.height
+        else:
+            w, h = C.paper_points(v["size"], v["orient"], ref.width, ref.height, (v["w"], v["h"]))
+        self.push_undo()
+        for k in range(v["count"]):
+            self.doc.new_page(pno=after + 1 + k, width=w, height=h)
+        self.after_change(keep_selection=list(range(after + 1, after + 1 + v["count"])))
+
+    def tool_pagesize(self):
+        if not self.need_doc():
+            return
+        cur = C.page_size_label(self.doc[(self.selected() or [0])[0]])
+        v = OptionsDialog.ask(self, "Размер страниц", [
+            ("size", "Формат бумаги", "combo", "A4 (210×297 мм)", list(C.PAPER_SIZES) + [C.CUSTOM_SIZE]),
+            ("w", "Ширина, мм", "float", 210, (10, 5000)),
+            ("h", "Высота, мм", "float", 297, (10, 5000)),
+            ("orient", "Ориентация", "combo", None, C.ORIENTATIONS),
+            ("fit", "Содержимое", "combo", None, C.FIT_MODES),
+            ("margin", "Поля, мм", "float", 0, (0, 100)),
+            ("pages", "Какие страницы", "pages", self.selected_text()),
+        ], note=f"Сейчас: {cur}.\n«Автоматически» — альбомные страницы останутся альбомными, книжные — книжными.\n"
+                "Текст остаётся векторным и доступным для поиска; пометки и поля форм на изменённых "
+                "страницах будут «вшиты» в страницу.",
+            ok_text="Применить", depends={
+                "w": ("size", lambda t: t == C.CUSTOM_SIZE),
+                "h": ("size", lambda t: t == C.CUSTOM_SIZE)})
+        if not v:
+            return
+        try:
+            pages = self.pages_arg(v["pages"])
+        except ValueError as e:
+            return self.error("Неверные номера страниц", e)
+        res = self.run("Изменение размера страниц…", C.resize_pages, self.doc, pages, v["size"], v["orient"],
+                       v["fit"], v["margin"], (v["w"], v["h"]))
+        if res is not FAILED:
+            self.push_undo()
+            self.doc = res
+            self.after_change(pages)
+            self.msg(f"Размер изменён: {C.page_size_label(self.doc[(pages or [0])[0]])}")
 
     def tool_reverse(self):
         self.reverse_pages()
@@ -1964,14 +2185,22 @@ class MainWindow(QMainWindow):
         if not paths:
             return
         v = OptionsDialog.ask(self, "Картинки в PDF", [
-            ("mode", "Размер страницы", "combo", None, C.PAGE_MODES),
+            ("mode", "Формат страницы", "combo", "A4 (210×297 мм)", C.PAGE_MODES),
+            ("w", "Ширина, мм", "float", 210, (10, 5000)),
+            ("h", "Высота, мм", "float", 297, (10, 5000)),
+            ("orient", "Ориентация", "combo", None, C.ORIENTATIONS),
             ("margin", "Поля, мм", "int", 0, (0, 50)),
             ("where", "Результат", "combo", None, ["Добавить в текущий документ", "Новый документ"]),
-        ], note=f"Выбрано изображений: {len(paths)}. Порядок потом можно поменять перетаскиванием.",
-            ok_text="Создать")
+        ], note=f"Выбрано изображений: {len(paths)}. Порядок потом можно поменять перетаскиванием.\n"
+                 "«Автоматически» — альбомные фото на альбомных листах, вертикальные — на книжных.",
+            ok_text="Создать", depends={
+                "w": ("mode", lambda t: t == C.CUSTOM_SIZE),
+                "h": ("mode", lambda t: t == C.CUSTOM_SIZE),
+                "orient": ("mode", lambda t: t != C.IMAGE_SIZE)})
         if not v:
             return
-        res = self.run("Создание PDF…", C.images_to_pdf, sorted(paths), v["mode"], v["margin"])
+        res = self.run("Создание PDF…", C.images_to_pdf, sorted(paths), v["mode"], v["margin"],
+                       orientation=v["orient"], custom_mm=(v["w"], v["h"]))
         if res is FAILED:
             return
         if v["where"].startswith("Новый") or self.doc.page_count == 0:
@@ -2310,33 +2539,136 @@ class MainWindow(QMainWindow):
 
 
 # =============================================================================
-STYLE = f"""
-QMainWindow, QDialog {{ background: #f4f5f7; }}
-QToolBar {{ background: #ffffff; border: none; border-bottom: 1px solid #e1e3e8; padding: 4px; spacing: 2px; }}
-QToolBar QToolButton {{ padding: 5px 9px; border-radius: 6px; color: #23272e; }}
-QToolBar QToolButton:hover {{ background: #f1f2f5; }}
-QToolBar QToolButton:pressed {{ background: #e6e8ec; }}
-QTreeWidget#tools {{ background: #ffffff; border: none; border-right: 1px solid #e1e3e8; font-size: 10pt; padding: 6px 4px; }}
+THEMES = {
+    "light": dict(win="#f4f5f7", panel="#ffffff", base="#ffffff", alt="#f7f8fa", text="#23272e", muted="#6b7280",
+                  border="#e1e3e8", input_border="#c9ccd3", hover="#f1f2f5", pressed="#e6e8ec",
+                  pages="#eceef1", tool_hover="#fdecec", note_bg="#fff7e6", note_border="#f3d9a4",
+                  note_text="#5a4a1f", canvas="#6b7078", item_hover="rgba(0,0,0,0.05)",
+                  disabled="#a0a4ab", thumb_border="#c9ccd1", tooltip="#ffffe1"),
+    "dark": dict(win="#1e1f22", panel="#2b2d31", base="#26282c", alt="#303236", text="#e6e7ea", muted="#9aa0a8",
+                 border="#3a3d42", input_border="#4a4e55", hover="#3a3d42", pressed="#45484e",
+                 pages="#18191b", tool_hover="#3d2426", note_bg="#3a3120", note_border="#6b5a2e",
+                 note_text="#f0dfb0", canvas="#111214", item_hover="rgba(255,255,255,0.06)",
+                 disabled="#6a6e75", thumb_border="#4a4e55", tooltip="#3a3d42"),
+}
+THEME_NAMES = {"system": "Как в Windows", "light": "Светлая", "dark": "Тёмная"}
+T = dict(THEMES["light"])            # текущие цвета (меняются при смене темы)
+
+
+def make_style(t):
+    return f"""
+QMainWindow, QDialog {{ background: {t['win']}; }}
+QWidget {{ color: {t['text']}; }}
+QMenuBar {{ background: {t['panel']}; color: {t['text']}; }}
+QMenuBar::item:selected {{ background: {t['hover']}; }}
+QMenu {{ background: {t['panel']}; color: {t['text']}; border: 1px solid {t['border']}; }}
+QMenu::item:selected {{ background: {ACCENT}; color: white; }}
+QMenu::item:disabled {{ color: {t['disabled']}; }}
+QMenu::separator {{ height: 1px; background: {t['border']}; margin: 4px 8px; }}
+QToolBar {{ background: {t['panel']}; border: none; border-bottom: 1px solid {t['border']}; padding: 4px; spacing: 2px; }}
+QToolBar QToolButton {{ padding: 5px 9px; border-radius: 6px; color: {t['text']}; }}
+QToolBar QToolButton:hover {{ background: {t['hover']}; }}
+QToolBar QToolButton:pressed {{ background: {t['pressed']}; }}
+QToolBar QToolButton:disabled {{ color: {t['disabled']}; }}
+QTreeWidget#tools {{ background: {t['panel']}; color: {t['text']}; border: none; border-right: 1px solid {t['border']}; font-size: 10pt; padding: 6px 4px; }}
 QTreeWidget#tools::item {{ padding: 5px 4px; border-radius: 6px; }}
-QTreeWidget#tools::item:hover {{ background: #fdecec; color: {ACCENT}; }}
+QTreeWidget#tools::item:hover {{ background: {t['tool_hover']}; color: {ACCENT}; }}
 QTreeWidget#tools::item:selected {{ background: {ACCENT}; color: white; }}
-QListWidget#pages {{ background: #eceef1; border: none; padding: 10px; }}
+QListWidget#pages {{ background: {t['pages']}; color: {t['text']}; border: none; padding: 10px; }}
 QListWidget#pages::item {{ border-radius: 8px; }}
 QListWidget#pages::item:selected {{ background: rgba(217,54,62,0.18); border: 2px solid {ACCENT}; }}
-QListWidget#pages::item:hover {{ background: rgba(0,0,0,0.05); }}
-QPushButton {{ padding: 6px 14px; border: 1px solid #c9ccd3; border-radius: 6px; background: #ffffff; }}
+QListWidget#pages::item:hover {{ background: {t['item_hover']}; }}
+QPushButton {{ padding: 6px 14px; border: 1px solid {t['input_border']}; border-radius: 6px; background: {t['base']}; color: {t['text']}; }}
 QPushButton:hover {{ border-color: {ACCENT}; }}
+QPushButton:disabled {{ color: {t['disabled']}; }}
 QPushButton#primary, QDialogButtonBox QPushButton:default {{ background: {ACCENT}; color: white; border-color: {ACCENT}; }}
-QToolButton#mode {{ text-align: left; padding: 7px 10px; border-radius: 6px; border: 1px solid transparent; background: #ffffff; }}
+QToolButton#mode {{ text-align: left; padding: 7px 10px; border-radius: 6px; border: 1px solid transparent; background: {t['base']}; color: {t['text']}; }}
 QToolButton#mode:hover {{ border-color: #e5b3b5; }}
 QToolButton#mode:checked {{ background: {ACCENT}; color: white; }}
-QLabel#note {{ background: #fff7e6; border: 1px solid #f3d9a4; border-radius: 6px; padding: 8px; color: #5a4a1f; }}
-QLabel#hint {{ color: #555; font-style: italic; }}
-QScrollArea#canvasArea {{ background: #6b7078; border: none; }}
-QStatusBar {{ background: #ffffff; border-top: 1px solid #e1e3e8; }}
-QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit {{ padding: 4px 6px; border: 1px solid #c9ccd3; border-radius: 5px; background: white; }}
+QLabel#note {{ background: {t['note_bg']}; border: 1px solid {t['note_border']}; border-radius: 6px; padding: 8px; color: {t['note_text']}; }}
+QLabel#hint {{ color: {t['muted']}; font-style: italic; }}
+QScrollArea#canvasArea {{ background: {t['canvas']}; border: none; }}
+QStatusBar {{ background: {t['panel']}; color: {t['text']}; border-top: 1px solid {t['border']}; }}
+QStatusBar QLabel {{ color: {t['text']}; }}
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit {{ padding: 4px 6px; border: 1px solid {t['input_border']}; border-radius: 5px; background: {t['base']}; color: {t['text']}; selection-background-color: {ACCENT}; selection-color: white; }}
+QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {{ color: {t['disabled']}; background: {t['alt']}; }}
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus {{ border-color: {ACCENT}; }}
+QComboBox QAbstractItemView {{ background: {t['base']}; color: {t['text']}; selection-background-color: {ACCENT}; selection-color: white; }}
+QTableWidget, QTreeWidget, QListWidget {{ background: {t['base']}; color: {t['text']}; alternate-background-color: {t['alt']}; gridline-color: {t['border']}; }}
+QHeaderView::section {{ background: {t['alt']}; color: {t['text']}; border: none; border-bottom: 1px solid {t['border']}; padding: 4px; }}
+QTabWidget::pane {{ border: 1px solid {t['border']}; }}
+QTabBar::tab {{ background: {t['alt']}; color: {t['text']}; padding: 6px 12px; border: 1px solid {t['border']}; border-bottom: none; }}
+QTabBar::tab:selected {{ background: {t['base']}; border-top: 2px solid {ACCENT}; }}
+QCheckBox, QRadioButton, QLabel {{ color: {t['text']}; }}
+QCheckBox:disabled, QRadioButton:disabled, QLabel:disabled {{ color: {t['disabled']}; }}
+QToolTip {{ background: {t['tooltip']}; color: {t['text']}; border: 1px solid {t['border']}; }}
+QProgressDialog {{ background: {t['win']}; }}
+QSlider::groove:horizontal {{ height: 4px; background: {t['input_border']}; border-radius: 2px; }}
+QSlider::handle:horizontal {{ background: {ACCENT}; width: 14px; margin: -6px 0; border-radius: 7px; }}
 """
+
+
+STYLE = make_style(THEMES["light"])
+
+
+def system_is_dark():
+    try:
+        hints = QApplication.styleHints()
+        if hasattr(hints, "colorScheme"):
+            cs = hints.colorScheme()
+            if cs == Qt.ColorScheme.Dark:
+                return True
+            if cs == Qt.ColorScheme.Light:
+                return False
+    except Exception:
+        pass
+    if C.IS_WIN:
+        try:
+            import winreg
+            k = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                               r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+            return winreg.QueryValueEx(k, "AppsUseLightTheme")[0] == 0
+        except Exception:
+            pass
+    return False
+
+
+def settings():
+    from PySide6.QtCore import QSettings
+    return QSettings(os.path.join(data_dir(), "settings.ini"), QSettings.IniFormat)
+
+
+def theme_choice():
+    v = settings().value("theme", "system")
+    return v if v in THEME_NAMES else "system"
+
+
+def apply_theme(app, choice=None):
+    """Применить тему: 'system' | 'light' | 'dark'. Палитра задаётся явно, чтобы
+    цвета текста и фона всегда подходили друг к другу (раньше в тёмном режиме
+    Windows текст становился белым на белом фоне)."""
+    choice = choice or theme_choice()
+    name = ("dark" if system_is_dark() else "light") if choice == "system" else choice
+    t = THEMES[name]
+    T.clear()
+    T.update(t, name=name)
+    pal = QPalette()
+    roles = {
+        QPalette.Window: t["win"], QPalette.WindowText: t["text"], QPalette.Base: t["base"],
+        QPalette.AlternateBase: t["alt"], QPalette.Text: t["text"], QPalette.Button: t["panel"],
+        QPalette.ButtonText: t["text"], QPalette.ToolTipBase: t["tooltip"], QPalette.ToolTipText: t["text"],
+        QPalette.PlaceholderText: t["muted"], QPalette.Highlight: ACCENT, QPalette.HighlightedText: "#ffffff",
+        QPalette.Link: "#4a8fe7" if name == "dark" else "#1f5fbf", QPalette.BrightText: "#ffffff",
+        QPalette.Light: t["hover"], QPalette.Midlight: t["border"], QPalette.Mid: t["input_border"],
+        QPalette.Dark: t["pressed"], QPalette.Shadow: "#000000",
+    }
+    for role, col in roles.items():
+        pal.setColor(role, QColor(col))
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+        pal.setColor(QPalette.Disabled, role, QColor(t["disabled"]))
+    app.setPalette(pal)
+    app.setStyleSheet(make_style(t))
+    return name
 
 
 def main():
@@ -2346,16 +2678,28 @@ def main():
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("PDFMaster.App.1")
         except Exception:
             pass
+    def hook(t, e, tb):                     # непойманные ошибки — в журнал и окно, а не молча
+        text = "".join(traceback.format_exception(t, e, tb))
+        log_error("Непредвиденная ошибка", tb=text)
+        try:
+            QMessageBox.warning(None, APP_NAME, f"Произошла ошибка:\n{e}\n\nОна записана в журнал "
+                                                "(Справка → Журнал ошибок).")
+        except Exception:
+            pass
+    sys.excepthook = hook
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setStyle("Fusion")
-    pal = app.palette()
-    pal.setColor(QPalette.Highlight, QColor(ACCENT))
-    app.setPalette(pal)
     f = app.font()
     f.setPointSize(10)
     app.setFont(f)
-    app.setStyleSheet(STYLE)
+    apply_theme(app)
+    try:   # «Как в Windows»: следить за сменой темы системы на лету
+        app.styleHints().colorSchemeChanged.connect(
+            lambda *_: theme_choice() == "system" and (apply_theme(app), [w.refresh_theme() for w in
+                                                       app.topLevelWidgets() if hasattr(w, "refresh_theme")]))
+    except Exception:
+        pass
     w = MainWindow()
     w.show()
     files = [a for a in sys.argv[1:] if os.path.isfile(a)]
