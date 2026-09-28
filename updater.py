@@ -76,7 +76,7 @@ def fetch_info(timeout=15):
 def _fetch(url, dest, progress=None, cancelled=None, timeout=60, base=0, total_hint=0):
     tmp = dest + ".part"
     with _open(url, timeout) as r, open(tmp, "wb") as f:
-        total = int(r.headers.get("Content-Length") or 0) or total_hint
+        total = total_hint or int(r.headers.get("Content-Length") or 0)   # по файлам — общий размер
         got = 0
         while True:
             if cancelled and cancelled():
