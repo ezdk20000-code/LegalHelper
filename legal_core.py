@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Юридические функции PDF Мастер (без интерфейса): расчёты сроков, госпошлины,
+Юридические функции LegalHelper (без интерфейса): расчёты сроков, госпошлины,
 процентов и неустоек; подготовка пакета документов в суд и на почту;
 нумерация листов дела; штампы заверения; опись вложения ф. 107;
 проверка перед подачей; обезличивание; сравнение редакций; шаблоны документов.
@@ -918,7 +918,7 @@ def f107_pdf(items, kind, to_addr, recipient, sender, out=None, show_value_sum=T
             for j, rows in enumerate(pages_rows):
                 page = doc.new_page(width=A4.width, height=A4.height)
                 block(page, 30, A4.height - 30, rows, j == 0, j == len(pages_rows) - 1)
-    doc.set_metadata({"title": "Опись вложения ф. 107", "creator": "PDF Мастер"})
+    doc.set_metadata({"title": "Опись вложения ф. 107", "creator": "LegalHelper"})
     if out:
         C.save_pdf(doc, out)
     return doc

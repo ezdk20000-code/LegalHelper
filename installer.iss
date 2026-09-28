@@ -1,20 +1,20 @@
-﻿\xef\xbb\xbf; Скрипт установщика Inno Setup 6 для «PDF Мастер»
-#define MyAppName "PDF Мастер"
+﻿; Скрипт установщика Inno Setup 6 для «LegalHelper» (до версии 1.6 — «PDF Мастер»)
+#define MyAppName "LegalHelper"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.5"
+  #define MyAppVersion "1.6"
 #endif
-#define MyAppExe "PDFMaster.exe"
+#define MyAppExe "LegalHelper.exe"
 
 [Setup]
 AppId={{7C2E8F4A-3B1D-4E9A-9F21-5D6A0B8C4E11}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-AppPublisher=PDF Мастер
-DefaultDirName={autopf}\PDFMaster
+AppPublisher=LegalHelper
+DefaultDirName={autopf}\LegalHelper
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=installer_output
-OutputBaseFilename=PDFMaster_Setup
+OutputBaseFilename=LegalHelper_Setup
 SetupIconFile=app.ico
 UninstallDisplayIcon={app}\{#MyAppExe}
 Compression=lzma2
@@ -32,20 +32,26 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-Name: "openwith"; Description: "Добавить «PDF Мастер» в меню «Открыть с помощью» для PDF"; GroupDescription: "Интеграция:"
+Name: "openwith"; Description: "Добавить «LegalHelper» в меню «Открыть с помощью» для PDF"; GroupDescription: "Интеграция:"
 
 [InstallDelete]
 ; убрать библиотеки старой версии перед установкой новой
 Type: filesandordirs; Name: "{app}\_internal"
+; программа версий до 1.6 («PDF Мастер») и её ярлыки
+Type: files; Name: "{app}\PDFMaster.exe"
+Type: files; Name: "{autoprograms}\PDF Мастер.lnk"
+Type: files; Name: "{autodesktop}\PDF Мастер.lnk"
 
 [Files]
-Source: "dist\PDFMaster\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\LegalHelper\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
 
 [Registry]
+; «Открыть с помощью» старой версии (PDFMaster.exe)
+Root: HKA; Subkey: "Software\Classes\Applications\PDFMaster.exe"; Flags: deletekey
 Root: HKA; Subkey: "Software\Classes\Applications\{#MyAppExe}"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "{#MyAppName}"; Flags: uninsdeletekey; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\Applications\{#MyAppExe}\shell\open\command"; ValueType: string; ValueData: """{app}\{#MyAppExe}"" ""%1"""; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\Applications\{#MyAppExe}\SupportedTypes"; ValueType: string; ValueName: ".pdf"; ValueData: ""; Tasks: openwith

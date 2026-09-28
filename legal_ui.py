@@ -2375,7 +2375,10 @@ def case_output_dir(cid):
     c = db().case(cid) if cid else None
     if c and c.get("folder") and os.path.isdir(c["folder"]):
         return c["folder"]
-    base = Path.home() / "Documents" / "PDF Мастер" / "Дела"
+    base = Path.home() / "Documents" / "LegalHelper" / "Дела"
+    old = Path.home() / "Documents" / "PDF Мастер" / "Дела"     # папка версий до 1.6 — продолжаем её использовать
+    if old.is_dir() and not base.exists():
+        base = old
     name = L.clean_filename(c["title"]) if c else "Без дела"
     d = base / name
     d.mkdir(parents=True, exist_ok=True)

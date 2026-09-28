@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-PDF Мастер — настольный редактор PDF.
+LegalHelper — рабочее место юриста и настольный редактор PDF.
 Запуск:  python pdf_master.py [файлы...]
 """
 import os
@@ -26,9 +26,10 @@ import pdf_core as C
 import legal_core as L
 import legal_ui as U
 import help_ui as H
+import updater as UPD
 
-APP_NAME = "PDF Мастер"
-APP_VERSION = "1.5"
+APP_NAME = "LegalHelper"
+APP_VERSION = "1.6"
 ACCENT = "#007aff"
 FAILED = object()
 PDF_FILTER = "PDF (*.pdf)"
@@ -1401,6 +1402,9 @@ class CaseNavigator(QWidget):
 
 
 class MainWindow(QMainWindow):
+    updateChecked = Signal(object, str, bool)      # сведения о версии | ошибка | тихая проверка
+    updateProgress = Signal(int, int)
+    updateDownloaded = Signal(str, str)            # путь к архиву | ошибка
     for _k in LEGAL_TOOLS:
         locals()["tool_" + _k] = (lambda k: lambda self: getattr(U, "tool_" + k)(self))(_k)
     del _k
@@ -1432,6 +1436,14 @@ class MainWindow(QMainWindow):
         sec = int(settings().value("section", 0) or 0)
         if sec in (1, 2):
             QTimer.singleShot(0, lambda: self.show_section(sec))
+        self.updateChecked.connect(self._on_update_checked)
+        self.updateProgress.connect(self._on_update_progress)
+        self.updateDownloaded.connect(self._on_update_downloaded)
+        self._update_info = None
+        self._update_dlg = None
+        self._update_cancel = False
+        if self.auto_update_enabled():
+            QTimer.singleShot(3000, lambda: self.check_updates(silent=True))
 
     # ------------------------------------------------------------------ UI
     def _build(self):
@@ -1546,12 +1558,18 @@ class MainWindow(QMainWindow):
         self.addAction(a_help)
         mh.addSeparator()
         mh.addAction("Как пользоваться", self.tool_organize)
-        mh.addAction("Установить обновление из архива…", self.install_update)
+        mh.addAction("Проверить обновления…", lambda: self.check_updates(silent=False))
+        a_auto = mh.addAction("Проверять обновления при запуске")
+        a_auto.setCheckable(True)
+        a_auto.setChecked(self.auto_update_enabled())
+        a_auto.toggled.connect(lambda on: settings().setValue("auto_update", "1" if on else "0"))
+        mh.addAction("Установить обновление из архива…", lambda: self.install_update())
         mh.addAction("Журнал ошибок", self.show_error_log)
         mh.addSeparator()
         mh.addAction("О программе", lambda: QMessageBox.about(
-            self, APP_NAME, f"<b>{APP_NAME}</b> версия {APP_VERSION}<br>Настольный редактор PDF.<br><br>"
-            "Работает без интернета, файлы никуда не отправляются.<br>"
+            self, APP_NAME, f"<b>{APP_NAME}</b> версия {APP_VERSION}<br>Рабочее место юриста и настольный редактор PDF.<br><br>"
+            "Работает без интернета, файлы никуда не отправляются. В интернет программа обращается "
+            "только чтобы проверить обновления на GitHub.<br>"
             "Основано на PyMuPDF (MuPDF), Qt (PySide6), pdf2docx, openpyxl, python-pptx.<br><br>"
             f"Журнал ошибок: {log_path()}"))
         tb.addSeparator()
@@ -1742,6 +1760,7 @@ class MainWindow(QMainWindow):
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(0)
+        rv.addWidget(self._build_update_bar())
         rv.addWidget(self.banner)
         rv.addWidget(self.stack, 1)
         central = QWidget()
@@ -1833,9 +1852,10 @@ class MainWindow(QMainWindow):
             self.pages.viewport().update()
 
     # ------------------------------------------------------------- обновление и журнал
-    def install_update(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Архив с обновлением PDF Мастер",
-                                           os.path.join(os.path.expanduser("~"), "Downloads"), "ZIP (*.zip)")
+    def install_update(self, p=None, ask=True):
+        if not p:
+            p, _ = QFileDialog.getOpenFileName(self, f"Архив с обновлением {APP_NAME}",
+                                               os.path.join(os.path.expanduser("~"), "Downloads"), "ZIP (*.zip)")
         if not p:
             return
         import zipfile, time
@@ -1843,13 +1863,13 @@ class MainWindow(QMainWindow):
             with zipfile.ZipFile(p) as z:
                 names = [n for n in z.namelist() if n.replace("\\", "/").endswith("update.bat")]
                 if not names:
-                    raise ValueError("В архиве нет файла update.bat — это не архив обновления PDF Мастер.")
-                dest = os.path.join(tempfile.gettempdir(), f"PDFMaster_update_{int(time.time())}")
+                    raise ValueError(f"В архиве нет файла update.bat — это не архив обновления {APP_NAME}.")
+                dest = os.path.join(tempfile.gettempdir(), f"LegalHelper_update_{int(time.time())}")
                 z.extractall(dest)
         except Exception as e:
             return self.error("Не удалось распаковать обновление", e)
         bat = os.path.join(dest, min(names, key=len))
-        if QMessageBox.question(
+        if ask and QMessageBox.question(
                 self, APP_NAME, "Программа закроется, в отдельном окне пройдёт сборка и установка новой версии "
                                 "(первый раз — до 10–15 минут, дальше быстрее).\nПосле этого программа откроется "
                                 "сама.\n\nПродолжить?") != QMessageBox.Yes:
@@ -1858,7 +1878,7 @@ class MainWindow(QMainWindow):
             return
         try:
             if C.IS_WIN:
-                subprocess.Popen(["cmd", "/c", "start", "Обновление PDF Мастер", "cmd", "/c", bat],
+                subprocess.Popen(["cmd", "/c", "start", f"Обновление {APP_NAME}", "cmd", "/c", bat],
                                  cwd=os.path.dirname(bat), creationflags=0x00000008)   # DETACHED_PROCESS
             else:
                 subprocess.Popen(["sh", bat], cwd=os.path.dirname(bat))
@@ -1866,6 +1886,142 @@ class MainWindow(QMainWindow):
             return self.error("Не удалось запустить обновление", e)
         self.modified = False
         QApplication.quit()
+
+    # --- обновления с GitHub
+    def auto_update_enabled(self):
+        return str(settings().value("auto_update", "1")) != "0"
+
+    def _build_update_bar(self):
+        """Плашка «Доступна новая версия» над рабочей областью (скрыта, пока обновлений нет)."""
+        bar = QFrame()
+        bar.setObjectName("updatebar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(16, 6, 8, 6)
+        h.setSpacing(8)
+        self.update_lbl = QLabel()
+        self.update_lbl.setObjectName("updatetext")
+        self.update_lbl.setWordWrap(True)
+        h.addWidget(self.update_lbl, 1)
+        notes = QPushButton("Что нового")
+        notes.clicked.connect(self.show_update_notes)
+        install = QPushButton("Установить сейчас")
+        install.setObjectName("updateinstall")
+        install.clicked.connect(self.download_update)
+        later = QPushButton("Позже")
+        later.setToolTip("Скрыть. Напомню при следующем запуске программы.")
+        later.clicked.connect(bar.hide)
+        for b in (notes, install, later):
+            b.setCursor(Qt.PointingHandCursor)
+            h.addWidget(b)
+        bar.hide()
+        self.update_bar = bar
+        return bar
+
+    def check_updates(self, silent=True):
+        """Проверить версию на GitHub в фоне; результат придёт в _on_update_checked."""
+        import threading
+
+        def work():
+            try:
+                self.updateChecked.emit(UPD.fetch_info(), "", silent)
+            except Exception as e:
+                self.updateChecked.emit(None, str(e), silent)
+        if not silent:
+            self.statusBar().showMessage("Проверяю обновления…", 5000)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_update_checked(self, info, err, silent):
+        if err or not info:
+            if not silent:
+                QMessageBox.warning(self, APP_NAME, "Не удалось проверить обновления. Проверьте подключение "
+                                                    f"к интернету и попробуйте позже.\n\n{err}")
+            return
+        if not UPD.is_newer(info["version"], APP_VERSION):
+            if not silent:
+                QMessageBox.information(self, APP_NAME, f"У вас последняя версия — {APP_VERSION}.")
+            return
+        self._update_info = info
+        self.update_lbl.setText(f"Доступна новая версия {APP_NAME} {info['version']} (у вас {APP_VERSION}).")
+        self.update_bar.show()
+        if not silent:
+            self.show_update_notes()
+
+    def show_update_notes(self):
+        info = self._update_info
+        if not info:
+            return
+        items = "".join(f"<li>{n}</li>" for n in info["notes"]) or "<li>Исправления и улучшения.</li>"
+        box = QMessageBox(self)
+        box.setWindowTitle(APP_NAME)
+        box.setIcon(QMessageBox.Information)
+        box.setText(f"<b>Новая версия {info['version']}</b> (у вас {APP_VERSION})<ul>{items}</ul>")
+        now = box.addButton("Установить сейчас", QMessageBox.AcceptRole)
+        box.addButton("Позже", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is now:
+            self.download_update()
+
+    def download_update(self):
+        info = self._update_info
+        if not info or self._update_dlg:
+            return
+        if QMessageBox.question(
+                self, APP_NAME, f"Установить версию {info['version']}?\n\nПрограмма скачает обновление, "
+                                "закроется, в отдельном окне соберёт и установит новую версию (обычно 2–4 минуты, "
+                                "в первый раз дольше) и откроется снова. Дела, шаблоны и настройки сохранятся."
+        ) != QMessageBox.Yes:
+            return
+        if not self.maybe_save():
+            return
+        import threading, time
+        dest = os.path.join(tempfile.gettempdir(), f"LegalHelper_{info['version']}_{int(time.time())}.zip")
+        dlg = QProgressDialog("Скачиваю обновление…", "Отмена", 0, 0, self)
+        dlg.setWindowTitle(APP_NAME)
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.canceled.connect(lambda: setattr(self, "_update_cancel", True))
+        self._update_dlg = dlg
+        self._update_cancel = False
+        dlg.show()
+
+        def work():
+            try:
+                UPD.download(info["zip"], dest, progress=lambda got, total: self.updateProgress.emit(got, total),
+                             cancelled=lambda: self._update_cancel)
+                self.updateDownloaded.emit(dest, "")
+            except Exception as e:
+                self.updateDownloaded.emit("", str(e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_update_progress(self, got, total):
+        dlg = self._update_dlg
+        if not dlg:
+            return
+        mb = got / 1048576
+        if total:
+            dlg.setMaximum(100)
+            dlg.setValue(min(99, int(got * 100 / total)))
+            dlg.setLabelText(f"Скачиваю обновление… {mb:.1f} из {total / 1048576:.1f} МБ")
+        else:
+            dlg.setLabelText(f"Скачиваю обновление… {mb:.1f} МБ")
+
+    def _on_update_downloaded(self, path, err):
+        dlg, self._update_dlg = self._update_dlg, None
+        cancelled = self._update_cancel
+        if dlg:
+            dlg.canceled.disconnect()          # закрытие окна тоже шлёт canceled
+            dlg.close()
+            dlg.deleteLater()
+        if cancelled:
+            return
+        if err or not path:
+            log_error("Не удалось скачать обновление", tb=err)
+            QMessageBox.warning(self, APP_NAME, f"Не удалось скачать обновление.\n\n{err}\n\n"
+                                                "Попробуйте позже: «Справка → Проверить обновления…».")
+            return
+        self.install_update(path, ask=False)
 
     def show_error_log(self):
         p = log_path()
@@ -3605,6 +3761,9 @@ QToolBar QLabel#doctitle {{ color: {t['text']}; font-family: "{S}"; font-size: 1
 QPushButton#banner {{ background: {t['banner']}; color: {t['banner_text']}; border: none; border-left: 3px solid {t['wax']};
     border-radius: 0; padding: 9px 16px; text-align: left; font-weight: 600; }}
 QPushButton#banner:hover {{ background: {t['banner']}; text-decoration: underline; }}
+QFrame#updatebar {{ background: {t['accent_soft']}; border: none; border-left: 3px solid {A}; }}
+QFrame#updatebar QLabel#updatetext {{ color: {t['text']}; font-weight: 600; background: transparent; }}
+QFrame#updatebar QPushButton#updateinstall {{ background: {A}; color: white; font-weight: 600; border: none; }}
 QListWidget#pages {{ background: {t['pages']}; color: {t['text']}; border: none; padding: 18px; }}
 QListWidget#pages::item, QListWidget#pages::item:selected, QListWidget#pages::item:hover {{ background: transparent; border: none; }}
 
@@ -3799,7 +3958,7 @@ def main():
     if C.IS_WIN:
         try:  # своя иконка на панели задач
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("PDFMaster.App.1")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("LegalHelper.App.1")
         except Exception:
             pass
     def hook(t, e, tb):                     # непойманные ошибки — в журнал и окно, а не молча
