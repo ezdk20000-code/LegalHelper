@@ -37,7 +37,7 @@ import extwatch
 import tutorial
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "2.7"
+APP_VERSION = "2.7.1"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)

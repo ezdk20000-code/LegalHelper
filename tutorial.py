@@ -115,6 +115,17 @@ def delete_training_case(main, cid, ask=True):
     main.show_home() if hasattr(main, "show_home") else None
 
 
+def _alive(obj):
+    """Объект Qt ещё существует (не удалён вместе с родительским окном)."""
+    if obj is None:
+        return False
+    try:
+        import shiboken6
+        return shiboken6.isValid(obj)
+    except Exception:
+        return True
+
+
 def P_of(main):
     """Модуль главного окна (pdf_master, даже если он запущен как __main__)."""
     return sys.modules[type(main).__module__]
@@ -505,6 +516,12 @@ class Tutor:
                 s.enter()
             except Exception:
                 pass
+        self._fill()
+        self.tick()
+
+    def _fill(self):
+        """Текст и кнопки подсказки для текущего шага."""
+        s = self.steps[self.i]
         b = self.bub
         b.counter.setText(f"Шаг {self.i} из {len(self.steps) - 2}" if 0 < self.i < len(self.steps) - 1 else "")
         b.title.setText(s.title)
@@ -525,8 +542,9 @@ class Tutor:
             keep.clicked.connect(lambda: self.finish(delete=False))
             b.extra.addStretch(1)
             b.extra.addWidget(keep)
+        if self.passed:
+            b.done.show()
         b.adjustSize()
-        self.tick()
 
     def next(self):
         if self.i == len(self.steps) - 1:
@@ -540,37 +558,91 @@ class Tutor:
             self._enter()
 
     def quit(self):
-        if QMessageBox.question(self.bub, "Обучение", "Закончить обучение? Его можно пройти снова: "
+        if QMessageBox.question(self.bub if _alive(self.bub) else self.m, "Обучение", "Закончить обучение? Его можно пройти снова: "
                                 "«Справка → 🎓 Обучение».") != QMessageBox.Yes:
             return
         self.finish(delete=None)
 
     def finish(self, delete=True):
         self.timer.stop()
-        self.spot.hide()
-        self.bub.hide()
+        for w in (self.spot, self.bub):
+            if _alive(w):
+                w.hide()
         P_of(self.m).settings().setValue("tutorial_done", "1")
         if delete is None:
             delete = QMessageBox.question(self.m, "Обучение", "Удалить учебное дело?") == QMessageBox.Yes
         if delete and self.cid:
             delete_training_case(self.m, self.cid, ask=False)
         self.m.tutor = None
-        self.spot.deleteLater()
-        self.bub.deleteLater()
+        for w in (self.spot, self.bub):
+            if _alive(w):
+                w.deleteLater()
+
+    # ---- на каком окне показываться (главное или открытое поверх него — редактор страницы и т. п.)
+    SPOT_FLAGS = Qt.Tool | Qt.FramelessWindowHint | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus
+    BUB_FLAGS = Qt.Tool | Qt.FramelessWindowHint
+
+    def _attach(self, host):
+        """Перевесить шторку и подсказку на окно host. Пока они «дети» окна, оно удалит их вместе с собой —
+        поэтому при закрытии окна они заранее возвращаются на родительское (см. _release)."""
+        self.host = host
+        for w, fl in ((self.spot, self.SPOT_FLAGS), (self.bub, self.BUB_FLAGS)):
+            vis = w.isVisible()
+            w.setParent(host, fl)
+            if vis:
+                w.show()
+        if host is not self.m:
+            try:
+                host.finished.connect(lambda *_a, h=host: self._release(h))
+            except (AttributeError, RuntimeError):
+                pass
+
+    def _release(self, dlg):
+        """Окно (редактор, диалог) закрывается — вернуть подсказку на окно под ним, пока оно не удалилось."""
+        if self.host is not dlg or not _alive(self.bub):
+            return
+        par = dlg.parentWidget() if _alive(dlg) else None
+        par = par.window() if par is not None and _alive(par) else self.m
+        self._attach(par if _alive(par) else self.m)
+
+    def _ensure_widgets(self):
+        """Если подсказку всё-таки удалили вместе с чужим окном — создать заново."""
+        if not _alive(self.spot):
+            self.spot = Spotlight()
+            self.host = None
+        if not _alive(self.bub):
+            self.bub = Bubble(self)
+            self.host = None
+            self._restyle()
+            self._fill()
+        if self.host is not None and not _alive(self.host):
+            self.host = None
 
     def tick(self):
+        try:
+            self._tick()
+        except Exception as e:                    # обучение не должно ронять программу окнами ошибок
+            if repr(e) != getattr(self, "_last_err", None):      # в журнал — один раз, а не 8 раз в секунду
+                self._last_err = repr(e)
+                try:
+                    P_of(self.m).log_error("Обучение", e)
+                except Exception:
+                    pass
+
+    def _tick(self):
+        self._ensure_widgets()
         s = self.steps[self.i]
-        host = QApplication.activeModalWidget() or self.m
+        host = QApplication.activeModalWidget()
+        if host is None or not host.isVisible() or not _alive(host):
+            host = self.m
         if host is not self.host:
-            self.host = host
-            for w, fl in ((self.spot, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowTransparentForInput |
-                           Qt.WindowDoesNotAcceptFocus), (self.bub, Qt.Tool | Qt.FramelessWindowHint)):
-                w.setParent(host, fl)
+            self._attach(host)
         try:
             target = s.target() if s.target else None
         except Exception:
             target = None
-        hg = QRect(host.mapToGlobal(QPoint(0, 0)), host.size())
+        # QWidget.size(...) явно: у некоторых окон (ввод текста) есть своё поле «size» — счётчик кегля
+        hg = QRect(QWidget.mapToGlobal(host, QPoint(0, 0)), QWidget.size(host))
         # подсказка: рядом с целью, не вылезая за окно
         b = self.bub
         b.adjustSize()
