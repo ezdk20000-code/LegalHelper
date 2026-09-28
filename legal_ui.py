@@ -657,6 +657,15 @@ def default_icon(path):
             ".jpg": "📷", ".jpeg": "📷", ".png": "📷", ".tif": "📷", ".tiff": "📷"}.get(ext, "📎")
 
 
+def fmt_sent_short(s):
+    """Для узкого столбца: «23.09 14:35» в текущем году, иначе «23.09.25 14:35»."""
+    try:
+        d = dt.datetime.fromisoformat(s)
+    except Exception:
+        return s or ""
+    return d.strftime("%d.%m %H:%M" if d.year == dt.date.today().year else "%d.%m.%y %H:%M")
+
+
 def fmt_sent(s):
     if not s:
         return ""
@@ -808,11 +817,11 @@ class DocsTable(QTableWidget):
                 title.setToolTip("Открыт. Двойной щелчок — переименовать")
             title.setData(Qt.UserRole, d["path"])
             title.setData(Qt.UserRole + 1, d["id"])
-            sent = QTableWidgetItem(fmt_sent(d.get("sent")) or "не отправлен")
+            sent = QTableWidgetItem(("✓ " + fmt_sent_short(d.get("sent"))) if d.get("sent") else "📅 указать")
             sent.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            sent.setToolTip("Щёлкните, чтобы указать дату и время отправки")
-            if not d.get("sent"):
-                sent.setForeground(QColor(M.T["muted"]))
+            sent.setToolTip((f"Отправлен {fmt_sent(d.get('sent'))}. " if d.get("sent") else "") +
+                            "Щёлкните, чтобы указать дату и время отправки")
+            sent.setForeground(QColor(M.T["success"] if d.get("sent") else M.T["accent"]))
             fn = QTableWidgetItem(("⚠ " if not exists else "") + os.path.basename(d["path"]))
             fn.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             fn.setToolTip(d["path"] + ("" if exists else "\nФайл не найден — возможно, перемещён или удалён"))
@@ -869,6 +878,25 @@ class DocsTable(QTableWidget):
         if dlg.exec() and dlg.result_value is not None:
             db().update_doc(did, sent=dlg.result_value)
             self.page.load_docs()
+
+    def _current(self):
+        rows = self.selected_rows()
+        return rows[0] if len(rows) == 1 else None
+
+    def rename_current(self):
+        r = self._current()
+        if r is not None:
+            self.editItem(self.item(r, 1))
+
+    def sent_current(self):
+        r = self._current()
+        if r is not None:
+            self.edit_sent(r)
+
+    def icon_current(self):
+        r = self._current()
+        if r is not None:
+            self.on_click(r, 0)
 
     def move(self, step):
         rows = self.selected_rows()
@@ -952,6 +980,131 @@ def card_grid(cards, cols=3):
     return g
 
 
+def now():
+    """Текущее время с поправкой на отставание/спешку часов компьютера (см. timecheck.py)."""
+    return dt.datetime.now() + dt.timedelta(seconds=getattr(M, "CLOCK_OFFSET", 0.0) or 0.0)
+
+
+def event_dt(e):
+    """Дата и время события; без времени — 9:00 утра."""
+    t = (e.get("time") or "").strip() or "09:00"
+    try:
+        hh, mm = (int(x) for x in t.split(":")[:2])
+    except ValueError:
+        hh, mm = 9, 0
+    d = dt.date.fromisoformat(e["date"])
+    return dt.datetime(d.year, d.month, d.day, hh, mm)
+
+
+class ReminderDialog(QDialog):
+    """Новое напоминание или правка: когда и о чём."""
+
+    def __init__(self, parent, text="", when=None):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QDateTimeEdit
+        from PySide6.QtCore import QDateTime, QTime
+        self.setWindowTitle("Напоминание")
+        self.setMinimumWidth(440)
+        v = QVBoxLayout(self)
+        v.addLayout(title_row("Напоминание"))
+        v.addWidget(QLabel("О чём напомнить"))
+        self.text = QPlainTextEdit(text)
+        self.text.setPlaceholderText("Например: позвонить доверителю, запросить выписку, подготовить отзыв")
+        self.text.setFixedHeight(80)
+        v.addWidget(self.text)
+        v.addWidget(QLabel("Когда"))
+        when = when or (now() + dt.timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        self.ed = QDateTimeEdit()
+        self.ed.setCalendarPopup(True)
+        self.ed.setDisplayFormat("dd.MM.yyyy  HH:mm")
+        self.ed.setDateTime(QDateTime(QDate(when.year, when.month, when.day), QTime(when.hour, when.minute)))
+        row = QHBoxLayout()
+        row.addWidget(self.ed, 1)
+        for label, delta in (("Через час", dt.timedelta(hours=1)), ("Завтра 9:00", None)):
+            b = QPushButton(label)
+            b.clicked.connect(lambda _=False, d=delta: self._set(d))
+            row.addWidget(b)
+        v.addLayout(row)
+        bb = QHBoxLayout()
+        bb.addStretch(1)
+        cancel = QPushButton("Отмена")
+        cancel.clicked.connect(self.reject)
+        ok = QPushButton("Сохранить")
+        ok.setObjectName("primary")
+        ok.clicked.connect(self._ok)
+        bb.addWidget(cancel)
+        bb.addWidget(ok)
+        v.addLayout(bb)
+        self.value = None
+
+    def _set(self, delta):
+        from PySide6.QtCore import QDateTime, QTime
+        w = (now() + delta).replace(second=0, microsecond=0) if delta else \
+            (now() + dt.timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        self.ed.setDateTime(QDateTime(QDate(w.year, w.month, w.day), QTime(w.hour, w.minute)))
+
+    def _ok(self):
+        text = self.text.toPlainText().strip()
+        if not text:
+            QMessageBox.information(self, M.APP_NAME, "Напишите, о чём напомнить.")
+            return
+        q = self.ed.dateTime()
+        d, t = q.date(), q.time()
+        self.value = (dt.datetime(d.year(), d.month(), d.day(), t.hour(), t.minute()), text)
+        self.accept()
+
+
+def court_search_targets(case):
+    """Куда можно пойти искать дело по номеру: [(подпись, адрес)]."""
+    num = (case.get("number") or "").strip()
+    court = (case.get("court") or "").lower()
+    arbitr = "арбитраж" in court or num[:1] in ("А", "A") and "-" in num and "/" in num
+    out = []
+    if arbitr:
+        out.append(("Картотека арбитражных дел (kad.arbitr.ru)", "https://kad.arbitr.ru/"))
+    else:
+        if "москв" in court:
+            out.append(("Портал судов общей юрисдикции Москвы (mos-sud.ru)", "https://mos-sud.ru/search"))
+        out.append(("ГАС «Правосудие» — поиск по всем судам", "https://bsr.sudrf.ru/bigs/portal.html"))
+        out.append(("Картотека арбитражных дел (kad.arbitr.ru)", "https://kad.arbitr.ru/"))
+    return out
+
+
+def court_menu(main, cid, anchor):
+    """Меню кнопки «Дело на сайте суда»: открыть сохранённую ссылку, найти по номеру, вставить ссылку."""
+    c = db().case(cid) or {}
+    url = (c.get("court_url") or "").strip()
+    m = QMenu(anchor)
+    if url:
+        m.addAction("🌐 Открыть карточку дела", lambda: QDesktopServices.openUrl(QUrl(url)))
+        m.addSeparator()
+    num = (c.get("number") or "").strip()
+
+    def search(link):
+        if num:
+            QApplication.clipboard().setText(num)
+            main.statusBar().showMessage(f"Номер дела {num} скопирован — вставьте его в поиск на сайте (Ctrl+V)", 12000)
+        QDesktopServices.openUrl(QUrl(link))
+    for label, link in court_search_targets(c):
+        m.addAction(("🔎 Найти по номеру: " if num else "🔎 ") + label, lambda l=link: search(l))
+
+    def paste():
+        clip = QApplication.clipboard().text().strip()
+        from PySide6.QtWidgets import QInputDialog
+        text, ok = QInputDialog.getText(main, "Ссылка на дело", "Откройте карточку дела на сайте суда, скопируйте адрес "
+                                        "из строки браузера и вставьте сюда:",
+                                        text=clip if clip.startswith("http") else url)
+        if ok:
+            db().update_case(cid, court_url=text.strip())
+            main.cases_page.load_case() if main.cases_page.cid == cid else None
+            main.overview.set_case(cid)
+    m.addSeparator()
+    m.addAction("🔗 Вставить ссылку на карточку дела…" if not url else "🔗 Изменить ссылку…", paste)
+    if url:
+        m.addAction("Убрать ссылку", lambda: (db().update_case(cid, court_url=""), main.overview.set_case(cid)))
+    m.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+
+
 class OverviewTab(QWidget):
     """Обзор дела: главное о деле, ближайшие сроки, последние документы, быстрые действия."""
 
@@ -978,6 +1131,20 @@ class OverviewTab(QWidget):
         self.facts.setOpenExternalLinks(False)
         self.facts.linkActivated.connect(lambda _l: self.main.open_case_tab("info"))
         v.addWidget(self.facts)
+        crow = QHBoxLayout()
+        self.b_court = QPushButton("🌐  Дело на сайте суда")
+        self.b_court.setObjectName("primary")
+        self.b_court.setCursor(Qt.PointingHandCursor)
+        self.b_court.clicked.connect(self.court_clicked)
+        crow.addWidget(self.b_court)
+        self.b_court_more = QPushButton("▾")
+        self.b_court_more.setToolTip("Найти по номеру, вставить или изменить ссылку")
+        self.b_court_more.clicked.connect(lambda: court_menu(self.main, self.cid, self.b_court_more))
+        crow.addWidget(self.b_court_more)
+        self.court_hint = QLabel()
+        self.court_hint.setObjectName("hint")
+        crow.addWidget(self.court_hint, 1)
+        v.addLayout(crow)
         # две колонки
         cols = QHBoxLayout()
         cols.setSpacing(14)
@@ -1005,6 +1172,60 @@ class OverviewTab(QWidget):
             it.data(Qt.UserRole), 0, self.cid))
         self.l_events.itemClicked.connect(lambda _it: self.main.open_case_tab("events"))
         v.addLayout(cols)
+        # напоминания и заметки
+        cols2 = QHBoxLayout()
+        cols2.setSpacing(14)
+        box = QFrame()
+        box.setObjectName("card")
+        bv = QVBoxLayout(box)
+        bv.setContentsMargins(14, 12, 14, 10)
+        lab = QLabel("⏰  Напоминания")
+        lab.setObjectName("subtitle")
+        bv.addWidget(lab)
+        self.l_rem = QListWidget()
+        self.l_rem.setObjectName("overlist")
+        self.l_rem.setMinimumHeight(150)
+        self.l_rem.setWordWrap(True)
+        self.l_rem.itemDoubleClicked.connect(lambda it: self.edit_reminder(it.data(Qt.UserRole)))
+        self.l_rem.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.l_rem.customContextMenuRequested.connect(self.reminder_menu)
+        bv.addWidget(self.l_rem, 1)
+        rr = QHBoxLayout()
+        b = QPushButton("+ Напоминание")
+        b.clicked.connect(lambda: self.edit_reminder(None))
+        rr.addWidget(b)
+        b = QPushButton("✓ Выполнено")
+        b.clicked.connect(lambda: self._rem_action("done"))
+        rr.addWidget(b)
+        rr.addStretch(1)
+        bv.addLayout(rr)
+        cols2.addWidget(box, 1)
+        box = QFrame()
+        box.setObjectName("card")
+        bv = QVBoxLayout(box)
+        bv.setContentsMargins(14, 12, 14, 10)
+        nh = QHBoxLayout()
+        lab = QLabel("📝  Заметки и мысли")
+        lab.setObjectName("subtitle")
+        nh.addWidget(lab)
+        nh.addStretch(1)
+        self.notes_state = QLabel()
+        self.notes_state.setObjectName("hint")
+        nh.addWidget(self.notes_state)
+        bv.addLayout(nh)
+        self.notes = QPlainTextEdit()
+        self.notes.setObjectName("notes")
+        self.notes.setPlaceholderText("Мысли по делу, позиция, что спросить у доверителя, идеи для выступления… "
+                                      "Сохраняется само.")
+        self.notes.setMinimumHeight(150)
+        self.notes_timer = QTimer(self)
+        self.notes_timer.setSingleShot(True)
+        self.notes_timer.setInterval(700)
+        self.notes_timer.timeout.connect(self.save_notes)
+        self.notes.textChanged.connect(self._notes_changed)
+        bv.addWidget(self.notes, 1)
+        cols2.addWidget(box, 1)
+        v.addLayout(cols2)
         # быстрые действия
         lab = QLabel("Что сделать")
         lab.setObjectName("subtitle")
@@ -1025,10 +1246,21 @@ class OverviewTab(QWidget):
         v.addStretch(1)
 
     def set_case(self, cid):
+        if self.notes_timer.isActive() and self.cid:
+            self.notes_timer.stop()
+            self.save_notes()
         self.cid = cid
         if not cid:
             return
         c = db().case(cid) or {}
+        url = (c.get("court_url") or "").strip()
+        self.b_court.setText("🌐  Дело на сайте суда" if url else "🔎  Найти дело на сайте суда")
+        self.court_hint.setText("" if url else "Найдите карточку дела и сохраните ссылку (▾) — кнопка будет вести прямо в неё.")
+        self.notes.blockSignals(True)
+        self.notes.setPlainText(c.get("notes") or "")
+        self.notes.blockSignals(False)
+        self.notes_state.setText("")
+        self.load_reminders()
 
         def fact(label, value):
             value = html.escape(value or "") or f'<span style="color:{M.T["muted"]}">не указано</span>'
@@ -1042,7 +1274,7 @@ class OverviewTab(QWidget):
         # сроки
         self.l_events.clear()
         today = dt.date.today()
-        evs = [e for e in db().events(cid, include_done=False)]
+        evs = [e for e in db().events(cid, include_done=False) if e["kind"] != CS.CaseDB.REMINDER]
         evs.sort(key=lambda e: (e["date"], e["time"] or ""))
         for e in evs[:7]:
             d = dt.date.fromisoformat(e["date"])
@@ -1072,6 +1304,164 @@ class OverviewTab(QWidget):
             it = QListWidgetItem("Документов пока нет — откройте вкладку «Документы» и добавьте файлы")
             it.setFlags(Qt.NoItemFlags)
             self.l_docs.addItem(it)
+
+
+    # ---------------------------------------------------------------- сайт суда
+    def court_clicked(self):
+        c = db().case(self.cid) or {}
+        url = (c.get("court_url") or "").strip()
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
+        else:
+            court_menu(self.main, self.cid, self.b_court)
+
+    # ---------------------------------------------------------------- заметки
+    def _notes_changed(self):
+        self.notes_state.setText("…")
+        self.notes_timer.start()
+
+    def save_notes(self):
+        if not self.cid:
+            return
+        text = self.notes.toPlainText()
+        db().update_case(self.cid, notes=text)
+        cp = getattr(self.main, "cases_page", None)          # то же поле «Заметки» в сведениях о деле
+        if cp is not None and cp.cid == self.cid and "notes" in cp.fields:
+            f = cp.fields["notes"]
+            f.blockSignals(True)
+            f.setPlainText(text)
+            f.blockSignals(False)
+        self.notes_state.setText("сохранено ✓")
+
+    # ---------------------------------------------------------------- напоминания
+    def load_reminders(self):
+        self.l_rem.clear()
+        cur = now()
+        for e in sorted(db().reminders(self.cid), key=event_dt):
+            when = event_dt(e)
+            days = (when.date() - cur.date()).days
+            day = "сегодня" if days == 0 else "завтра" if days == 1 else when.strftime("%d.%m.%Y")
+            it = QListWidgetItem(f"{e['title']}\n{day} в {when:%H:%M}" + ("  — время прошло" if when <= cur else ""))
+            it.setData(Qt.UserRole, e["id"])
+            if when <= cur:
+                it.setForeground(QColor(M.T["danger"]))
+            self.l_rem.addItem(it)
+        if not self.l_rem.count():
+            it = QListWidgetItem("Напоминаний нет. «+ Напоминание» — и программа напомнит в нужное время.")
+            it.setFlags(Qt.NoItemFlags)
+            self.l_rem.addItem(it)
+
+    def edit_reminder(self, eid):
+        if not self.cid:
+            return
+        e = next((x for x in db().reminders(self.cid, include_done=True) if x["id"] == eid), None) if eid else None
+        dlg = ReminderDialog(self, e["title"] if e else "", event_dt(e) if e else None)
+        if dlg.exec() and dlg.value:
+            when, text = dlg.value
+            if e:
+                db().update_event(eid, date=when.date(), time=f"{when:%H:%M}", title=text, notified=0, done=0)
+            else:
+                db().add_event(self.cid, when.date(), CS.CaseDB.REMINDER, text, f"{when:%H:%M}")
+            self.load_reminders()
+            self.main.cases_page.reload_upcoming()
+
+    def _rem_action(self, what, eid=None):
+        if eid is None:
+            it = self.l_rem.currentItem()
+            eid = it.data(Qt.UserRole) if it else None
+        if not eid:
+            return
+        if what == "done":
+            db().update_event(eid, done=1)
+        elif what == "delete":
+            db().delete_event(eid)
+        self.load_reminders()
+        self.main.cases_page.reload_upcoming()
+
+    def reminder_menu(self, pos):
+        it = self.l_rem.itemAt(pos)
+        eid = it.data(Qt.UserRole) if it else None
+        if not eid:
+            return
+        m = QMenu(self)
+        m.addAction("✓ Выполнено", lambda: self._rem_action("done", eid))
+        m.addAction("Изменить…", lambda: self.edit_reminder(eid))
+        m.addSeparator()
+        m.addAction("Удалить", lambda: self._rem_action("delete", eid))
+        m.exec(self.l_rem.viewport().mapToGlobal(pos))
+
+
+class ReminderPopup(QDialog):
+    """Окно «Пора!» поверх всех окон: готово / отложить / открыть дело."""
+
+    def __init__(self, main, e):
+        super().__init__(main)
+        self.main, self.e = main, e
+        self.setWindowTitle("Напоминание — " + M.APP_NAME)
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
+        self.setMinimumWidth(420)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(22, 18, 22, 16)
+        v.setSpacing(8)
+        t = QLabel("⏰  Напоминание")
+        t.setObjectName("title")
+        v.addWidget(t)
+        body = QLabel(html.escape(e["title"]).replace("\n", "<br>"))
+        body.setWordWrap(True)
+        body.setTextFormat(Qt.RichText)
+        f = body.font()
+        f.setPointSize(f.pointSize() + 2)
+        body.setFont(f)
+        v.addWidget(body)
+        when = event_dt(e)
+        sub = QLabel(f"{when:%d.%m.%Y %H:%M}" + (f" · {e['case_title']}" if e.get("case_title") else ""))
+        sub.setObjectName("hint")
+        v.addWidget(sub)
+        row = QHBoxLayout()
+        snooze = QPushButton("Отложить")
+        sm = QMenu(snooze)
+        for label, delta in (("на 10 минут", dt.timedelta(minutes=10)), ("на 1 час", dt.timedelta(hours=1)),
+                             ("до завтра 9:00", None)):
+            sm.addAction(label, lambda d=delta: self.snooze(d))
+        snooze.setMenu(sm)
+        row.addWidget(snooze)
+        if e.get("case_id"):
+            op = QPushButton("Открыть дело")
+            op.clicked.connect(self.open_case)
+            row.addWidget(op)
+        row.addStretch(1)
+        done = QPushButton("Готово")
+        done.setObjectName("primary")
+        done.clicked.connect(self.done_clicked)
+        row.addWidget(done)
+        v.addLayout(row)
+
+    def _refresh(self):
+        try:
+            self.main.overview.load_reminders()
+            self.main.cases_page.reload_upcoming()
+        except Exception:
+            pass
+
+    def snooze(self, delta):
+        w = (now() + delta) if delta else (now() + dt.timedelta(days=1)).replace(hour=9, minute=0)
+        db().update_event(self.e["id"], date=w.date(), time=f"{w:%H:%M}", notified=0)
+        self._refresh()
+        self.close()
+
+    def done_clicked(self):
+        db().update_event(self.e["id"], done=1)
+        self._refresh()
+        self.close()
+
+    def open_case(self):
+        self.main.showNormal()
+        self.main.raise_()
+        self.main.activateWindow()
+        self.main.enter_case(self.e["case_id"])
+        self.main.open_case_tab("overview")
+        self.close()
 
 
 class PrepareTab(QWidget):
@@ -1296,13 +1686,29 @@ class CasesPage(QWidget):
     def _build_docs(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        hint = QLabel("Щелчок по документу — открыть справа. Значок и дату отправки можно изменить щелчком, "
-                      "название — двойным щелчком.")
+        hint = QLabel("Щелчок по документу — открыть справа. Выберите строку и нажмите кнопку ниже, чтобы "
+                      "переименовать документ, отметить дату и время отправки или поставить значок.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         v.addWidget(hint)
         self.l_docs = DocsTable(self)
         v.addWidget(self.l_docs, 1)
+        er = QHBoxLayout()
+        self.doc_edit_btns = []
+        for text, fn, tip in (("✎ Название", self.l_docs.rename_current, "Изменить название документа"),
+                              ("📅 Отправка", self.l_docs.sent_current, "Когда документ отправлен: дата и время"),
+                              ("🙂 Значок", self.l_docs.icon_current, "Выбрать значок для документа")):
+            b = QPushButton(text)
+            b.setObjectName("compact")
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            b.setEnabled(False)
+            er.addWidget(b)
+            self.doc_edit_btns.append(b)
+        er.addStretch(1)
+        v.addLayout(er)
+        self.l_docs.itemSelectionChanged.connect(
+            lambda: [b.setEnabled(len(self.l_docs.selected_rows()) == 1) for b in self.doc_edit_btns])
         r = QHBoxLayout()
         b_add = QToolButton()
         b_add.setText("+ Добавить")
@@ -1322,6 +1728,7 @@ class CasesPage(QWidget):
         r.addStretch(1)
         b_more = QToolButton()
         b_more.setText("Ещё ▾")
+        b_more.setObjectName("moretabs")
         b_more.setPopupMode(QToolButton.InstantPopup)
         mm = QMenu(b_more)
         mm.addAction("Пакет в суд из выбранных", self.package_from_docs)
@@ -1411,7 +1818,7 @@ class CasesPage(QWidget):
             it = QListWidgetItem(f"{when} {e['time']} — {e['kind']}: {e['title']}\n{e['case_title'] or ''}")
             it.setData(Qt.UserRole, e["case_id"])
             if d <= today:
-                it.setForeground(QColor("#d70015"))
+                it.setForeground(QColor(M.T["danger"]))
             self.upcoming.addItem(it)
         if not self.upcoming.count():
             it = QListWidgetItem("Ничего не запланировано")
@@ -1527,11 +1934,16 @@ class CasesPage(QWidget):
     def new_case(self):
         name, ok = QInputDialog.getText(self, "Новое дело", "Название (например, «ООО Ромашка — взыскание долга»):")
         if ok and name.strip():
-            self.cid = db().add_case(title=name.strip(), stage=D.CASE_STAGES[1])
+            cid = db().add_case(title=name.strip(), stage=D.CASE_STAGES[1])
+            self.cid = cid
             self.show_arch.setChecked(False)
             self.reload()
-            self.select_case(self.cid)
+            # reload() выбирает строку «молча» (сигналы выключены) — открываем новое дело явно
+            self.on_select(self.list.currentItem())
             self.tabs.setCurrentIndex(0)
+            if hasattr(self.main, "enter_case"):
+                self.main.enter_case(cid)
+                self.main.open_case_tab("overview")
 
     def delete_case(self):
         c = db().case(self.cid)
@@ -2875,17 +3287,49 @@ class Reminders:
             self.tray.messageClicked.connect(lambda: main.show_cases())
             self.tray.show()
         self.timer = QTimer(main)
-        self.timer.setInterval(20 * 60 * 1000)
+        self.timer.setInterval(5 * 60 * 1000)
         self.timer.timeout.connect(self.check)
         self.timer.start()
         QTimer.singleShot(1500, lambda: self.check(startup=True))
+        # напоминания — в точное время: проверка каждые 20 секунд
+        self.popups = {}
+        self.exact = QTimer(main)
+        self.exact.setInterval(20 * 1000)
+        self.exact.timeout.connect(self.check_exact)
+        self.exact.start()
+        QTimer.singleShot(2500, self.check_exact)
+
+    def check_exact(self):
+        """Показать напоминания, время которых наступило (и пропущенные, пока программа была закрыта)."""
+        try:
+            due = [e for e in db().reminders() if not e["notified"] and event_dt(e) <= now()]
+        except Exception:
+            return
+        for e in due[:5]:
+            if e["id"] in self.popups:
+                continue
+            db().update_event(e["id"], notified=1)
+            p = ReminderPopup(self.main, e)
+            self.popups[e["id"]] = p
+            p.destroyed.connect(lambda *_, i=e["id"]: self.popups.pop(i, None))
+            p.show()
+            p.raise_()
+            if self.tray:
+                self.tray.showMessage("Напоминание", e["title"], QSystemTrayIcon.Information, 20000)
+        if due:
+            QApplication.beep()
+            QApplication.alert(self.main)
+            try:
+                self.main.overview.load_reminders()
+            except Exception:
+                pass
 
     def check(self, startup=False):
         try:
-            events = db().events(upcoming_days=1, include_done=False)
+            events = [e for e in db().events(upcoming_days=1, include_done=False) if e["kind"] != CS.CaseDB.REMINDER]
         except Exception:
             return
-        today = dt.date.today()
+        today = now().date()
         due = [e for e in events if dt.date.fromisoformat(e["date"]) <= today + dt.timedelta(days=1)]
         if not due:
             self.main.set_banner("")

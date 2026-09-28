@@ -28,9 +28,11 @@ import legal_core as L
 import legal_ui as U
 import help_ui as H
 import updater as UPD
+import timecheck as TC
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "1.7"
+APP_VERSION = "1.8"
+CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
 ACCENT = "#007aff"
 FAILED = object()
 PDF_FILTER = "PDF (*.pdf)"
@@ -389,7 +391,7 @@ class PageList(QListWidget):
             f = p.font()
             f.setPointSize(13)
             p.setFont(f)
-            p.drawText(self.viewport().rect(), Qt.AlignCenter,
+            p.drawText(self.viewport().rect().adjusted(20, 0, -20, 0), Qt.AlignCenter | Qt.TextWordWrap,
                        "Перетащите сюда PDF, картинки или документы Word/Excel\n"
                        "или нажмите «Открыть» (Ctrl+O)\n\n"
                        "Страницы можно менять местами мышью")
@@ -1413,6 +1415,7 @@ class MainWindow(QMainWindow):
     updateChecked = Signal(object, str, bool)      # сведения о версии | ошибка | тихая проверка
     updateProgress = Signal(int, int)
     updateDownloaded = Signal(str, str)            # путь к архиву | ошибка
+    clockChecked = Signal(object, bool)            # расхождение часов в секундах или None | тихая проверка
     for _k in LEGAL_TOOLS:
         locals()["tool_" + _k] = (lambda k: lambda self: getattr(U, "tool_" + k)(self))(_k)
     del _k
@@ -1453,6 +1456,13 @@ class MainWindow(QMainWindow):
         self._update_cancel = False
         if self.auto_update_enabled():
             QTimer.singleShot(3000, lambda: self.check_updates(silent=True))
+        self.clockChecked.connect(self._on_clock_checked)
+        self._clock_warned = False
+        QTimer.singleShot(5000, lambda: self.check_clock(silent=True))
+        self.clock_timer = QTimer(self)
+        self.clock_timer.setInterval(6 * 3600 * 1000)
+        self.clock_timer.timeout.connect(lambda: self.check_clock(silent=True))
+        self.clock_timer.start()
 
     # ------------------------------------------------------------------ UI
     def _build(self):
@@ -1573,6 +1583,7 @@ class MainWindow(QMainWindow):
         a_auto.setChecked(self.auto_update_enabled())
         a_auto.toggled.connect(lambda on: settings().setValue("auto_update", "1" if on else "0"))
         mh.addAction("Установить обновление из архива…", lambda: self.install_update())
+        mh.addAction("Проверить часы компьютера…", lambda: self.check_clock(silent=False))
         mh.addAction("Журнал ошибок", self.show_error_log)
         mh.addSeparator()
         mh.addAction("О программе", lambda: QMessageBox.about(
@@ -1895,6 +1906,48 @@ class MainWindow(QMainWindow):
             return self.error("Не удалось запустить обновление", e)
         self.modified = False
         QApplication.quit()
+
+    # --- точное время
+    def check_clock(self, silent=True):
+        import threading
+        threading.Thread(target=lambda: self.clockChecked.emit(TC.clock_offset(), silent), daemon=True).start()
+
+    def _on_clock_checked(self, offset, silent):
+        global CLOCK_OFFSET
+        if offset is None:
+            if not silent:
+                QMessageBox.information(self, APP_NAME, "Не удалось узнать точное время — нет подключения к интернету.\n"
+                                                        f"Часовой пояс компьютера: {TC.utc_offset_text()}.")
+            return
+        bad = abs(offset) > TC.WARN_SECONDS
+        CLOCK_OFFSET = offset if bad else 0.0       # напоминания срабатывают по точному времени
+        U.M.CLOCK_OFFSET = CLOCK_OFFSET             # legal_ui видит снимок globals() — обновляем и его
+        if not bad:
+            self._clock_warned = False
+            if not silent:
+                QMessageBox.information(self, APP_NAME, f"Часы компьютера идут точно (расхождение {abs(offset):.0f} с).\n"
+                                                        f"Часовой пояс: {TC.utc_offset_text()}.")
+            return
+        if silent and self._clock_warned:
+            return
+        self._clock_warned = True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle(APP_NAME)
+        box.setText(f"<b>Часы компьютера {TC.describe(offset)}.</b>")
+        box.setInformativeText(
+            "Сроки, заседания и напоминания считаются по времени — из-за неверных часов можно пропустить "
+            "событие. Напоминания программа уже поправила по точному времени, но лучше исправить часы: "
+            "«Параметры Windows → Время и язык → Синхронизировать».\n\n"
+            f"Часовой пояс компьютера: {TC.utc_offset_text()} (для Москвы должно быть UTC+3).")
+        fix = box.addButton("Открыть настройки времени", QMessageBox.AcceptRole)
+        box.addButton("Понятно", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is fix:
+            try:
+                os.startfile("ms-settings:dateandtime")
+            except Exception:
+                pass
 
     # --- обновления с GitHub
     def auto_update_enabled(self):
@@ -3692,7 +3745,7 @@ THEMES = {
                   pages="#f2f2f7", tool_hover="#ececf1", note_bg="rgba(0,122,255,0.08)", note_border="rgba(0,122,255,0.20)",
                   note_text="#1c1c1e", canvas="#e5e5ea", item_hover="rgba(0,0,0,0.04)",
                   disabled="#b0b0b8", thumb_border="#e5e5ea", tooltip="#1c1c1e", tooltip_text="#ffffff",
-                  accent="#007aff", accent_soft="rgba(0,122,255,0.12)", wax="#ff3b30",
+                  accent="#007aff", accent_soft="rgba(0,122,255,0.12)", wax="#ff3b30", success="#248a3d",
                   banner="rgba(255,59,48,0.10)", banner_text="#d70015", nav="#f7f7fa", danger="#ff3b30",
                   side="#f7f7fa", side_text="#1c1c1e", side_muted="#8e8e93", side_hover="rgba(0,0,0,0.05)",
                   side_line="#e5e5ea", side_active="#007aff", seg_on="#ffffff", shadow=(0, 0, 0, 28)),
@@ -3702,7 +3755,7 @@ THEMES = {
                  pages="#000000", tool_hover="#2c2c2e", note_bg="rgba(10,132,255,0.14)", note_border="rgba(10,132,255,0.30)",
                  note_text="#f2f2f7", canvas="#0c0c0d", item_hover="rgba(255,255,255,0.05)",
                  disabled="#5a5a5f", thumb_border="#2c2c2e", tooltip="#f2f2f7", tooltip_text="#1c1c1e",
-                 accent="#0a84ff", accent_soft="rgba(10,132,255,0.20)", wax="#ff453a",
+                 accent="#0a84ff", accent_soft="rgba(10,132,255,0.20)", wax="#ff453a", success="#30d158",
                  banner="rgba(255,69,58,0.16)", banner_text="#ff6961", nav="#1c1c1e", danger="#ff453a",
                  side="#161618", side_text="#f2f2f7", side_muted="#98989f", side_hover="rgba(255,255,255,0.06)",
                  side_line="#2c2c2e", side_active="#0a84ff", seg_on="#636366", shadow=(0, 0, 0, 90)),
@@ -3873,6 +3926,7 @@ QPushButton:pressed {{ background: {t['fill_hover']}; color: {t['text']}; }}
 QPushButton:disabled {{ color: {t['disabled']}; background: {t['fill']}; }}
 QPushButton:checked {{ background: {A}; color: white; }}
 QPushButton[danger="true"] {{ color: {t['danger']}; }}
+QPushButton#compact {{ padding: 7px 9px; }}
 QPushButton#primary, QDialogButtonBox QPushButton:default {{ background: {A}; color: white; font-weight: 600; }}
 QPushButton#primary:hover, QDialogButtonBox QPushButton:default:hover {{ background: {A}; }}
 QPushButton#primary:disabled {{ background: {t['fill']}; color: {t['disabled']}; }}

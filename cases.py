@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS boards(
     case_id INTEGER PRIMARY KEY, scene TEXT DEFAULT '', updated TEXT);
 """
 
-CASE_FIELDS = [("title", "Название"), ("number", "Номер дела"), ("court", "Суд"), ("judge", "Судья"),
+CASE_FIELDS = [("title", "Название"), ("number", "Номер дела"), ("court", "Суд"),
+               ("court_url", "Ссылка на дело на сайте суда"), ("judge", "Судья"),
                ("client", "Доверитель"), ("opponent", "Процессуальный оппонент"), ("third", "Третьи лица"),
                ("stage", "Стадия"), ("claim", "Предмет / цена иска"), ("rate", "Ставка, ₽/час"),
                ("folder", "Папка с документами"), ("notes", "Заметки")]
@@ -71,6 +72,9 @@ class CaseDB:
         for name, ddl in (("icon", "TEXT DEFAULT ''"), ("sent", "TEXT DEFAULT ''"), ("pos", "INTEGER DEFAULT 0")):
             if name not in cols:
                 self.con.execute(f"ALTER TABLE docs ADD COLUMN {name} {ddl}")
+        cols = {r[1] for r in self.con.execute("PRAGMA table_info(cases)")}
+        if "court_url" not in cols:
+            self.con.execute("ALTER TABLE cases ADD COLUMN court_url TEXT DEFAULT ''")
 
     # ---------------------------------------------------------------- общее
     def _all(self, sql, args=()):
@@ -139,6 +143,12 @@ class CaseDB:
         keys = [k for k in kw if k in ("date", "time", "kind", "title", "place", "done", "notified")]
         self._exec(f"UPDATE events SET {','.join(k + '=?' for k in keys)} WHERE id=?",
                    [iso(kw[k]) if k == "date" else kw[k] for k in keys] + [eid])
+
+    REMINDER = "Напоминание"
+
+    def reminders(self, cid=None, include_done=False):
+        """Напоминания (события вида «Напоминание») — срабатывают в точное время."""
+        return [e for e in self.events(cid, include_done=include_done) if e["kind"] == self.REMINDER]
 
     def delete_event(self, eid):
         self._exec("DELETE FROM events WHERE id=?", (eid,))
