@@ -6,7 +6,7 @@ import re
 import html
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QListWidget,
+from PySide6.QtWidgets import (QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QTextBrowser)
 
 M = None   # модуль pdf_master (задаётся при создании страницы)
@@ -366,7 +366,13 @@ e-mail — для всех. Доверитель и оппонент подст�
 <p>При запуске — заставка, при переходах между делами и вкладками — мягкое проявление, уведомления выезжают сверху.
 Анимации лёгкие и включаются только на доли секунды. Выключить — «Вид → Анимации».</p>
 <h3>Тема оформления</h3>
-<p>«Вид → Тема оформления»: как в Windows, светлая или тёмная.</p>
+<p>«Вид → Тема оформления»: как в Windows, светлая, тёмная и дизайнерские — «Кофе», «Лаванда», «Мята», «Океан»,
+«Сакура», а из тёмных — «Графит», «Полночь», «Лес».</p>
+<h3>Удаление дела</h3>
+<p>Кнопка «Удалить» в деле спросит шестизначный код, показанный на экране, — случайно удалить дело нельзя. Перед
+удалением делается резервная копия.</p>
+<h3>Ярлык пропал?</h3>
+<p>«Справка → Создать ярлык на рабочем столе». Обновление программы тоже само восстанавливает ярлык.</p>
 {img("23_dark", "Тёмная тема")}
 <h3>Обновление программы</h3>
 {steps(
@@ -453,6 +459,14 @@ class HelpPage(QWidget):
         left.setFixedWidth(270)
         lv = QVBoxLayout(left)
         lv.setContentsMargins(16, 18, 10, 12)
+        self.on_back = None                   # главное окно подставляет «вернуться туда, где были»
+        back = QPushButton("←  Назад")
+        back.setToolTip("Вернуться к делу (Esc)")
+        back.setCursor(Qt.PointingHandCursor)
+        back.clicked.connect(lambda: self.on_back and self.on_back())
+        lv.addWidget(back, 0, Qt.AlignLeft)
+        from PySide6.QtGui import QShortcut, QKeySequence
+        QShortcut(QKeySequence("Esc"), self, activated=lambda: self.on_back and self.on_back())
         t = QLabel("Справка")
         t.setObjectName("title")
         lv.addWidget(t)

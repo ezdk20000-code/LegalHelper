@@ -167,6 +167,10 @@ echo ============================================
 echo   Готово. Установлена версия %VER%
 echo   Папка программы: !TARGET!
 echo ============================================
+rem ярлык на рабочем столе должен быть всегда (раньше мог пропасть при смене названия программы)
+if exist "!TARGET!\LegalHelper.exe" powershell -NoProfile -Command "$ws=New-Object -ComObject WScript.Shell; $exe='!TARGET!\LegalHelper.exe'; $dirs=@([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('CommonDesktopDirectory')); $has=$false; foreach($d in $dirs){ if($d -and (Test-Path -LiteralPath (Join-Path $d 'LegalHelper.lnk'))){ $has=$true } }; if(-not $has){ $s=$ws.CreateShortcut((Join-Path $dirs[0] 'LegalHelper.lnk')); $s.TargetPath=$exe; $s.WorkingDirectory='!TARGET!'; $s.IconLocation=$exe+',0'; $s.Save() }" >nul 2>&1
+rem обновить кэш значков Windows, чтобы у ярлыка сразу была новая иконка
+ie4uinit.exe -show >nul 2>&1
 if exist "!TARGET!\LegalHelper.exe" start "" "!TARGET!\LegalHelper.exe"
 timeout /t 8
 exit /b 0

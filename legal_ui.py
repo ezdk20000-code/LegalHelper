@@ -944,7 +944,7 @@ class ActionCard(QPushButton):
         super().__init__()
         self.setObjectName("actioncard")
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(74)
+        self.setMinimumHeight(88)                # название и две строки пояснения помещаются целиком
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         h = QHBoxLayout(self)
         h.setContentsMargins(14, 10, 10, 10)
@@ -962,6 +962,7 @@ class ActionCard(QPushButton):
         tv.setSpacing(1)
         t = QLabel(title)
         t.setObjectName("cardtitle")
+        t.setWordWrap(True)
         t.setAttribute(Qt.WA_TransparentForMouseEvents)
         d = QLabel(desc)
         d.setObjectName("carddesc")
@@ -1472,53 +1473,116 @@ class ReminderPopup(QDialog):
         self.close()
 
 
+TOOL_ICONS = {
+    "package": "📨", "f107": "📮", "sheetnum": "🔢", "certify": "🖊️", "preflight": "✅", "anonymize": "🕶️",
+    "compare_ed": "🔀", "board": "🗺️", "case_search": "🔍", "quote": "📌", "template": "📝",
+    "calc_deadline": "⏱️", "calc_duty": "🏛️", "calc_interest": "💰",
+    "merge": "➕", "organize": "🗂️", "split": "✂️", "rotate": "🔄", "delete": "🗑️", "extract": "📤",
+    "pagesize": "📐", "blank": "📄", "reverse": "🔃", "edit": "✏️", "sign": "✍️", "watermark": "💧",
+    "numbers": "#️⃣", "crop": "🖼️", "redact": "⬛", "highlight": "🖍️", "forms": "🧾", "meta": "🏷️",
+    "compress": "🗜️", "ocr": "🔤", "repair": "🩹", "pdfa": "🗄️", "img2pdf": "🖼️", "word2pdf": "📘",
+    "xls2pdf": "📗", "ppt2pdf": "📙", "html2pdf": "🌐", "pdf2word": "📘", "pdf2excel": "📗", "pdf2ppt": "📙",
+    "pdf2jpg": "🖼️", "pdf2txt": "📃", "pdf2md": "⌨️", "protect": "🔒", "unlock": "🔓", "compare": "🆚",
+}
+# инструменты, которым не нужен открытый документ (создают новый или сами спрашивают файлы)
+NO_DOC_TOOLS = {"merge", "img2pdf", "word2pdf", "xls2pdf", "ppt2pdf", "html2pdf", "repair", "unlock", "compare",
+                "blank"}
+
+
 class PrepareTab(QWidget):
-    """Подготовить: всё для суда и почты по этому делу + комплект документов для подачи."""
+    """Подготовить: все инструменты для документов дела — крупными карточками по разделам, с поиском
+    и прокруткой; ниже — комплект документов для подачи."""
+    COLS = 2
 
     def __init__(self, main, submission):
         super().__init__()
         self.main = main
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        split = QSplitter(Qt.Vertical)
-        outer.addWidget(split)
-        top = QWidget()
-        v = QVBoxLayout(top)
-        v.setContentsMargins(2, 14, 8, 8)
-        v.setSpacing(10)
-        m = main
-        hint = QLabel("Инструменты для документа, открытого во вкладке «Документы», и для комплекта ниже.")
+        top = QHBoxLayout()
+        top.setContentsMargins(2, 12, 10, 4)
+        hint = QLabel("Инструменты работают с документом, открытым во вкладке «Документы».")
         hint.setObjectName("hint")
-        v.addWidget(hint)
-        v.addLayout(card_grid([
-            ActionCard("📝", "Документ по шаблону", "Ходатайства и заявления по АПК и ГПК, запрос, претензия",
-                       lambda: tool_template(m, m.cases_page.cid), "template"),
-            ActionCard("📨", "Пакет в суд / на почту", "Файлы под «Мой арбитр», ГАС «Правосудие», Почту России",
-                       lambda: m.tool_package(), "package"),
-            ActionCard("📮", "Опись вложения ф. 107", "Бланк описи для ценного письма", lambda: m.tool_f107(), "f107"),
-            ActionCard("🔢", "Нумерация листов", "Номера листов дела, тома по 250 листов", lambda: m.run_doc_tool("sheetnum"),
-                       "sheetnum"),
-            ActionCard("🖊️", "«Копия верна»", "Заверительная надпись на страницах", lambda: m.run_doc_tool("certify"),
-                       "certify"),
-            ActionCard("✅", "Проверка перед подачей", "Размер, формат, пустые и перевёрнутые страницы",
-                       lambda: m.run_doc_tool("preflight"), "preflight"),
-            ActionCard("🕶️", "Обезличить", "Скрыть персональные данные по 152-ФЗ", lambda: m.run_doc_tool("anonymize"),
-                       "anonymize"),
-            ActionCard("🔀", "Сравнить редакции", "Было / стало между двумя версиями", lambda: m.tool_compare_ed(),
-                       "compare_ed"),
-            ActionCard("🔍", "Поиск по документам", "Найти слово во всех файлах дела", lambda: m.tool_case_search(),
-                       "case_search"),
-        ]))
-        split.addWidget(top)
-        bottom = QWidget()
-        bv = QVBoxLayout(bottom)
-        bv.setContentsMargins(2, 6, 8, 0)
+        top.addWidget(hint, 1)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("🔍  Найти инструмент: сжать, подпись, Word…")
+        self.search.setClearButtonEnabled(True)
+        self.search.setFixedWidth(300)
+        self.search.textChanged.connect(self.filter)
+        top.addWidget(self.search)
+        outer.addLayout(top)
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setFrameShape(QFrame.NoFrame)
+        outer.addWidget(sc, 1)
+        body = QWidget()
+        sc.setWidget(body)
+        v = QVBoxLayout(body)
+        v.setContentsMargins(2, 6, 10, 14)
+        v.setSpacing(8)
+        self.sections = []                       # (заголовок, сетка-виджет, [(карточка, текст для поиска)])
+        for cat, items in M.TOOLS:
+            cards = []
+            for key, label, tip in items:
+                card = ActionCard(TOOL_ICONS.get(key, "•"), label, tip, self._slot(key),
+                                  key if key in HELP else None)
+                cards.append((card, f"{label} {tip} {cat}".lower()))
+            lab = QLabel(cat)
+            lab.setObjectName("subtitle")
+            box = QWidget()
+            grid = card_grid([c for c, _t in cards], cols=self.COLS)
+            grid.setContentsMargins(0, 2, 0, 10)
+            box.setLayout(grid)
+            box.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)   # без пустых промежутков между рядами
+            v.addWidget(lab)
+            v.addWidget(box)
+            self.sections.append((lab, box, cards))
+        self.nothing = QLabel("Ничего не найдено")
+        self.nothing.setObjectName("hint")
+        self.nothing.hide()
+        v.addWidget(self.nothing)
         lab = QLabel("Комплект документов для подачи")
         lab.setObjectName("subtitle")
-        bv.addWidget(lab)
-        bv.addWidget(submission, 1)
-        split.addWidget(bottom)
-        split.setSizes([330, 420])
+        v.addSpacing(8)
+        v.addWidget(lab)
+        submission.setMinimumHeight(560)
+        v.addWidget(submission)
+        self.kit_label = lab
+        self.kit = submission
+
+    def _slot(self, key):
+        m = self.main
+        special = {
+            "template": lambda: tool_template(m, m.cases_page.cid),
+            "package": lambda: m.tool_package(), "f107": lambda: m.tool_f107(),
+            "board": lambda: m.open_case_tab("board"), "case_search": lambda: m.tool_case_search(),
+            "compare_ed": lambda: m.tool_compare_ed(),
+            "calc_deadline": lambda: m.show_calc(0), "calc_duty": lambda: m.show_calc(1),
+            "calc_interest": lambda: m.show_calc(2),
+        }
+        if key in special:
+            return special[key]
+        if key in NO_DOC_TOOLS:
+            return lambda: (m.open_case_tab("docs"), m.run_tool(key))
+        return lambda: m.run_doc_tool(key)
+
+    def filter(self, text):
+        t = text.lower().strip()
+        shown = 0
+        for lab, box, cards in self.sections:
+            grid = box.layout()
+            vis = [c for c, hay in cards if not t or all(w in hay for w in t.split())]
+            for c, _hay in cards:
+                grid.removeWidget(c)
+                c.setVisible(c in vis)
+            for i, c in enumerate(vis):                   # переложить найденные плотно, без дыр
+                grid.addWidget(c, i // self.COLS, i % self.COLS)
+            lab.setVisible(bool(vis))
+            box.setVisible(bool(vis))
+            shown += len(vis)
+        self.nothing.setVisible(shown == 0)
+        self.kit_label.setVisible(not t)
+        self.kit.setVisible(not t)
 
 
 class CasesPage(QWidget):
@@ -1654,7 +1718,7 @@ class CasesPage(QWidget):
                 f.addRow(label, row)
                 continue
             else:
-                e = QLineEdit()
+                e = M.GrowEdit()                        # длинный текст переносится, поле растёт вниз
                 e.textChanged.connect(lambda *_: self.save_timer.start())
             self.fields[key] = e
             f.addRow(label, e)
@@ -1963,9 +2027,7 @@ class CasesPage(QWidget):
 
     def delete_case(self):
         c = db().case(self.cid)
-        if c and QMessageBox.question(self, M.APP_NAME, f"Удалить дело «{c['title']}» со всеми сроками, учётом "
-                                      "времени и выписками?\nФайлы документов на диске не удаляются, а перед удалением "
-                                      "делается резервная копия.") == QMessageBox.Yes:
+        if c and DeleteCaseDialog(self, c["title"]).exec():
             try:
                 sync_case_file(self.cid)
                 BK.make_backup(M.data_dir(), "delete", M.APP_VERSION)
@@ -2451,7 +2513,7 @@ class F107Dialog(QDialog):
         note.setWordWrap(True)
         v.addWidget(note)
         f = QFormLayout()
-        self.sender = QLineEdit(s.value("f107_sender", "") or s.value("profile/Представитель", ""))
+        self.sender = M.GrowEdit(s.value("f107_sender", "") or s.value("profile/Представитель", ""))
         self.sender.setPlaceholderText("ФИО или наименование юридического лица")
         self.spi = QLineEdit()
         self.spi.setPlaceholderText("необязательно — 14 цифр с чека или наклейки")
@@ -2795,7 +2857,7 @@ class ProfileDialog(QDialog):
         vals = profile_values()
         self.edits = {}
         for k, label, ph in PROFILE_FIELDS:
-            e = QLineEdit(vals.get(k, ""))
+            e = M.GrowEdit(vals.get(k, ""))
             e.setPlaceholderText(ph)
             f.addRow(label, e)
             self.edits[k] = e
@@ -2912,8 +2974,7 @@ class PartyEditor(QFrame):
                 e.addItems(list(ORG_FORMS))
                 e.setCurrentText(self.values.get(key, "ООО"))
             else:
-                e = QLineEdit(self.values.get(key, ""))
-                e.setPlaceholderText(hint)
+                e = M.GrowEdit(self.values.get(key, ""), hint)
             self.form.addRow(key.replace("_", " ").replace("Email", "E-mail"), e)
             self.edits[key] = e
 
@@ -2969,6 +3030,60 @@ class PartyEditor(QFrame):
         if contacts:
             lines.append(contacts[0].upper() + contacts[1:])
         return "\n".join(lines)
+
+
+class DeleteCaseDialog(QDialog):
+    """Удаление дела — только после ввода случайного шестизначного кода (защита от случайного нажатия)."""
+
+    def __init__(self, parent, title):
+        super().__init__(parent)
+        import random
+        self.code = f"{random.SystemRandom().randint(0, 999999):06d}"
+        self.setWindowTitle("Удалить дело")
+        self.setMinimumWidth(460)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(22, 18, 22, 16)
+        v.setSpacing(10)
+        t = QLabel("Удалить дело?")
+        t.setObjectName("title")
+        v.addWidget(t)
+        info = QLabel(f"«{html.escape(title)}» будет удалено вместе со сроками, заметками, напоминаниями, учётом "
+                      "времени и картой дела. Файлы документов на диске останутся, а перед удалением программа "
+                      "сделает резервную копию.<br><br>Чтобы подтвердить, введите код:")
+        info.setWordWrap(True)
+        info.setTextFormat(Qt.RichText)
+        v.addWidget(info)
+        code = QLabel(" ".join(self.code))
+        code.setAlignment(Qt.AlignCenter)
+        code.setTextInteractionFlags(Qt.NoTextInteraction)      # не скопировать — только ввести
+        f = code.font()
+        f.setPointSize(24)
+        f.setBold(True)
+        f.setLetterSpacing(QFont.AbsoluteSpacing, 3)
+        code.setFont(f)
+        code.setStyleSheet(f"color: {M.T['danger']}; background: {M.T['banner']}; border-radius: 12px; padding: 10px;")
+        v.addWidget(code)
+        self.inp = QLineEdit()
+        self.inp.setPlaceholderText("6 цифр")
+        self.inp.setMaxLength(6)
+        self.inp.setAlignment(Qt.AlignCenter)
+        fi = self.inp.font()
+        fi.setPointSize(16)
+        self.inp.setFont(fi)
+        v.addWidget(self.inp)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        cancel = QPushButton("Отмена")
+        cancel.clicked.connect(self.reject)
+        self.ok = QPushButton("Удалить дело")
+        self.ok.setProperty("danger", True)
+        self.ok.setEnabled(False)
+        self.ok.clicked.connect(self.accept)
+        row.addWidget(cancel)
+        row.addWidget(self.ok)
+        v.addLayout(row)
+        self.inp.textChanged.connect(lambda t: self.ok.setEnabled(t.strip() == self.code))
+        cancel.setDefault(True)
 
 
 class TemplateDialog(QDialog):
@@ -3175,8 +3290,7 @@ class TemplateDialog(QDialog):
                 e.setFixedHeight(92 if n.startswith("Пункты_") else 78)
                 e.text = e.toPlainText                  # единый способ прочитать значение
             else:
-                e = QLineEdit(vals.get(n, ""))
-                e.setPlaceholderText(TL.FIELD_HINTS.get(n, ""))
+                e = M.GrowEdit(vals.get(n, ""), TL.FIELD_HINTS.get(n, ""))
             if not e.text():
                 empty += 1
             self.form.addRow(n.replace("Пункты_", "").replace("Блок_", "").replace("_", " "), e)

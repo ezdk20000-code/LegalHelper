@@ -34,7 +34,7 @@ import casefile as CF
 import anim
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "2.0"
+APP_VERSION = "2.1"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
 ACCENT = "#007aff"
 FAILED = object()
@@ -185,6 +185,67 @@ def font_combo(default=None):
     return cb
 
 
+class GrowEdit(QPlainTextEdit):
+    """Поле ввода, которое не уезжает вправо: длинный текст переносится на следующую строку, а поле
+    вырастает по высоте (до max_lines строк, дальше — прокрутка). Совместимо с QLineEdit: text() / setText().
+    multiline=False — Enter не вставляет перевод строки (переход к следующему полю)."""
+    returnPressed = Signal()
+
+    def __init__(self, text="", placeholder="", multiline=False, max_lines=6, parent=None):
+        super().__init__(parent)
+        self.multiline = multiline
+        self.max_lines = max_lines
+        self.setTabChangesFocus(True)
+        self.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.document().setDocumentMargin(2)
+        if placeholder:
+            self.setPlaceholderText(placeholder)
+        self.textChanged.connect(self._fit)
+        self.setPlainText(text or "")
+        self._fit()
+
+    # совместимость с QLineEdit
+    def text(self):
+        t = self.toPlainText()
+        return t if self.multiline else " ".join(t.split("\n"))
+
+    def setText(self, t):
+        self.setPlainText(str(t or ""))
+
+    def keyPressEvent(self, e):
+        if not self.multiline and e.key() in (Qt.Key_Return, Qt.Key_Enter) and not e.modifiers() & Qt.ShiftModifier:
+            self.returnPressed.emit()
+            self.focusNextChild()
+            return
+        super().keyPressEvent(e)
+
+    def insertFromMimeData(self, src):
+        if not self.multiline and src.hasText():
+            self.insertPlainText(" ".join(src.text().split()))
+            return
+        super().insertFromMimeData(src)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit()
+
+    def _fit(self):
+        need = int(self.document().size().height() + 0.5)
+        lines = max(1, min(self.max_lines, need))
+        # прокрутка — только если текста больше, чем max_lines строк
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded if need > self.max_lines else Qt.ScrollBarAlwaysOff)
+        fm = self.fontMetrics()
+        h = lines * fm.lineSpacing() + 2 * 2 + 18           # строки + поля документа + внутренние отступы
+        if self.height() != h:
+            self.setFixedHeight(h)
+
+    def sizeHint(self):
+        return QSize(260, self.height())
+
+
 class OptionsDialog(QDialog):
     """Универсальный диалог параметров.
     fields: (ключ, подпись, тип, значение_по_умолчанию, доп)"""
@@ -256,7 +317,9 @@ class OptionsDialog(QDialog):
             w.setRange(lo, hi)
             w.setDecimals(1)
             w.setValue(default or 0)
-        elif kind in ("text", "password", "pages"):
+        elif kind == "text":
+            w = GrowEdit(default or "", extra or "")
+        elif kind in ("password", "pages"):
             w = QLineEdit(default or "")
             if kind == "password":
                 w.setEchoMode(QLineEdit.Password)
@@ -1554,7 +1617,11 @@ class MainWindow(QMainWindow):
         grp = QActionGroup(self)
         cur = theme_choice()
         for key, label in THEME_NAMES.items():
+            if key in ("coffee", "graphite"):
+                mtheme.addSeparator()
             a = mtheme.addAction(label)
+            if key in THEMES:                                  # цветной кружок — акцент темы
+                a.setIcon(glyph_icon("●", THEMES[key]["accent"], 14))
             a.setCheckable(True)
             a.setChecked(key == cur)
             grp.addAction(a)
@@ -1602,6 +1669,7 @@ class MainWindow(QMainWindow):
         mh.addAction("Установить обновление из архива…", lambda: self.install_update())
         mh.addAction("Проверить часы компьютера…", lambda: self.check_clock(silent=False))
         mh.addAction("Вернуть предыдущую версию программы…", self.rollback_program)
+        mh.addAction("Создать ярлык на рабочем столе", self.make_desktop_shortcut)
         mh.addAction("Журнал ошибок", self.show_error_log)
         mh.addSeparator()
         mh.addAction("О программе", lambda: QMessageBox.about(
@@ -1701,6 +1769,7 @@ class MainWindow(QMainWindow):
         self.cases_page.openFile.connect(lambda p, pg: self.open_external(p, pg, self.cases_page.cid))
         self.calc_page = U.CalcPage()
         self.help_page = H.HelpPage(sys.modules[__name__])
+        self.help_page.on_back = self.leave_help
         for w in (self.cases_page, self.calc_page):
             w.setObjectName("page")
         self.navigator = CaseNavigator(self)          # старая панель: не показывается
@@ -1724,6 +1793,8 @@ class MainWindow(QMainWindow):
             lst.setTextElideMode(Qt.ElideRight)
         sv.addWidget(left, 1)
         self.cases_page.list.currentItemChanged.connect(self._on_case_selected)
+        # щелчок по уже выбранному делу (например, из справки) тоже возвращает к делу
+        self.cases_page.list.itemClicked.connect(self._on_case_selected)
         b_help = QPushButton("?   Справка — как пользоваться")
         b_help.setObjectName("sidelink")
         b_help.setCursor(Qt.PointingHandCursor)
@@ -2577,6 +2648,23 @@ class MainWindow(QMainWindow):
             return
         restart_app()
 
+    def make_desktop_shortcut(self):
+        """Ярлык LegalHelper на рабочем столе (если пропал)."""
+        if not C.IS_WIN or not getattr(sys, "frozen", False):
+            QMessageBox.information(self, APP_NAME, "Ярлык создаётся только в установленной программе для Windows.")
+            return
+        exe = sys.executable
+        ps = ("$ws=New-Object -ComObject WScript.Shell; "
+              "$s=$ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'LegalHelper.lnk')); "
+              f"$s.TargetPath='{exe}'; $s.WorkingDirectory='{os.path.dirname(exe)}'; $s.IconLocation='{exe},0'; $s.Save()")
+        try:
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True, creationflags=0x08000000,
+                           timeout=30)
+            subprocess.run(["ie4uinit.exe", "-show"], creationflags=0x08000000, timeout=30)
+        except Exception as e:
+            return self.error("Не удалось создать ярлык", e)
+        QMessageBox.information(self, APP_NAME, "Ярлык «LegalHelper» создан на рабочем столе.")
+
     def rollback_program(self):
         """Вернуть программу, которая стояла до последнего обновления (update.bat сохраняет её копию)."""
         work = os.path.join(os.environ.get("LOCALAPPDATA", ""), "PDFMaster-build")
@@ -3018,8 +3106,22 @@ class MainWindow(QMainWindow):
         elif i == 2:
             self.show_calc(0)
         else:
+            if self.stack.currentWidget() is not self.help_page:
+                self._before_help = self.stack.currentWidget()
             self.b_loose.setChecked(False)
             self.stack.setCurrentWidget(self.help_page)
+
+    def leave_help(self):
+        """«← Назад» и Esc в справке: туда, где были до неё."""
+        prev = getattr(self, "_before_help", None)
+        if prev is self.loose_page:
+            self.enter_loose()
+        elif prev is getattr(self, "home_page", None) and prev is not None:
+            self.show_home()
+        elif self.mode_cid or self.last_case or self._first_case():
+            self.show_cases()
+        else:
+            self.enter_loose()
 
     def show_cases(self):
         cid = self.mode_cid or self.cases_page.cid or self.last_case or self._first_case()
@@ -3869,7 +3971,68 @@ THEMES = {
                  side="#161618", side_text="#f2f2f7", side_muted="#98989f", side_hover="rgba(255,255,255,0.06)",
                  side_line="#2c2c2e", side_active="#0a84ff", seg_on="#636366", shadow=(0, 0, 0, 90)),
 }
-THEME_NAMES = {"system": "Как в Windows", "light": "Светлая", "dark": "Тёмная"}
+THEMES["light"]["mode"] = "light"
+THEMES["dark"]["mode"] = "dark"
+
+
+def _theme(parent, **over):
+    """Дизайнерская тема на основе светлой или тёмной: свои фон, панели и акцент."""
+    t = dict(THEMES[parent])
+    t.update(over)
+    return t
+
+
+def _tint(r, g, b):
+    return dict(fill=f"rgba({r},{g},{b},0.11)", fill_hover=f"rgba({r},{g},{b},0.19)",
+                accent_soft=f"rgba({r},{g},{b},0.15)", note_bg=f"rgba({r},{g},{b},0.09)",
+                note_border=f"rgba({r},{g},{b},0.22)")
+
+
+THEMES.update({
+    "coffee": _theme("light", win="#f3eee8", panel="#fffdfa", base="#fffdfa", alt="#f8f3ec", text="#2b2119",
+                     muted="#8b7b6d", border="#e7ddd1", input_border="#d8cab9", hover="#efe6db", pressed="#e5d9ca",
+                     pages="#f3eee8", tool_hover="#efe6db", canvas="#e8dfd4", thumb_border="#e7ddd1",
+                     accent="#8b5e3c", side="#efe7dd", side_line="#e2d6c7", side_active="#8b5e3c",
+                     seg_on="#fffdfa", tooltip="#2b2119", note_text="#2b2119", success="#4f7a28", **_tint(139, 94, 60)),
+    "lavender": _theme("light", win="#f5f3fb", alt="#f8f6fd", text="#221c33", muted="#857d99", border="#e6e1f2",
+                       input_border="#d4cce8", hover="#eee9f8", pressed="#e3dcf3", pages="#f5f3fb",
+                       tool_hover="#eee9f8", canvas="#e7e2f3", thumb_border="#e6e1f2", accent="#7b4fe0",
+                       side="#efebf9", side_line="#e2dcf2", side_active="#7b4fe0", tooltip="#221c33",
+                       note_text="#221c33", **_tint(123, 79, 224)),
+    "mint": _theme("light", win="#eef5f0", alt="#f5faf6", text="#17261d", muted="#6f8577", border="#dde9e1",
+                   input_border="#c7d9cd", hover="#e6f0e9", pressed="#d9e8de", pages="#eef5f0", tool_hover="#e6f0e9",
+                   canvas="#dfe9e2", thumb_border="#dde9e1", accent="#1f8a4c", side="#e8f2eb", side_line="#d6e6db",
+                   side_active="#1f8a4c", tooltip="#17261d", note_text="#17261d", success="#1f8a4c",
+                   **_tint(31, 138, 76)),
+    "ocean": _theme("light", win="#edf4f7", alt="#f4f9fb", text="#132430", muted="#6a808e", border="#dae6ec",
+                    input_border="#c5d6df", hover="#e3edf2", pressed="#d6e5ec", pages="#edf4f7", tool_hover="#e3edf2",
+                    canvas="#dce8ee", thumb_border="#dae6ec", accent="#0a7ea4", side="#e6f0f5", side_line="#d3e2ea",
+                    side_active="#0a7ea4", tooltip="#132430", note_text="#132430", **_tint(10, 126, 164)),
+    "sakura": _theme("light", win="#fbf1f3", alt="#fdf6f8", text="#2e1a20", muted="#937680", border="#f0dfe4",
+                     input_border="#e4cbd3", hover="#f6e6eb", pressed="#efd8df", pages="#fbf1f3", tool_hover="#f6e6eb",
+                     canvas="#efdde3", thumb_border="#f0dfe4", accent="#c2255c", side="#f8e9ed", side_line="#eed8df",
+                     side_active="#c2255c", tooltip="#2e1a20", note_text="#2e1a20", **_tint(194, 37, 92)),
+    "graphite": _theme("dark", win="#121212", panel="#1e1e1e", base="#1e1e1e", alt="#262626", side="#181818",
+                       border="#2c2c2c", input_border="#3a3a3a", hover="#2a2a2a", pressed="#333333", pages="#121212",
+                       tool_hover="#2a2a2a", canvas="#0b0b0b", thumb_border="#2c2c2c", accent="#c7761a",
+                       side_active="#c7761a", seg_on="#4a4a4a", side_line="#2c2c2c", **_tint(230, 150, 50)),
+    "midnight": _theme("dark", win="#0f0c1a", panel="#1a1628", base="#1a1628", alt="#221d33", side="#15111f",
+                       border="#2a2440", input_border="#3a3355", hover="#251f38", pressed="#2f2846", text="#ece8f7",
+                       muted="#9a93b3", pages="#0f0c1a", tool_hover="#251f38", canvas="#0a0812", thumb_border="#2a2440",
+                       accent="#7c4dff", side_active="#7c4dff", seg_on="#3a3355", side_line="#2a2440",
+                       tooltip="#ece8f7", note_text="#ece8f7", side_text="#ece8f7", **_tint(150, 120, 255)),
+    "forest": _theme("dark", win="#0d1511", panel="#15201a", base="#15201a", alt="#1b2921", side="#111a15",
+                     border="#22332a", input_border="#2f463a", hover="#1d2c24", pressed="#26392f", text="#e6f0ea",
+                     muted="#8fa699", pages="#0d1511", tool_hover="#1d2c24", canvas="#08100c", thumb_border="#22332a",
+                     accent="#1f9d5b", side_active="#1f9d5b", seg_on="#2f463a", side_line="#22332a",
+                     tooltip="#e6f0ea", note_text="#e6f0ea", side_text="#e6f0ea", success="#34c77b",
+                     **_tint(80, 200, 140)),
+})
+THEME_NAMES = {"system": "Как в Windows", "light": "Светлая", "dark": "Тёмная",
+               "coffee": "Кофе — коричневая", "lavender": "Лаванда — фиолетовая", "mint": "Мята — зелёная",
+               "ocean": "Океан — бирюзовая", "sakura": "Сакура — розовая",
+               "graphite": "Графит — тёмная, янтарь", "midnight": "Полночь — тёмно-фиолетовая",
+               "forest": "Лес — тёмно-зелёная"}
 T = dict(THEMES["light"])            # текущие цвета (меняются при смене темы)
 SERIF = "Segoe UI"                    # шрифт заголовков (уточняется при запуске); имя осталось от прежнего дизайна
 SERIF_CHOICES = ("SF Pro Display", "Segoe UI Variable Display", "Segoe UI", "Inter", "Helvetica Neue",
@@ -3905,7 +4068,7 @@ def ui_asset(name, svg):
 def make_style(t):
     A = t["accent"]
     S = SERIF
-    dark = t.get("name") == "dark" or t["win"] == "#000000"
+    dark = t.get("mode") == "dark"
     tick = ui_asset("check.svg", '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">'
                     '<path d="M4.5 9.5l3 3 6-7" fill="none" stroke="#ffffff" stroke-width="2.2" '
                     'stroke-linecap="round" stroke-linejoin="round"/></svg>')
@@ -4095,7 +4258,7 @@ QTableCornerButton::section {{ background: {t['panel']}; border: none; }}
 QTabWidget::pane {{ border: none; }}
 QTabWidget::tab-bar {{ left: 0; }}
 QTabBar {{ background: transparent; }}
-QTabBar::tab {{ background: {t['fill']}; color: {t['text']}; padding: 6px 16px; margin: 0; border: none; border-radius: 0; }}
+QTabBar::tab {{ background: {t['fill']}; color: {t['text']}; padding: 6px 13px; margin: 0; border: none; border-radius: 0; }}
 QTabBar::tab:first {{ border-top-left-radius: 9px; border-bottom-left-radius: 9px; }}
 QTabBar::tab:last {{ border-top-right-radius: 9px; border-bottom-right-radius: 9px; }}
 QTabBar::tab:only-one {{ border-radius: 9px; }}
@@ -4175,9 +4338,9 @@ def apply_theme(app, choice=None):
     Windows текст становился белым на белом фоне)."""
     choice = choice or theme_choice()
     name = ("dark" if system_is_dark() else "light") if choice == "system" else choice
-    t = THEMES[name]
+    t = THEMES.get(name, THEMES["light"])
     T.clear()
-    T.update(t, name=name)
+    T.update(t, name=t.get("mode", "light"), theme=name)     # name — светлая/тёмная (карта дела, заставка)
     pal = QPalette()
     roles = {
         QPalette.Window: t["win"], QPalette.WindowText: t["text"], QPalette.Base: t["base"],
