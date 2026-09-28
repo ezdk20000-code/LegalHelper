@@ -1,7 +1,7 @@
 ﻿\xef\xbb\xbf; Скрипт установщика Inno Setup 6 для «PDF Мастер»
 #define MyAppName "PDF Мастер"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.2"
+  #define MyAppVersion "1.4"
 #endif
 #define MyAppExe "PDFMaster.exe"
 

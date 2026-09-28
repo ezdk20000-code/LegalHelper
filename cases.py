@@ -23,6 +23,18 @@ CREATE TABLE IF NOT EXISTS payments(
 CREATE TABLE IF NOT EXISTS quotes(
     id INTEGER PRIMARY KEY, case_id INTEGER, text TEXT, source TEXT DEFAULT '', page INTEGER DEFAULT 0,
     created TEXT);
+CREATE TABLE IF NOT EXISTS packs(
+    id INTEGER PRIMARY KEY, case_id INTEGER, title TEXT DEFAULT 'Исковое заявление',
+    portal TEXT DEFAULT '', created TEXT, updated TEXT);
+CREATE TABLE IF NOT EXISTS pack_items(
+    id INTEGER PRIMARY KEY, pack_id INTEGER, pos INTEGER DEFAULT 0, title TEXT DEFAULT '',
+    path TEXT DEFAULT '', copies INTEGER DEFAULT 1, done INTEGER DEFAULT 0, note TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS laws(
+    id INTEGER PRIMARY KEY, case_id INTEGER, parent_id INTEGER DEFAULT 0, pos INTEGER DEFAULT 0,
+    kind TEXT DEFAULT 'norm', title TEXT DEFAULT '', body TEXT DEFAULT '', note TEXT DEFAULT '',
+    url TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS boards(
+    case_id INTEGER PRIMARY KEY, scene TEXT DEFAULT '', updated TEXT);
 """
 
 CASE_FIELDS = [("title", "Название"), ("number", "Номер дела"), ("court", "Суд"), ("judge", "Судья"),
@@ -91,8 +103,10 @@ class CaseDB:
                    [kw[k] for k in keys] + [now, cid])
 
     def delete_case(self, cid):
-        for t in ("events", "docs", "time_entries", "payments", "quotes"):
+        for t in ("events", "docs", "time_entries", "payments", "quotes", "laws", "boards"):
             self.con.execute(f"DELETE FROM {t} WHERE case_id=?", (cid,))
+        for p in self.packs(cid):
+            self.delete_pack(p["id"])
         self._exec("DELETE FROM cases WHERE id=?", (cid,))
 
     # ---------------------------------------------------------------- события
@@ -131,6 +145,14 @@ class CaseDB:
         return self._exec("INSERT INTO docs(case_id,path,title,added) VALUES (?,?,?,?)",
                           (cid, path, title or os.path.splitext(os.path.basename(path))[0],
                            dt.datetime.now().isoformat(timespec="seconds")))
+
+    def case_of_path(self, path):
+        r = self._one("SELECT d.case_id AS cid FROM docs d JOIN cases c ON c.id=d.case_id "
+                      "WHERE d.path=? ORDER BY c.archived, d.id DESC LIMIT 1", (path,))
+        return r["cid"] if r else None
+
+    def unlink_path(self, cid, path):
+        self._exec("DELETE FROM docs WHERE case_id=? AND path=?", (cid, path))
 
     def delete_doc(self, did):
         self._exec("DELETE FROM docs WHERE id=?", (did,))
@@ -181,3 +203,126 @@ class CaseDB:
                 "Судья": c.get("judge", ""), "Доверитель": c.get("client", ""),
                 "Оппонент": c.get("opponent", ""), "Третьи_лица": c.get("third", ""),
                 "Предмет": c.get("claim", ""), "Дата": today.strftime("%d.%m.%Y")}
+
+
+# ============================================================================
+#  Подача: комплекты документов с чек-листом (сохраняются сразу при изменении)
+# ============================================================================
+def _now():
+    return dt.datetime.now().isoformat(timespec="seconds")
+
+
+def _packs(self, cid):
+    return self._all("SELECT * FROM packs WHERE case_id=? ORDER BY id", (cid,))
+
+
+def _add_pack(self, cid, title="Исковое заявление", portal=""):
+    return self._exec("INSERT INTO packs(case_id,title,portal,created,updated) VALUES (?,?,?,?,?)",
+                      (cid, title, portal, _now(), _now()))
+
+
+def _update_pack(self, pid, **kw):
+    keys = [k for k in kw if k in ("title", "portal")]
+    if keys:
+        self._exec(f"UPDATE packs SET {','.join(k + '=?' for k in keys)}, updated=? WHERE id=?",
+                   [kw[k] for k in keys] + [_now(), pid])
+
+
+def _delete_pack(self, pid):
+    self.con.execute("DELETE FROM pack_items WHERE pack_id=?", (pid,))
+    self._exec("DELETE FROM packs WHERE id=?", (pid,))
+
+
+def _pack_items(self, pid):
+    return self._all("SELECT * FROM pack_items WHERE pack_id=? ORDER BY pos, id", (pid,))
+
+
+def _add_pack_item(self, pid, title, path="", copies=1, done=0, note="", pos=None):
+    if pos is None:
+        r = self._one("SELECT COALESCE(MAX(pos), -1) + 1 AS n FROM pack_items WHERE pack_id=?", (pid,))
+        pos = r["n"]
+    self._exec("UPDATE packs SET updated=? WHERE id=?", (_now(), pid))
+    return self._exec("INSERT INTO pack_items(pack_id,pos,title,path,copies,done,note) VALUES (?,?,?,?,?,?,?)",
+                      (pid, pos, title, path, copies, done, note))
+
+
+def _update_pack_item(self, iid, **kw):
+    keys = [k for k in kw if k in ("pos", "title", "path", "copies", "done", "note")]
+    if keys:
+        self._exec(f"UPDATE pack_items SET {','.join(k + '=?' for k in keys)} WHERE id=?",
+                   [kw[k] for k in keys] + [iid])
+
+
+def _delete_pack_item(self, iid):
+    self._exec("DELETE FROM pack_items WHERE id=?", (iid,))
+
+
+def _reorder_pack_items(self, ids):
+    for pos, iid in enumerate(ids):
+        self.con.execute("UPDATE pack_items SET pos=? WHERE id=?", (pos, iid))
+    self.con.commit()
+
+
+# ============================================================================
+#  Нормы права: дерево (группа → акт → статья/пункт)
+# ============================================================================
+def _laws(self, cid):
+    return self._all("SELECT * FROM laws WHERE case_id=? ORDER BY parent_id, pos, id", (cid,))
+
+
+def _add_law(self, cid, parent_id=0, kind="norm", title="", body="", note="", url=""):
+    r = self._one("SELECT COALESCE(MAX(pos), -1) + 1 AS n FROM laws WHERE case_id=? AND parent_id=?",
+                  (cid, parent_id))
+    return self._exec("INSERT INTO laws(case_id,parent_id,pos,kind,title,body,note,url) VALUES (?,?,?,?,?,?,?,?)",
+                      (cid, parent_id, r["n"], kind, title, body, note, url))
+
+
+def _update_law(self, lid, **kw):
+    keys = [k for k in kw if k in ("parent_id", "pos", "kind", "title", "body", "note", "url")]
+    if keys:
+        self._exec(f"UPDATE laws SET {','.join(k + '=?' for k in keys)} WHERE id=?", [kw[k] for k in keys] + [lid])
+
+
+def _delete_law(self, lid):
+    for ch in self._all("SELECT id FROM laws WHERE parent_id=?", (lid,)):
+        _delete_law(self, ch["id"])
+    self._exec("DELETE FROM laws WHERE id=?", (lid,))
+
+
+def _copy_laws(self, src_cid, dst_cid, ids=None):
+    """Скопировать нормы из другого дела (всё дерево или выбранные узлы с потомками)."""
+    rows = self.laws(src_cid)
+    kids = {}
+    for r in rows:
+        kids.setdefault(r["parent_id"], []).append(r)
+    roots = [r for r in rows if (ids is None and r["parent_id"] == 0) or (ids and r["id"] in ids)]
+
+    def dup(r, parent):
+        nid = self.add_law(dst_cid, parent, r["kind"], r["title"], r["body"], r["note"], r["url"])
+        for ch in kids.get(r["id"], []):
+            dup(ch, nid)
+    for r in roots:
+        dup(r, 0)
+    return len(roots)
+
+
+# ============================================================================
+#  Карта дела (сцена Excalidraw в JSON)
+# ============================================================================
+def _board(self, cid):
+    r = self._one("SELECT scene FROM boards WHERE case_id=?", (cid,))
+    return r["scene"] if r else ""
+
+
+def _save_board(self, cid, scene):
+    self._exec("INSERT INTO boards(case_id,scene,updated) VALUES (?,?,?) "
+               "ON CONFLICT(case_id) DO UPDATE SET scene=excluded.scene, updated=excluded.updated",
+               (cid, scene, _now()))
+
+
+for _n, _f in dict(packs=_packs, add_pack=_add_pack, update_pack=_update_pack, delete_pack=_delete_pack,
+                   pack_items=_pack_items, add_pack_item=_add_pack_item, update_pack_item=_update_pack_item,
+                   delete_pack_item=_delete_pack_item, reorder_pack_items=_reorder_pack_items,
+                   laws=_laws, add_law=_add_law, update_law=_update_law, delete_law=_delete_law,
+                   copy_laws=_copy_laws, board=_board, save_board=_save_board).items():
+    setattr(CaseDB, _n, _f)

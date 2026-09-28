@@ -21,6 +21,9 @@ import pdf_core as C
 import legal_core as L
 import legal_data as D
 import cases as CS
+import sys as _sys
+import case_tabs as CT
+CT.U = _sys.modules[__name__]
 
 M = None          # пространство имён главного модуля (bind)
 _db = None
@@ -48,6 +51,47 @@ def templates_dir():
 #  Справка «?»
 # =============================================================================
 HELP = {
+    "submission": ("Подача: комплект документов",
+        "Здесь вы собираете документы для подачи по делу — по одному, в удобном темпе, между делами."
+        "<ul><li><b>Комплект</b> — то, что подаёте: иск, отзыв, жалоба. У дела может быть несколько комплектов "
+        "(меню «⋯»).</li>"
+        "<li>Первая строка — <b>основной документ</b> (иск, жалоба), дальше — приложения в нужном порядке "
+        "(▲ ▼).</li>"
+        "<li><b>«Типовой перечень»</b> добавит обычный список приложений по АПК, ГПК, КАС — останется "
+        "прикрепить файлы и убрать лишнее.</li>"
+        "<li>Файл прикрепляется кнопкой «Прикрепить файл…», двойным щелчком по колонке «Файл» или "
+        "перетаскиванием файла на строку. Слева сразу виден сам документ.</li>"
+        "<li>Отмечайте <b>✓</b> то, что проверено и готово. Сверху видно «Готово N из M».</li>"
+        "<li>Всё сохраняется <b>автоматически</b>: закрыли программу — при следующем запуске откроется то же дело "
+        "и тот же комплект.</li>"
+        "<li><b>«Собрать пакет…»</b> передаёт документы в «Пакет в суд / на почту» — там выбирается площадка "
+        "(«Мой арбитр», ГАС «Правосудие», Почта России) и формируются файлы и перечень приложений.</li></ul>"
+        "Файлы не копируются — программа хранит ссылки на них. Если файл переместить, строка покажет "
+        "«⚠ не найден» — прикрепите его заново."),
+    "board": ("Карта дела",
+        "Встроенный редактор <b>Excalidraw</b> (открытый проект, работает без интернета): схемы, "
+        "интеллект-карты, стрелки, заметки, картинки."
+        "<ul><li>Для нового дела создаётся шаблон: в центре дело, вокруг — «Факты и хронология», "
+        "«Позиция доверителя», «Позиция оппонента», «Доказательства», «Риски», «Процесс и сроки».</li>"
+        "<li>Двойной щелчок по пустому месту — текст; по фигуре — редактировать надпись. Стрелку можно "
+        "привязать к фигурам — она будет двигаться вместе с ними.</li>"
+        "<li>Клавиши: <b>R</b> — прямоугольник, <b>O</b> — эллипс, <b>A</b> — стрелка, <b>T</b> — текст, "
+        "<b>Ctrl+Z</b> — отменить. Колесо мыши с Ctrl — масштаб, пробел + мышь — перемещение.</li>"
+        "<li>Картинку (скриншот документа) можно вставить через Ctrl+V.</li>"
+        "<li>Карта сохраняется <b>автоматически</b> каждые 2 секунды, отдельно для каждого дела.</li>"
+        "<li>Меню ☰ на карте: экспорт в PNG/SVG, сохранение в файл .excalidraw, смена фона.</li></ul>"),
+    "laws": ("Нормы права",
+        "Список всех норм, которые вы применяете в деле, разложенный по полочкам."
+        "<ul><li><b>Направление</b> — тема или довод: «Неустойка», «Моральный вред», «Штраф 50%», "
+        "«Подсудность».</li>"
+        "<li><b>Акт</b> — закон, кодекс, постановление Пленума, определение ВС (есть список частых).</li>"
+        "<li><b>Статья / пункт</b> — конкретная норма или правовая позиция: название («п. 6 ст. 13»), текст "
+        "и как вы её применяете в деле.</li></ul>"
+        "Один и тот же акт можно добавить в разные направления — например, разные пункты Закона о защите "
+        "прав потребителей под разные доводы. Порядок меняется кнопками ▲ ▼ или перетаскиванием мышью "
+        "(в том числе в другое направление).<br><br>"
+        "<b>Экспорт</b>: «Скопировать списком» — готовый текст для иска или позиции; «В Word» — отдельный "
+        "документ; «Взять из другого дела» — перенести нормы из похожего дела. Всё сохраняется автоматически."),
     "package": ("Пакет в суд / на почту",
         "Собирает иск (жалобу, письмо) и приложения в пакет, который примет выбранная площадка."
         "<ul><li><b>«Мой арбитр» и ГАС «Правосудие»</b> — каждый документ отдельным PDF до 30 МБ, в имени "
@@ -90,12 +134,20 @@ HELP = {
     "case_search": ("Поиск по документам",
         "Ищет слово или фразу сразу во всех документах дела (или в выбранных файлах / папке). "
         "Сканы без текстового слоя найти нельзя — программа их перечислит, прогоните их через OCR."),
-    "template": ("Документ по шаблону",
-        "Шаблон — обычный файл Word (.docx), в котором вместо данных стоят поля в фигурных скобках: "
-        "<code>{Доверитель}</code>, <code>{Номер_дела}</code>, <code>{Суд}</code>, <code>{Судья}</code>, "
-        "<code>{Оппонент}</code>, <code>{Дата}</code> — или любые свои, например <code>{Сумма_долга}</code>. "
-        "Поля из карточки дела подставляются сами, остальные программа спросит. Шаблоны хранятся в папке "
-        "«Шаблоны» (кнопка «Открыть папку шаблонов»)."),
+    "template": ("Шаблоны документов",
+        "Готовые ходатайства и заявления по АПК РФ и ГПК РФ: ознакомление с материалами дела, отложение заседания, "
+        "приобщение и истребование доказательств, участие по веб-конференции / ВКС, рассмотрение в отсутствие, "
+        "исполнительный лист, копия судебного акта, судебные расходы; а также адвокатский запрос, претензия и "
+        "возврат госпошлины."
+        "<ul><li>Выберите дело — суд, номер дела, судья, доверитель и оппонент подставятся сами.</li>"
+        "<li>Ваши ФИО и контакты задаются один раз в «Мои реквизиты».</li>"
+        "<li>Остальные поля заполните в окне — введённое запоминается для этого дела.</li>"
+        "<li>Готовый документ сохраняется в папку дела и сразу появляется в его документах. "
+        "Можно сразу получить PDF и открыть его в программе.</li>"
+        "<li><b>Свой шаблон</b> — обычный Word-файл, где вместо данных стоят поля в фигурных скобках: "
+        "<code>{Суд}</code>, <code>{Номер_дела}</code>, <code>{Доверитель}</code>, <code>{Сумма_долга}</code>… "
+        "Кнопка «+ Свой шаблон» добавит его в «Мои шаблоны». Встроенные шаблоны можно править в Word — "
+        "программа их не перезапишет.</li></ul>"),
     "quote": ("Выписки",
         "Выделите рамкой фрагмент на странице — текст попадёт в выписки выбранного дела с пометкой «л. N». "
         "Потом выписки можно скопировать или выгрузить в Word для позиции по делу."),
@@ -603,6 +655,7 @@ class CasesPage(QWidget):
         self.main = main
         self.cid = None
         self._loading = False
+        self._restoring = False
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         split = QSplitter()
@@ -636,9 +689,11 @@ class CasesPage(QWidget):
         self.upcoming.setObjectName("upcoming")
         self.upcoming.setMaximumHeight(190)
         self.upcoming.setWordWrap(True)
+        QTimer.singleShot(0, lambda: (self.reload(), self.restore_last()))
         self.upcoming.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.upcoming.itemDoubleClicked.connect(self.goto_event_case)
         lv.addWidget(self.upcoming)
+        left.setMinimumWidth(300)
         split.addWidget(left)
         # ---- карточка
         self.stack = QStackedWidget()
@@ -669,6 +724,15 @@ class CasesPage(QWidget):
         self._build_docs()
         self._build_money()
         self._build_quotes()
+        # новые вкладки: подача, карта дела, нормы права — сразу после «Сведения»
+        self.events_tab = self.tabs.widget(1)
+        self.sub_tab = CT.SubmissionTab(main)
+        self.board_tab = CT.BoardTab(main)
+        self.laws_tab = CT.LawsTab(main)
+        self.tabs.insertTab(1, self.sub_tab, "Подача")
+        self.tabs.insertTab(2, self.board_tab, "Карта дела")
+        self.tabs.insertTab(3, self.laws_tab, "Нормы права")
+        self.tabs.currentChanged.connect(self.on_tab)
         self.stack.addWidget(self.card)
         split.addWidget(self.stack)
         split.setStretchFactor(1, 1)
@@ -759,7 +823,9 @@ class CasesPage(QWidget):
         self.l_docs.itemDoubleClicked.connect(lambda it: self.openFile.emit(it.data(Qt.UserRole), 0))
         v.addWidget(self.l_docs, 1)
         r = QHBoxLayout()
-        for text, fn in (("+ Добавить файлы", self.add_docs), ("Открыть", self.open_doc),
+        for text, fn in (("+ Добавить файлы", self.add_docs),
+                         ("+ Открытый документ", lambda: self.main.link_current_to_case(self.cid)),
+                         ("Открыть", self.open_doc),
                          ("Пакет в суд из выбранных", self.package_from_docs), ("Поиск по документам", self.search_docs),
                          ("Документ по шаблону", lambda: tool_template(self.main, self.cid)), ("Убрать", self.del_doc)):
             b = QPushButton(text)
@@ -857,7 +923,7 @@ class CasesPage(QWidget):
         cid = it.data(Qt.UserRole)
         if cid:
             self.select_case(cid)
-            self.tabs.setCurrentIndex(1)
+            self.tabs.setCurrentWidget(self.events_tab)
 
     def select_case(self, cid):
         for i in range(self.list.count()):
@@ -869,11 +935,40 @@ class CasesPage(QWidget):
             if self.list.item(i).data(Qt.UserRole) == cid:
                 self.list.setCurrentRow(i)
 
+    def on_tab(self, i):
+        if self._restoring:
+            return
+        M.settings().setValue("case_tab", i)
+        if self.tabs.widget(i) is self.board_tab:
+            self.board_tab.activate()
+
+    def flush(self):
+        """Сохранить всё несохранённое (при смене дела и выходе)."""
+        if self.save_timer.isActive():
+            self.save_timer.stop()
+            self.save_info()
+        self.laws_tab.save_now()
+        self.board_tab.flush()
+
+    def restore_last(self):
+        cid = int(M.settings().value("last_case", 0) or 0)
+        if cid and db().case(cid):
+            self.select_case(cid)
+            self._restoring = True
+            self.tabs.setCurrentIndex(int(M.settings().value("case_tab", 0) or 0))
+            self._restoring = False
+            if self.tabs.currentWidget() is self.board_tab:
+                QTimer.singleShot(0, self.board_tab.activate)
+
     def on_select(self, it, _prev=None):
         if self.save_timer.isActive():
             self.save_timer.stop()
             self.save_info()
+        self.laws_tab.save_now()
+        self.board_tab.flush()
         self.cid = it.data(Qt.UserRole) if it else None
+        if self.cid:
+            M.settings().setValue("last_case", self.cid)
         if not self.cid:
             self.stack.setCurrentIndex(0)
             return
@@ -900,6 +995,11 @@ class CasesPage(QWidget):
         self._loading = False
         self.load_events()
         self.load_docs()
+        self.sub_tab.set_case(self.cid)
+        self.laws_tab.set_case(self.cid)
+        self.board_tab.set_case(self.cid)
+        if self.tabs.currentWidget() is self.board_tab:
+            self.board_tab.activate()
         self.load_money()
         self.load_quotes()
 
@@ -1039,6 +1139,10 @@ class CasesPage(QWidget):
             self.reload_upcoming()
 
     # ------------------------------------------------------------ документы
+    def refresh_docs_if(self, cid):
+        if self.cid == cid:
+            self.load_docs()
+
     def load_docs(self):
         self.l_docs.clear()
         for d in db().docs(self.cid):
@@ -1719,172 +1823,339 @@ class SearchDialog(QDialog):
 #  Шаблоны
 # =============================================================================
 def ensure_sample_templates():
-    d = templates_dir()
-    if any(Path(d).glob("*.docx")):
-        return
-    import docx
-    from docx.shared import Pt
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    samples = {
-        "Ходатайство об ознакомлении с материалами дела": [
-            ("right", "В {Суд}\nСудье {Судья}\n\nДело № {Номер_дела}\n\nОт: {Доверитель}\nПредставитель: {Представитель}"),
-            ("center", "\nХОДАТАЙСТВО\nоб ознакомлении с материалами дела"),
-            ("just", "В производстве {Суд} находится дело № {Номер_дела} по иску {Доверитель} к {Оппонент}. "
-                     "На основании ч. 1 ст. 41 АПК РФ (ст. 35 ГПК РФ) прошу предоставить возможность ознакомиться "
-                     "с материалами дела, в том числе путём фотографирования."),
-            ("left", "\n{Дата}\t\t\t\t\t\t____________ / {Представитель}"),
-        ],
-        "Ходатайство об отложении судебного заседания": [
-            ("right", "В {Суд}\nСудье {Судья}\n\nДело № {Номер_дела}\n\nОт: {Доверитель}"),
-            ("center", "\nХОДАТАЙСТВО\nоб отложении судебного заседания"),
-            ("just", "Судебное заседание по делу № {Номер_дела} назначено на {Дата_заседания}. "
-                     "Прошу отложить судебное заседание в связи с {Причина}."),
-            ("left", "\n{Дата}\t\t\t\t\t\t____________ / {Представитель}"),
-        ],
-    }
-    for name, paras in samples.items():
-        doc = docx.Document()
-        st = doc.styles["Normal"]
-        st.font.name = "Times New Roman"
-        st.font.size = Pt(14)
-        for al, text in paras:
-            p = doc.add_paragraph(text)
-            p.alignment = {"right": WD_ALIGN_PARAGRAPH.RIGHT, "center": WD_ALIGN_PARAGRAPH.CENTER,
-                           "just": WD_ALIGN_PARAGRAPH.JUSTIFY, "left": WD_ALIGN_PARAGRAPH.LEFT}[al]
-            if al == "center":
-                for r in p.runs:
-                    r.bold = True
-        doc.save(os.path.join(d, name + ".docx"))
+    import templates_lib as TL
+    try:
+        TL.ensure_builtin(templates_dir())
+    except Exception as e:
+        M.log_error("Создание встроенных шаблонов", e)
+
+
+PROFILE_FIELDS = [
+    ("Представитель", "ФИО представителя", "Петров Пётр Петрович"),
+    ("Контакты_представителя", "Контакты", "тел. +7 900 000-00-00, e-mail: lawyer@example.ru"),
+    ("Реестровый_номер", "Рег. № в реестре адвокатов", "02/1234"),
+    ("Субъект_реестра", "Субъект РФ реестра", "Республики …"),
+    ("Адвокатское_образование", "Адвокатское образование", "Коллегия адвокатов «…»"),
+]
+
+
+def profile_values():
+    s = M.settings()
+    return {k: s.value(f"profile/{k}", "") or "" for k, _l, _p in PROFILE_FIELDS}
+
+
+class ProfileDialog(QDialog):
+    """«Мои реквизиты» — подставляются во все шаблоны."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Мои реквизиты")
+        self.resize(560, 330)
+        v = QVBoxLayout(self)
+        v.addLayout(title_row("Мои реквизиты"))
+        hint = QLabel("Эти данные автоматически подставляются в шаблоны документов: шапку, подпись, адвокатский запрос.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+        f = QFormLayout()
+        vals = profile_values()
+        self.edits = {}
+        for k, label, ph in PROFILE_FIELDS:
+            e = QLineEdit(vals.get(k, ""))
+            e.setPlaceholderText(ph)
+            f.addRow(label, e)
+            self.edits[k] = e
+        v.addLayout(f)
+        bb = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Save).setText("Сохранить")
+        bb.button(QDialogButtonBox.Cancel).setText("Отмена")
+        bb.accepted.connect(self.save)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+
+    def save(self):
+        s = M.settings()
+        for k, e in self.edits.items():
+            s.setValue(f"profile/{k}", e.text().strip())
+        self.accept()
+
+
+def case_output_dir(cid):
+    c = db().case(cid) if cid else None
+    if c and c.get("folder") and os.path.isdir(c["folder"]):
+        return c["folder"]
+    base = Path.home() / "Documents" / "PDF Мастер" / "Дела"
+    name = L.clean_filename(c["title"]) if c else "Без дела"
+    d = base / name
+    d.mkdir(parents=True, exist_ok=True)
+    return str(d)
 
 
 class TemplateDialog(QDialog):
-    def __init__(self, main, cid=None):
+    """Библиотека шаблонов + заполнение полями дела и реквизитами."""
+
+    def __init__(self, main, cid=None, preselect=None):
         super().__init__(main)
         self.main = main
-        self.setWindowTitle("Документ по шаблону")
-        self.resize(720, 620)
+        self.setWindowTitle("Шаблоны документов")
+        self.resize(1040, 700)
         ensure_sample_templates()
-        v = QVBoxLayout(self)
-        v.addLayout(title_row("Документ по шаблону", "template", big=True))
-        f = QFormLayout()
-        self.tpl = QComboBox()
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        # ---- слева: библиотека
+        left = QWidget()
+        left.setObjectName("sidepanel")
+        left.setFixedWidth(360)
+        lv = QVBoxLayout(left)
+        lv.setContentsMargins(16, 18, 12, 14)
+        lv.addLayout(title_row("Шаблоны", "template", big=True))
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Найти шаблон: ознакомление, отложение…")
+        self.search.textChanged.connect(self.filter)
+        lv.addWidget(self.search)
+        from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
+        self._TI = QTreeWidgetItem
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.setObjectName("tpltree")
+        self.tree.currentItemChanged.connect(self.on_pick)
+        lv.addWidget(self.tree, 1)
+        row = QHBoxLayout()
+        b_add = QPushButton("+ Свой шаблон…")
+        b_add.setToolTip("Добавить документ Word с полями в фигурных скобках, например {Суд}, {Номер_дела}")
+        b_add.clicked.connect(self.add_own)
+        b_dir = QPushButton("Папка")
+        b_dir.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(templates_dir())))
+        self.b_word = QPushButton("Изменить в Word")
+        self.b_word.clicked.connect(self.edit_in_word)
+        for b in (b_add, b_dir, self.b_word):
+            row.addWidget(b)
+        lv.addLayout(row)
+        root.addWidget(left)
+        # ---- справа: заполнение
+        right = QWidget()
+        rv = QVBoxLayout(right)
+        rv.setContentsMargins(22, 18, 22, 16)
+        self.t_name = QLabel("Выберите шаблон слева")
+        self.t_name.setObjectName("subtitle")
+        self.t_name.setWordWrap(True)
+        rv.addWidget(self.t_name)
+        top = QFormLayout()
         self.case = QComboBox()
         self.case.addItem("— без дела —", None)
         for c in db().cases():
-            self.case.addItem(c["title"] + (f" · {c['number']}" if c["number"] else ""), c["id"])
+            self.case.addItem(c["title"] + (f"  ({c['number']})" if c["number"] else ""), c["id"])
+        cid = cid or main.last_case
         if cid:
             self.case.setCurrentIndex(max(0, self.case.findData(cid)))
-        rt = QHBoxLayout()
-        rt.addWidget(self.tpl, 1)
-        bo = QPushButton("Открыть папку шаблонов")
-        bo.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(templates_dir())))
-        rt.addWidget(bo)
-        br = _small_btn("⟳")
-        br.setFixedWidth(34)
-        br.setToolTip("Обновить список")
-        br.clicked.connect(self.load_templates)
-        rt.addWidget(br)
-        f.addRow("Шаблон", rt)
-        f.addRow("Дело", self.case)
-        v.addLayout(f)
+        self.case.currentIndexChanged.connect(lambda *_: self.build_form())
+        pr = QHBoxLayout()
+        pr.addWidget(self.case, 1)
+        b_prof = QPushButton("Мои реквизиты…")
+        b_prof.clicked.connect(self.edit_profile)
+        pr.addWidget(b_prof)
+        top.addRow("Дело", pr)
+        rv.addLayout(top)
+        self.note = QLabel()
+        self.note.setObjectName("hint")
+        self.note.setWordWrap(True)
+        rv.addWidget(self.note)
         self.form_box = QWidget()
         self.form = QFormLayout(self.form_box)
+        self.form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         sc = QScrollArea()
         sc.setWidget(self.form_box)
         sc.setWidgetResizable(True)
-        v.addWidget(sc, 1)
-        self.c_pdf = QCheckBox("Сразу сделать и PDF (нужен MS Office или LibreOffice)")
-        v.addWidget(self.c_pdf)
+        sc.setFrameShape(QFrame.NoFrame)
+        rv.addWidget(sc, 1)
+        self.c_pdf = QCheckBox("Сделать PDF и открыть в программе (нужен MS Office или LibreOffice)")
+        self.c_pdf.setChecked(M.settings().value("tpl/pdf", "false") == "true")
+        rv.addWidget(self.c_pdf)
         bb = QHBoxLayout()
         bb.addStretch(1)
         bc = QPushButton("Закрыть")
         bc.clicked.connect(self.reject)
-        bg = QPushButton("Создать документ")
-        bg.setObjectName("primary")
-        bg.clicked.connect(self.make)
+        self.b_make = QPushButton("Создать документ")
+        self.b_make.setObjectName("primary")
+        self.b_make.clicked.connect(self.make)
         bb.addWidget(bc)
-        bb.addWidget(bg)
-        v.addLayout(bb)
-        self.tpl.currentIndexChanged.connect(self.build_form)
-        self.case.currentIndexChanged.connect(self.build_form)
-        self.load_templates()
+        bb.addWidget(self.b_make)
+        rv.addLayout(bb)
+        root.addWidget(right, 1)
+        self.edits = {}
+        self.path = None
+        self.load_templates(preselect)
 
-    def load_templates(self):
-        self.tpl.blockSignals(True)
-        self.tpl.clear()
-        for p in sorted(Path(templates_dir()).glob("*.docx")):
-            if not p.name.startswith("~$"):
-                self.tpl.addItem(p.stem, str(p))
-        self.tpl.addItem("Другой файл…", "__other__")
-        self.tpl.blockSignals(False)
+    # -------------------------------------------------------------- список
+    def load_templates(self, select=None):
+        self.tree.clear()
+        base = Path(templates_dir())
+        groups = {}
+        for p in sorted(base.rglob("*.docx")):
+            if p.name.startswith("~$"):
+                continue
+            rel = p.parent.relative_to(base)
+            parts = [x for x in rel.parts if x != "Встроенные"]
+            cat = " / ".join(parts) if parts else "Мои шаблоны"
+            groups.setdefault(cat, []).append(p)
+        order = sorted(groups, key=lambda c: (c.startswith("Мои"), c))
+        cid = self.case.currentData() if hasattr(self, "case") else None
+        court = ((db().case(cid) or {}).get("court", "") if cid else "").lower()
+        prefer = "АПК" if "арбитраж" in court else ("ГПК" if court else "")
+        if select:
+            hits = [p for c in order for p in groups[c] if select.lower() in p.stem.lower()]
+            best = next((p for p in hits if prefer and prefer in str(p.parent)), hits[0] if hits else None)
+            select = str(best) if best else None
+        first = None
+        for cat in order:
+            top = self._TI([cat])
+            f = top.font(0)
+            f.setBold(True)
+            top.setFont(0, f)
+            top.setFlags(Qt.ItemIsEnabled)
+            self.tree.addTopLevelItem(top)
+            for p in groups[cat]:
+                it = self._TI([p.stem])
+                it.setData(0, Qt.UserRole, str(p))
+                it.setToolTip(0, str(p))
+                top.addChild(it)
+                if first is None or (select and str(p) == select):
+                    first = it
+            top.setExpanded(True)
+        if first is not None:
+            self.tree.setCurrentItem(first)
+        self.b_word.setEnabled(first is not None)
+
+    def filter(self, text):
+        t = text.lower().strip()
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            vis = 0
+            for j in range(top.childCount()):
+                ch = top.child(j)
+                show = not t or t in ch.text(0).lower()
+                ch.setHidden(not show)
+                vis += show
+            top.setHidden(vis == 0)
+
+    def on_pick(self, cur, _prev=None):
+        p = cur.data(0, Qt.UserRole) if cur else None
+        if not p:
+            return
+        self.path = p
+        self.t_name.setText(Path(p).stem)
         self.build_form()
 
-    def build_form(self, *_):
-        if self.tpl.currentData() == "__other__":
-            p, _ = QFileDialog.getOpenFileName(self, "Шаблон Word", templates_dir(), "Word (*.docx)")
-            if not p:
-                self.tpl.setCurrentIndex(0)
-                return
-            self.tpl.insertItem(0, Path(p).stem, p)
-            self.tpl.setCurrentIndex(0)
-            return
+    # -------------------------------------------------------------- поля
+    def values_known(self):
+        cid = self.case.currentData()
+        vals = {}
+        try:
+            vals.update(json.loads(M.settings().value(f"tpl_vals/{cid or 0}", "{}") or "{}"))
+        except Exception:
+            pass
+        if cid:
+            vals.update({k: v for k, v in db().template_values(cid).items() if v})
+        else:
+            vals["Дата"] = dt.date.today().strftime("%d.%m.%Y")
+        vals.update({k: v for k, v in profile_values().items() if v})
+        vals.setdefault("Статус_доверителя", "Истец")
+        return vals
+
+    def build_form(self):
         while self.form.rowCount():
             self.form.removeRow(0)
         self.edits = {}
-        path = self.tpl.currentData()
-        if not path:
+        if not self.path:
             return
         try:
-            fields = L.template_fields(path)
+            names = L.template_fields(self.path)
         except Exception as e:
-            self.form.addRow(QLabel(f"Не удалось прочитать шаблон: {e}"))
+            self.note.setText(f"Не удалось прочитать шаблон: {e}")
             return
-        vals = db().template_values(self.case.currentData()) if self.case.currentData() else \
-            {"Дата": dt.date.today().strftime("%d.%m.%Y")}
-        vals.setdefault("Представитель", M.settings().value("executor", ""))
-        if not fields:
-            self.form.addRow(QLabel("В шаблоне нет полей {…}"))
-        for name in fields:
-            e = QLineEdit(str(vals.get(name, "")))
-            self.edits[name] = e
-            self.form.addRow(name.replace("_", " "), e)
+        vals = self.values_known()
+        empty = 0
+        import templates_lib as TL
+        for n in names:
+            e = QLineEdit(vals.get(n, ""))
+            e.setPlaceholderText(TL.FIELD_HINTS.get(n, ""))
+            if not e.text():
+                empty += 1
+            self.form.addRow(n.replace("_", " "), e)
+            self.edits[n] = e
+        cid = self.case.currentData()
+        self.note.setText((f"Заполнено из дела и реквизитов: {len(names) - empty} из {len(names)}. "
+                           if names else "В шаблоне нет полей. ") +
+                          ("Пустые поля останутся в документе как есть — их можно дописать в Word."
+                           if empty else "") + ("" if cid else "  Выберите дело, чтобы подставить его данные."))
+
+    def edit_profile(self):
+        if ProfileDialog(self).exec():
+            self.build_form()
+
+    # -------------------------------------------------------------- действия
+    def add_own(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Шаблон Word", str(Path.home()), "Word (*.docx)")
+        if not p:
+            return
+        dst = Path(templates_dir()) / "Мои шаблоны" / Path(p).name
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.copy2(p, dst)
+        self.load_templates(dst.stem)
+        QMessageBox.information(self, M.APP_NAME, "Шаблон добавлен в «Мои шаблоны».\n\nПоля пишутся в фигурных скобках: "
+                                "{Суд}, {Номер_дела}, {Судья}, {Доверитель}, {Оппонент}, {Представитель}, {Дата} — они "
+                                "заполнятся из дела автоматически. Любое другое {Поле} появится в окне для заполнения.")
+
+    def edit_in_word(self):
+        if self.path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.path))
 
     def make(self):
-        path = self.tpl.currentData()
-        if not path or path == "__other__":
+        if not self.path:
             return
-        values = {k: e.text() for k, e in self.edits.items()}
-        if values.get("Представитель"):
-            M.settings().setValue("executor", values["Представитель"])
         cid = self.case.currentData()
-        folder = (db().case(cid) or {}).get("folder") if cid else ""
-        name = Path(path).stem + (f" — {values.get('Номер_дела')}" if values.get("Номер_дела") else "")
-        out, _ = QFileDialog.getSaveFileName(self, "Сохранить документ", os.path.join(
-            folder or self.main.default_dir(), L.clean_filename(name) + ".docx"), "Word (*.docx)")
-        if not out:
-            return
-        if not out.lower().endswith(".docx"):
-            out += ".docx"
+        vals = {k: e.text().strip() for k, e in self.edits.items()}
+        # запомнить введённое вручную для этого дела
+        known = set(profile_values()) | (set(db().template_values(cid)) if cid else set())
+        store = {}
         try:
-            L.fill_template(path, values, out)
+            store = json.loads(M.settings().value(f"tpl_vals/{cid or 0}", "{}") or "{}")
+        except Exception:
+            pass
+        store.update({k: v for k, v in vals.items() if v and k not in known})
+        M.settings().setValue(f"tpl_vals/{cid or 0}", json.dumps(store, ensure_ascii=False))
+        M.settings().setValue("tpl/pdf", "true" if self.c_pdf.isChecked() else "false")
+        out_dir = case_output_dir(cid)
+        base = f"{Path(self.path).stem} {dt.date.today().strftime('%d.%m.%Y')}"
+        out = os.path.join(out_dir, L.clean_filename(base) + ".docx")
+        k = 2
+        while os.path.exists(out):
+            out = os.path.join(out_dir, L.clean_filename(f"{base} ({k})") + ".docx")
+            k += 1
+        try:
+            L.fill_template(self.path, {k: v for k, v in vals.items() if v}, out)
         except Exception as e:
-            self.main.error("Не удалось заполнить шаблон", e)
-            return
+            return self.main.error("Не удалось создать документ", e)
         if cid:
             db().add_doc(cid, out)
-        result = out
+            self.main.last_case = cid
+        final = out
         if self.c_pdf.isChecked():
-            pdf = out[:-5] + ".pdf"
-            try:
-                C.office_to_pdf(out, pdf)
-                result = pdf
+            pdf = os.path.splitext(out)[0] + ".pdf"
+            res = self.main.run("Преобразование в PDF…", C.office_to_pdf, out, pdf)
+            if res is not M.FAILED and os.path.exists(pdf):
+                final = pdf
                 if cid:
                     db().add_doc(cid, pdf)
-            except Exception as e:
-                self.main.error("PDF не создан (нужен MS Office или LibreOffice)", e)
         self.main.refresh_cases()
-        QDesktopServices.openUrl(QUrl.fromLocalFile(result))
         self.accept()
+        if final.endswith(".pdf"):
+            self.main.open_external(final, 0, cid)
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(final))
+            self.main.msg(f"Документ создан: {final}")
 
 
 # =============================================================================
@@ -1965,8 +2236,12 @@ def tool_case_search(main):
     SearchDialog(main, paths).exec()
 
 
-def tool_template(main, cid=None):
-    TemplateDialog(main, cid or (main.cases_page.cid if main.cases_page else None)).exec()
+def tool_template(main, cid=None, preselect=None):
+    TemplateDialog(main, cid or (main.cases_page.cid if main.cases_page else None), preselect).exec()
+
+
+def tool_profile(main):
+    ProfileDialog(main).exec()
 
 
 def tool_quote(main):
@@ -2130,8 +2405,11 @@ class Reminders:
         if tomorrow:
             parts.append(f"завтра: {len(tomorrow)}")
         first = (todays or tomorrow or overdue)[0]
-        self.main.set_banner(f"🔔  {', '.join(parts).capitalize()} — ближайшее: {first['kind'].lower()} "
-                             f"«{first['title']}» ({first['case_title'] or ''})  →  открыть дела")
+        when = "сегодня" if dt.date.fromisoformat(first["date"]) == today else (
+            "завтра" if dt.date.fromisoformat(first["date"]) > today else "просрочено")
+        self.main.set_banner(f"{', '.join(parts).capitalize()}.  Ближайшее, {when}"
+                             f"{(' в ' + first['time']) if first['time'] else ''}: {first['kind'].lower()} "
+                             f"«{first['title']}», {first['case_title'] or 'без дела'}. Нажмите, чтобы открыть дела.")
         new = [e for e in due if not e["notified"]]
         if new and self.tray:
             text = "\n".join(f"{CS.ru(e['date'])} {e['time']} {e['kind']}: {e['title']} ({e['case_title'] or ''})"
