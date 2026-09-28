@@ -148,6 +148,9 @@ def main():
             QDialog.exec = orig
 
     pump(800)
+    P.settings().setValue("profile/Представитель", "Петров Пётр Петрович")
+    w.show_home()
+    grab("00_home")
     w.enter_case(cid)
     w.open_case_tab("overview")
     w.reminders.check()

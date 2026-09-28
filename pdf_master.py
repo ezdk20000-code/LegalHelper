@@ -34,7 +34,7 @@ import casefile as CF
 import anim
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "2.1"
+APP_VERSION = "2.2"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
 ACCENT = "#007aff"
 FAILED = object()
@@ -1638,6 +1638,8 @@ class MainWindow(QMainWindow):
         a_anim.toggled.connect(lambda on: (settings().setValue("animations", "1" if on else "0"),
                                            setattr(anim, "ENABLED", on)))
         mv.addSeparator()
+        ah = mv.addAction("Главная", self.show_home)
+        ah.setShortcut("Ctrl+H")
         a0 = mv.addAction("Без дела — просто PDF", lambda: self.enter_loose())
         a0.setShortcut("Ctrl+0")
         mt = mb.addMenu("Инструменты")
@@ -1775,6 +1777,14 @@ class MainWindow(QMainWindow):
         self.navigator = CaseNavigator(self)          # старая панель: не показывается
         self.navigator.hide()
 
+        self.b_home = QPushButton("🏠   Главная")
+        self.b_home.setObjectName("loosebtn")
+        self.b_home.setCheckable(True)
+        self.b_home.setCursor(Qt.PointingHandCursor)
+        self.b_home.setToolTip("Сводка: что сегодня и на неделе, горящие сроки, недавние дела (Ctrl+H)")
+        self.b_home.clicked.connect(self.show_home)
+        sv.addWidget(self.b_home)
+        sv.addSpacing(4)
         self.b_loose = QPushButton("📂   Без дела — просто PDF")
         self.b_loose.setObjectName("loosebtn")
         self.b_loose.setCheckable(True)
@@ -1856,7 +1866,8 @@ class MainWindow(QMainWindow):
         lv.addWidget(self.loose_tabs, 1)
 
         self.stack = QStackedWidget()
-        for w in (self.cases_page, self.loose_page, self.help_page):
+        self.home_page = U.HomePage(self)
+        for w in (self.cases_page, self.loose_page, self.help_page, self.home_page):
             self.stack.addWidget(w)
         self.stack.currentChanged.connect(lambda *_: anim.fade_in(self.stack.currentWidget()))
 
@@ -2910,6 +2921,21 @@ class MainWindow(QMainWindow):
         if fn:
             fn()
 
+    def show_kit(self):
+        """Вкладка «Документы» → «Комплект для подачи»."""
+        self.open_case_tab("docs")
+        self.docs_seg.setCurrentIndex(1)
+
+    def goto_page(self, page):
+        """Выделить страницу и прокрутить к ней в рабочей области."""
+        if 0 <= page < self.doc.page_count:
+            self.pages.clearSelection()
+            it = self.pages.item(page)
+            if it:
+                it.setSelected(True)
+                self.pages.setCurrentItem(it)
+                self.pages.scrollToItem(it, QAbstractItemView.PositionAtTop)
+
     def run_doc_tool(self, key):
         if not self.doc.page_count:
             self.open_case_tab("docs")
@@ -2928,18 +2954,36 @@ class MainWindow(QMainWindow):
         self.overview = U.OverviewTab(self)
         docs = QSplitter()
         docs.setChildrenCollapsible(False)
-        dl = cp.docs_widget
-        dl.setMinimumWidth(330)
+        # слева: «Документы» дела или «Комплект для подачи»; справа — рабочая область
+        left = QWidget()
+        lv = QVBoxLayout(left)
+        lv.setContentsMargins(0, 8, 0, 0)
+        lv.setSpacing(6)
+        seg = QTabBar()
+        seg.setDrawBase(False)
+        seg.setExpanding(True)
+        seg.addTab("📄  Документы")
+        seg.addTab("📦  Комплект для подачи")
+        lv.addWidget(seg)
+        self.docs_mode = QStackedWidget()
+        self.docs_mode.addWidget(cp.docs_widget)
+        self.docs_mode.addWidget(cp.sub_tab)
+        cp.docs_widget.show()
+        cp.sub_tab.show()
+        seg.currentChanged.connect(self.docs_mode.setCurrentIndex)
+        seg.currentChanged.connect(lambda *_: anim.fade_in(self.docs_mode.currentWidget()))
+        self.docs_seg = seg
+        lv.addWidget(self.docs_mode, 1)
+        dl = left
+        dl.setMinimumWidth(360)
         docs.addWidget(dl)
-        dl.show()
         self.case_doc_slot = self._slot()
         docs.addWidget(self.case_doc_slot)
         docs.setStretchFactor(1, 1)
         docs.setSizes([380, 900])
         cp.l_docs.setColumnHidden(3, True)
         cp.l_docs.setColumnWidth(2, 128)
-        prepare = U.PrepareTab(self, cp.sub_tab)
-        cp.sub_tab.show()
+        prepare = U.PrepareTab(self, None)
         self.case_calc_slot = self._slot()
         order = [("overview", "Обзор", self.overview), ("docs", "Документы", docs), ("prepare", "Подготовить", prepare),
                  ("events", "Сроки и заседания", cp.events_tab), ("calc", "Расчёты", self.case_calc_slot),
@@ -2998,14 +3042,25 @@ class MainWindow(QMainWindow):
             return None
 
     def _initial_mode(self):
-        cid = self.cases_page.cid
         cur = self.ws[self.cur_ws]
-        if cur["doc"].page_count:
+        if cur["doc"].page_count:                # открыли программу файлом — сразу к нему
             self.show_section(0)
-        elif cid:
-            self.enter_case(cid)
         else:
-            self.enter_loose()
+            self.show_home()
+
+    def show_home(self):
+        """Главная — сводка по всей работе."""
+        if self.mode_cid:
+            U.sync_case_file(self.mode_cid)
+        self.mode_cid = None
+        self.b_loose.setChecked(False)
+        self.b_home.setChecked(True)
+        self.cases_page.list.blockSignals(True)
+        self.cases_page.list.setCurrentItem(None)
+        self.cases_page.list.clearSelection()
+        self.cases_page.list.blockSignals(False)
+        self.home_page.refresh()
+        self.stack.setCurrentWidget(self.home_page)
 
     def _on_case_selected(self, it, _prev=None):
         if self._entering:
@@ -3024,6 +3079,7 @@ class MainWindow(QMainWindow):
             self.mode_cid = cid
             self.last_case = cid
             self.b_loose.setChecked(False)
+            self.b_home.setChecked(False)
             if self.cases_page.cid != cid:
                 self.cases_page.select_case(cid)
             self.stack.setCurrentWidget(self.cases_page)
@@ -3043,6 +3099,7 @@ class MainWindow(QMainWindow):
         try:
             self.mode_cid = None
             self.b_loose.setChecked(True)
+            self.b_home.setChecked(False)
             self.cases_page.list.setCurrentItem(None)
             self.cases_page.list.clearSelection()
             self.stack.setCurrentWidget(self.loose_page)
@@ -3109,6 +3166,7 @@ class MainWindow(QMainWindow):
             if self.stack.currentWidget() is not self.help_page:
                 self._before_help = self.stack.currentWidget()
             self.b_loose.setChecked(False)
+            self.b_home.setChecked(False)
             self.stack.setCurrentWidget(self.help_page)
 
     def leave_help(self):

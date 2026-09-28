@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton, QToolButton, QComboBox, QLineEdit,
     QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QSpinBox, QSplitter,
     QScrollArea, QFrame, QMenu, QInputDialog, QMessageBox, QFileDialog, QTreeWidget, QTreeWidgetItem,
-    QProgressBar, QApplication, QStackedWidget)
+    QProgressBar, QApplication, QStackedWidget, QDialog)
 
 import pdf_core as C
 
@@ -611,6 +611,311 @@ class SubmissionTab(QWidget):
         if c.get("folder"):
             dlg.out.setText(os.path.join(c["folder"], f"Пакет — {self.packs.currentText()}"))
         dlg.exec()
+
+
+def assemble_pdf(items, out, progress=None):
+    """Сложить документы комплекта (PDF, Word, картинки…) в один PDF с закладками по документам.
+    items — [(id, название, путь)]. Возвращает ({id: (первая, последняя страница)}, [не удалось])."""
+    doc = fitz.open()
+    toc, ranges, failed = [], {}, []
+    for n, (iid, title, path) in enumerate(items):
+        if progress:
+            progress(n, len(items))
+        try:
+            d = C.open_as_pdf(path, None)
+        except Exception as e:
+            failed.append(f"{title}: {e}")
+            continue
+        if d is None or not d.page_count:
+            failed.append(f"{title}: не удалось открыть (пароль или пустой файл)")
+            continue
+        start = doc.page_count
+        doc.insert_pdf(d)
+        ranges[iid] = (start, doc.page_count - 1)
+        toc.append([1, title, start + 1])
+    if not doc.page_count:
+        raise ValueError("Ни один документ комплекта не удалось открыть.")
+    doc.set_toc(toc)
+    doc.set_metadata({"title": os.path.splitext(os.path.basename(out))[0], "creator": "LegalHelper"})
+    C.save_pdf(doc, out)
+    return ranges, failed
+
+
+class KitPanel(SubmissionTab):
+    """Комплект для подачи — во вкладке «Документы», слева от рабочей области: список документов комплекта,
+    «Собрать в один PDF» (открывается справа) и сверка по пунктам: щелчок — к первой странице документа."""
+    COLS = ["✓", "Документ", "Стр.", "Экз."]
+
+    def __init__(self, main):
+        QWidget.__init__(self)
+        self.main = main
+        self.cid = None
+        self.pid = None
+        self._loading = False
+        self.ranges = {}
+        self.kit_path = None
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 4, 0, 0)
+        v.setSpacing(8)
+        top = QHBoxLayout()
+        self.packs = QComboBox()
+        self.packs.currentIndexChanged.connect(self.on_pack)
+        top.addWidget(self.packs, 1)
+        mb = QToolButton()
+        mb.setText("⋯")
+        mb.setObjectName("moretabs")
+        mb.setToolTip("Новый комплект, переименовать, удалить")
+        mb.setPopupMode(QToolButton.InstantPopup)
+        m = QMenu(mb)
+        m.addAction("Новый комплект…", self.new_pack)
+        m.addAction("Переименовать…", self.rename_pack)
+        m.addSeparator()
+        m.addAction("Удалить комплект", self.delete_pack)
+        mb.setMenu(m)
+        top.addWidget(mb)
+        top.addWidget(U.HelpButton("submission"))
+        v.addLayout(top)
+        pr = QHBoxLayout()
+        self.prog_lbl = QLabel()
+        self.prog_lbl.setObjectName("hint")
+        pr.addWidget(self.prog_lbl)
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(6)
+        pr.addWidget(self.progress, 1)
+        v.addLayout(pr)
+        self.t = ChecklistTable(self)
+        self.t.setColumnCount(len(self.COLS))
+        self.t.setObjectName("docs")
+        self.t.setHorizontalHeaderLabels(self.COLS)
+        h = self.t.horizontalHeader()
+        h.setSectionResizeMode(1, QHeaderView.Stretch)
+        for c, wdt in ((0, 34), (2, 70), (3, 58)):
+            h.setSectionResizeMode(c, QHeaderView.Fixed)
+            h.resizeSection(c, wdt)
+        self.t.verticalHeader().setVisible(False)
+        self.t.setShowGrid(False)
+        self.t.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.t.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.t.setWordWrap(True)
+        self.t.setEditTriggers(QAbstractItemView.EditKeyPressed)
+        self.t.itemChanged.connect(self.on_item_changed)
+        self.t.cellClicked.connect(lambda r, c: self.show_row(r))
+        self.t.cellDoubleClicked.connect(self.on_double)
+        v.addWidget(self.t, 1)
+        b1 = QHBoxLayout()
+        for text, fn, tip in (("+ Из дела…", self.add_from_case, "Выбрать документы из списка дела"),
+                              ("+ Файл…", self.add_files, "Добавить файлы с компьютера"),
+                              ("+ Пункт", self.add_item, "Пункт без файла — то, что ещё нужно подготовить")):
+            b = _btn(text, fn, tip=tip)
+            b.setObjectName("compact")
+            b1.addWidget(b)
+        tb = QPushButton("Перечень ▾")
+        tb.setObjectName("compact")
+        tb.setToolTip("Типовой перечень приложений по АПК / ГПК / КАС")
+        tm = QMenu(tb)
+        for name in TEMPLATES:
+            tm.addAction(name, lambda n=name: self.apply_template(n))
+        tb.setMenu(tm)
+        b1.addWidget(tb)
+        v.addLayout(b1)
+        b2 = QHBoxLayout()
+        for text, fn, tip in (("▲", lambda: self.move(-1), "Выше"), ("▼", lambda: self.move(1), "Ниже"),
+                              ("Прикрепить файл…", lambda: self.attach(self.t.currentRow()), "Файл для выбранного пункта"),
+                              ("Удалить", self.delete_item, "Убрать пункт из комплекта (файл не удаляется)")):
+            b = _btn(text, fn, tip=tip)
+            b.setObjectName("compact")
+            b2.addWidget(b)
+        b2.addStretch(1)
+        v.addLayout(b2)
+        self.b_assemble = _btn("📑  Собрать в один PDF и проверить", self.assemble, primary=True,
+                               tip="Все документы комплекта — одним PDF справа, по порядку, с закладками")
+        v.addWidget(self.b_assemble)
+        b3 = QHBoxLayout()
+        b = _btn("📨 Пакет для подачи…", self.build, tip="Файлы под «Мой арбитр», ГАС «Правосудие», Почту России")
+        b.setObjectName("compact")
+        b3.addWidget(b)
+        b = _btn("📮 Опись ф. 107", self.to_f107, tip="Опись вложения по документам комплекта")
+        b.setObjectName("compact")
+        b3.addWidget(b)
+        v.addLayout(b3)
+        self.hint = QLabel("Перетащите документы из списка дела сюда. Первая строка — основной документ. "
+                           "Соберите комплект в один PDF — он откроется справа; щёлкайте по пунктам, "
+                           "сверяйте страницы и отмечайте ✓.")
+        self.hint.setObjectName("hint")
+        self.hint.setWordWrap(True)
+        v.addWidget(self.hint)
+
+    def reload(self, select=None):
+        items = self.rows()
+        cur = select if select is not None else self.t.currentRow()
+        self._loading = True
+        self.t.setRowCount(0)
+        bold = QFont()
+        bold.setBold(True)
+        for r, it in enumerate(items):
+            self.t.insertRow(r)
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable | Qt.ItemIsSelectable)
+            chk.setCheckState(Qt.Checked if it["done"] else Qt.Unchecked)
+            chk.setData(Qt.UserRole, it["id"])
+            chk.setToolTip("Проверено")
+            self.t.setItem(r, 0, chk)
+            path = it["path"]
+            ok = bool(path) and os.path.exists(path)
+            ti = QTableWidgetItem(it["title"] + ("" if ok else ("  ⚠ файл не найден" if path else "  ＋ файл")))
+            ti.setData(Qt.UserRole, it["title"])
+            ti.setToolTip((path or "Файл не прикреплён — «Прикрепить файл…» или перетащите файл на строку") +
+                          ("\n\nОсновной документ" if r == 0 else ""))
+            if r == 0:
+                ti.setFont(bold)
+            if not ok:
+                ti.setForeground(QBrush(QColor(U.M.T["danger"] if path else U.M.T["muted"])))
+            self.t.setItem(r, 1, ti)
+            rng = self.ranges.get(it["id"])
+            n = _page_count(path) if ok else None
+            text = (f"{rng[0] + 1}–{rng[1] + 1}" if rng and rng[1] > rng[0] else f"{rng[0] + 1}") if rng else \
+                (f"{n} л." if n else "—")
+            si = QTableWidgetItem(text)
+            si.setToolTip("Страницы в собранном PDF" if rng else "Листов в документе")
+            si.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            si.setTextAlignment(Qt.AlignCenter)
+            self.t.setItem(r, 2, si)
+            cp = QSpinBox()
+            cp.setRange(1, 50)
+            cp.setValue(it["copies"] or 1)
+            cp.valueChanged.connect(lambda val, iid=it["id"]: db().update_pack_item(iid, copies=val))
+            self.t.setCellWidget(r, 3, cp)
+        self.t.resizeRowsToContents()
+        self._loading = False
+        self.update_progress(items)
+        if items:
+            self.t.setCurrentCell(min(max(cur, 0), len(items) - 1), 1)
+
+    def on_item_changed(self, item):
+        if self._loading:
+            return
+        iid = self.item_id(item.row())
+        if item.column() == 0:
+            db().update_pack_item(iid, done=1 if item.checkState() == Qt.Checked else 0)
+            self.update_progress()
+        elif item.column() == 1:
+            db().update_pack_item(iid, title=item.text().split("  ⚠")[0].split("  ＋")[0].strip())
+
+    def update_progress(self, items=None):
+        items = self.rows() if items is None else items
+        done = sum(1 for i in items if i["done"])
+        self.progress.setMaximum(max(1, len(items)))
+        self.progress.setValue(done)
+        self.prog_lbl.setText(f"Проверено {done} из {len(items)}" if items else "Комплект пуст")
+
+    def set_case(self, cid):
+        if cid != self.cid:
+            self.ranges, self.kit_path = {}, None
+        super().set_case(cid)
+
+    def on_pack(self, *_):
+        self.ranges, self.kit_path = {}, None
+        super().on_pack()
+
+    def show_row(self, row):
+        """Щелчок по пункту: если комплект собран и открыт — к первой странице этого документа."""
+        it = self.item_row(row)
+        if not it:
+            return
+        rng = self.ranges.get(it["id"])
+        if rng and self.kit_path and self.main.path == self.kit_path:
+            self.main.goto_page(rng[0])
+
+    def on_double(self, r, c):
+        if c == 1:
+            it = self.item_row(r)
+            if it and it["path"] and os.path.exists(it["path"]):
+                self.main.open_external(it["path"], 0, self.cid)
+            elif it:
+                self.attach(r)
+
+    def add_from_case(self):
+        docs = [d for d in db().docs(self.cid) if d["path"]]
+        if not docs:
+            return QMessageBox.information(self, U.M.APP_NAME, "В деле пока нет документов.")
+        have = {i["path"] for i in self.rows()}
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Документы в комплект")
+        dlg.resize(460, 480)
+        dv = QVBoxLayout(dlg)
+        dv.addWidget(QLabel("Отметьте документы, которые войдут в комплект:"))
+        from PySide6.QtWidgets import QListWidget, QListWidgetItem
+        lst = QListWidget()
+        for d in docs:
+            li = QListWidgetItem(f"{d.get('icon') or ''}  {d['title']}".strip())
+            li.setData(Qt.UserRole, d["path"])
+            li.setFlags(li.flags() | Qt.ItemIsUserCheckable)
+            li.setCheckState(Qt.Unchecked)
+            if d["path"] in have:
+                li.setFlags(li.flags() & ~Qt.ItemIsEnabled)
+                li.setText(li.text() + "  — уже в комплекте")
+            lst.addItem(li)
+        dv.addWidget(lst, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        c = QPushButton("Отмена")
+        c.clicked.connect(dlg.reject)
+        ok = QPushButton("Добавить")
+        ok.setObjectName("primary")
+        ok.clicked.connect(dlg.accept)
+        row.addWidget(c)
+        row.addWidget(ok)
+        dv.addLayout(row)
+        if not dlg.exec():
+            return
+        paths = [lst.item(i).data(Qt.UserRole) for i in range(lst.count())
+                 if lst.item(i).checkState() == Qt.Checked]
+        if paths:
+            titles = {d["path"]: d["title"] for d in docs}
+            for p in paths:
+                db().add_pack_item(self.pid, titles.get(p) or self._title_from(p), p)
+            self.reload(select=len(self.rows()) - 1)
+
+    def assemble(self):
+        rows = self.rows()
+        items = [(i["id"], i["title"], i["path"]) for i in rows if i["path"] and os.path.exists(i["path"])]
+        if not items:
+            return QMessageBox.information(self, U.M.APP_NAME, "В комплекте нет документов с файлами. "
+                                           "Перетащите документы из списка дела или нажмите «+ Из дела…».")
+        c = db().case(self.cid) or {}
+        folder = c.get("folder") or self.main.default_dir()
+        out = os.path.join(folder, U.L.clean_filename(f"Комплект — {self.packs.currentText()}") + ".pdf")
+        j = self.main.find_ws(out) if hasattr(self.main, "find_ws") else None
+        if j is not None:                               # старая сборка открыта — закрыть перед пересборкой
+            self.main.switch_ws(j)
+            self.main.modified = False
+            self.main.close_ws()
+        res = self.main.run("Собираю комплект в один PDF…", assemble_pdf, items, out)
+        if res is U.M.FAILED:
+            return
+        self.ranges, failed = res
+        self.kit_path = out
+        self.main.open_external(out, 0, self.cid)
+        self.reload(select=0)
+        skipped = [i["title"] for i in rows if not i["path"] or not os.path.exists(i["path"])]
+        msg = []
+        if skipped:
+            msg.append("Без файла (не вошли):\n• " + "\n• ".join(skipped[:10]))
+        if failed:
+            msg.append("Не удалось добавить:\n• " + "\n• ".join(failed[:10]))
+        if msg:
+            QMessageBox.warning(self, U.M.APP_NAME, "\n\n".join(msg))
+        else:
+            self.main.msg(f"Комплект собран: {os.path.basename(out)}. Щёлкайте по пунктам слева — "
+                          "откроется начало каждого документа.")
+
+    def to_f107(self):
+        rows = [(f"{i['title']}" + (f" на {_page_count(i['path'])} л." if i["path"] and os.path.exists(i["path"])
+                                   and _page_count(i["path"]) else ""), i["copies"] or 1, 1) for i in self.rows()]
+        if not rows:
+            return QMessageBox.information(self, U.M.APP_NAME, "Комплект пуст.")
+        U.F107Dialog(self.main, rows).exec()
 
 
 # =============================================================================

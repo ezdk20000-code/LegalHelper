@@ -104,7 +104,7 @@ def case_data(db, cid, folder):
     board = db.con.execute("SELECT scene FROM boards WHERE case_id=?", (cid,)).fetchone()
     tables = {t: [{k: v for k, v in r.items() if k not in _SKIP} for r in
                   _rows(db, f"SELECT * FROM {t} WHERE case_id=? ORDER BY id", (cid,))]
-              for t in ("events", "time_entries", "payments", "quotes")}
+              for t in ("events", "time_entries", "payments", "quotes", "instances")}
     laws = [{k: v for k, v in r.items() if k != "case_id"} for r in
             _rows(db, "SELECT * FROM laws WHERE case_id=? ORDER BY id", (cid,))]
     return {"format": FORMAT, "app": "LegalHelper", "saved": dt.datetime.now().isoformat(timespec="seconds"),
@@ -211,7 +211,7 @@ def import_case(db, folder, replace_cid=None):
         if replace_cid:
             db.delete_case(replace_cid)
         cid = _insert(db, "cases", {k: v for k, v in c.items() if k != "id"})
-        for t in ("events", "time_entries", "payments", "quotes"):
+        for t in ("events", "time_entries", "payments", "quotes", "instances"):
             for r in data.get(t, []):
                 _insert(db, t, dict(r, case_id=cid))
         for d in data.get("docs", []):

@@ -35,7 +35,57 @@ CREATE TABLE IF NOT EXISTS laws(
     url TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS boards(
     case_id INTEGER PRIMARY KEY, scene TEXT DEFAULT '', updated TEXT);
+CREATE TABLE IF NOT EXISTS instances(
+    id INTEGER PRIMARY KEY, case_id INTEGER, pos INTEGER DEFAULT 0, level TEXT DEFAULT '', court TEXT DEFAULT '',
+    number TEXT DEFAULT '', judge TEXT DEFAULT '', url TEXT DEFAULT '', result TEXT DEFAULT '');
 """
+
+# Уровни судов: (уровень, стадия дела, следующий уровень)
+COURT_LEVELS = [
+    ("Мировой судья", "Первая инстанция", "Районный (городской) суд"),
+    ("Районный (городской) суд", "Первая инстанция", "Областной (краевой) суд — апелляция"),
+    ("Областной (краевой) суд — апелляция", "Апелляция", "Кассационный суд общей юрисдикции"),
+    ("Кассационный суд общей юрисдикции", "Кассация", "Верховный Суд РФ"),
+    ("Арбитражный суд субъекта РФ", "Первая инстанция", "Арбитражный апелляционный суд"),
+    ("Арбитражный апелляционный суд", "Апелляция", "Арбитражный суд округа — кассация"),
+    ("Арбитражный суд округа — кассация", "Кассация", "Верховный Суд РФ"),
+    ("Суд по интеллектуальным правам", "Первая инстанция", "Верховный Суд РФ"),
+    ("Верховный Суд РФ", "ВС РФ", "Конституционный Суд РФ"),
+    ("Конституционный Суд РФ", "ВС РФ", ""),
+    ("Иное (третейский суд, госорган…)", "", ""),
+]
+LEVEL_NAMES = [x[0] for x in COURT_LEVELS]
+
+
+def guess_level(court, number=""):
+    c = (court or "").lower()
+    if "мировой" in c or "судебный участок" in c:
+        return "Мировой судья"
+    if "интеллектуальн" in c:
+        return "Суд по интеллектуальным правам"
+    if "верховный" in c:
+        return "Верховный Суд РФ"
+    if "апелляционный" in c and "арбитраж" in c:
+        return "Арбитражный апелляционный суд"
+    if "арбитражный суд" in c and "округа" in c:
+        return "Арбитражный суд округа — кассация"
+    if "арбитраж" in c or (number or "").strip()[:1] in ("А", "A"):
+        return "Арбитражный суд субъекта РФ"
+    if "кассационный" in c:
+        return "Кассационный суд общей юрисдикции"
+    if "областной" in c or "краевой" in c or "городской суд" in c and ("москов" in c or "санкт" in c):
+        return "Областной (краевой) суд — апелляция"
+    return "Районный (городской) суд"
+
+
+def next_level(level, prev_levels=()):
+    return next((n for l, _s, n in COURT_LEVELS if l == level), "") or ""
+
+
+def stage_for(level, prev_levels=()):
+    if level == "Районный (городской) суд" and "Мировой судья" in prev_levels:
+        return "Апелляция"                    # районный суд — апелляция на решение мирового судьи
+    return next((st for l, st, _n in COURT_LEVELS if l == level), "")
 
 CASE_FIELDS = [("title", "Название"), ("number", "Номер дела"), ("court", "Суд"),
                ("court_url", "Ссылка на дело на сайте суда"), ("judge", "Судья"),
@@ -81,6 +131,56 @@ class CaseDB:
         import uuid
         for (cid,) in self.con.execute("SELECT id FROM cases WHERE uid IS NULL OR uid=''").fetchall():
             self.con.execute("UPDATE cases SET uid=? WHERE id=?", (uuid.uuid4().hex, cid))
+
+    # ---------------------------------------------------------------- инстанции
+    def instances(self, cid):
+        return self._all("SELECT * FROM instances WHERE case_id=? ORDER BY pos, id", (cid,))
+
+    def add_instance(self, cid, level="", court="", number="", judge="", url=""):
+        r = self._one("SELECT COALESCE(MAX(pos), -1) + 1 AS n FROM instances WHERE case_id=?", (cid,))
+        iid = self._exec("INSERT INTO instances(case_id,pos,level,court,number,judge,url) VALUES (?,?,?,?,?,?,?)",
+                         (cid, r["n"], level, court, number, judge, url))
+        self.sync_instance(cid)
+        return iid
+
+    def update_instance(self, iid, **kw):
+        keys = [k for k in kw if k in ("level", "court", "number", "judge", "url", "result")]
+        if keys:
+            self._exec(f"UPDATE instances SET {','.join(k + '=?' for k in keys)} WHERE id=?",
+                       [kw[k] for k in keys] + [iid])
+            r = self._one("SELECT case_id FROM instances WHERE id=?", (iid,))
+            if r:
+                self.sync_instance(r["case_id"])
+
+    def delete_instance(self, iid):
+        r = self._one("SELECT case_id FROM instances WHERE id=?", (iid,))
+        self._exec("DELETE FROM instances WHERE id=?", (iid,))
+        if r:
+            self.sync_instance(r["case_id"])
+
+    def sync_instance(self, cid):
+        """Текущая инстанция (последняя) — это «Суд», «Номер дела», «Судья», ссылка и стадия дела."""
+        inst = self.instances(cid)
+        if not inst:
+            return
+        cur = inst[-1]
+        prev = [i["level"] for i in inst[:-1]]
+        stage = stage_for(cur["level"], prev)
+        kw = dict(court=cur["court"], number=cur["number"], judge=cur["judge"], court_url=cur["url"])
+        if stage:
+            kw["stage"] = stage
+        self.update_case(cid, **kw)
+
+    def ensure_instances(self, cid):
+        """Дело из старой версии: первая инстанция — из того, что записано в карточке."""
+        if self.instances(cid):
+            return
+        c = self.case(cid) or {}
+        if not (c.get("court") or c.get("number")):
+            return
+        self._exec("INSERT INTO instances(case_id,pos,level,court,number,judge,url) VALUES (?,?,?,?,?,?,?)",
+                   (cid, 0, guess_level(c.get("court"), c.get("number")), c.get("court", ""), c.get("number", ""),
+                    c.get("judge", ""), c.get("court_url", "")))
 
     def close(self):
         try:
@@ -129,7 +229,7 @@ class CaseDB:
                    [kw[k] for k in keys] + [now, cid])
 
     def delete_case(self, cid):
-        for t in ("events", "docs", "time_entries", "payments", "quotes", "laws", "boards"):
+        for t in ("events", "docs", "time_entries", "payments", "quotes", "laws", "boards", "instances"):
             self.con.execute(f"DELETE FROM {t} WHERE case_id=?", (cid,))
         for p in self.packs(cid):
             self.delete_pack(p["id"])
@@ -240,7 +340,18 @@ class CaseDB:
         return {"Дело": c.get("title", ""), "Номер_дела": c.get("number", ""), "Суд": c.get("court", ""),
                 "Судья": c.get("judge", ""), "Доверитель": c.get("client", ""),
                 "Оппонент": c.get("opponent", ""), "Третьи_лица": c.get("third", ""),
-                "Предмет": c.get("claim", ""), "Дата": today.strftime("%d.%m.%Y")}
+                "Предмет": c.get("claim", ""), "Дата": today.strftime("%d.%m.%Y"),
+                **self._instance_values(cid)}
+
+    def _instance_values(self, cid):
+        inst = self.instances(cid) if cid else []
+        if not inst:
+            return {}
+        first = inst[0]
+        vals = {"Суд_первой_инстанции": first["court"], "Номер_дела_первой_инстанции": first["number"]}
+        if len(inst) > 1:
+            vals["Нижестоящий_суд"] = inst[-2]["court"]
+        return vals
 
 
 # ============================================================================

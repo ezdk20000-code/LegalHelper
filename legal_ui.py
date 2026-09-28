@@ -764,8 +764,20 @@ class SentDialog(QDialog):
 
 
 class DocsTable(QTableWidget):
-    """Документы дела: значок, название (редактируется), когда отправлен, файл."""
+    """Документы дела: значок, название (редактируется), отметка «отправлен» галочкой, файл.
+    Щелчок — выделить; двойной щелчок или перетаскивание вправо, в рабочую область — открыть.
+    Перетаскивание в список комплекта — добавить в комплект."""
     COLS = ["", "Документ", "Отправлен", "Файл"]
+
+    def mimeData(self, items):
+        from PySide6.QtCore import QMimeData
+        md = QMimeData()
+        paths = [p for p in self.paths(only_selected=True) if p and os.path.exists(p)]
+        md.setUrls([QUrl.fromLocalFile(p) for p in paths])
+        return md
+
+    def mimeTypes(self):
+        return ["text/uri-list"]
 
     def __init__(self, page):
         super().__init__(0, 4)
@@ -777,7 +789,10 @@ class DocsTable(QTableWidget):
         self.setShowGrid(False)
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        self.setEditTriggers(QAbstractItemView.EditKeyPressed)      # переименование — F2 или кнопкой «✎ Название»
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragOnly)
+        self.setDefaultDropAction(Qt.CopyAction)
         self.setWordWrap(False)
         h = self.horizontalHeader()
         h.setSectionResizeMode(0, QHeaderView.Fixed)
@@ -820,11 +835,13 @@ class DocsTable(QTableWidget):
                 title.setToolTip("Открыт. Двойной щелчок — переименовать")
             title.setData(Qt.UserRole, d["path"])
             title.setData(Qt.UserRole + 1, d["id"])
-            sent = QTableWidgetItem(("✓ " + fmt_sent_short(d.get("sent"))) if d.get("sent") else "📅 указать")
-            sent.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            sent.setToolTip((f"Отправлен {fmt_sent(d.get('sent'))}. " if d.get("sent") else "") +
-                            "Щёлкните, чтобы указать дату и время отправки")
-            sent.setForeground(QColor(M.T["success"] if d.get("sent") else M.T["accent"]))
+            sent = QTableWidgetItem(fmt_sent_short(d.get("sent")) if d.get("sent") else "нет")
+            sent.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+            sent.setCheckState(Qt.Checked if d.get("sent") else Qt.Unchecked)
+            sent.setToolTip((f"Отправлен {fmt_sent(d.get('sent'))}. Снимите галочку, если не отправлен. "
+                             if d.get("sent") else "Поставьте галочку — запишутся текущие дата и время. ") +
+                            "Точное время — кнопка «📅 Отправка».")
+            sent.setForeground(QColor(M.T["success"] if d.get("sent") else M.T["muted"]))
             fn = QTableWidgetItem(("⚠ " if not exists else "") + os.path.basename(d["path"]))
             fn.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             fn.setToolTip(d["path"] + ("" if exists else "\nФайл не найден — возможно, перемещён или удалён"))
@@ -846,7 +863,15 @@ class DocsTable(QTableWidget):
 
     # ---------------------------------------------------------------- правка
     def on_changed(self, item):
-        if self._loading or item.column() != 1:
+        if self._loading:
+            return
+        if item.column() == 2:                      # галочка «отправлен»
+            did = self.row_doc(item.row())[0]
+            on = item.checkState() == Qt.Checked
+            db().update_doc(did, sent=dt.datetime.now().isoformat(timespec="minutes") if on else "")
+            QTimer.singleShot(0, self.page.load_docs)
+            return
+        if item.column() != 1:
             return
         did = item.data(Qt.UserRole + 1)
         text = item.text().strip()
@@ -861,14 +886,12 @@ class DocsTable(QTableWidget):
         if c == 0:
             rect = self.visualItemRect(self.item(r, 0))
             IconPicker(self, lambda ic: self.set_icon(did, ic)).exec(self.viewport().mapToGlobal(rect.bottomLeft()))
-        elif c == 2:
-            self.edit_sent(r)
-        elif c in (1, 3) and path:
-            self.page.openFile.emit(path, 0)
 
     def on_double(self, r, c):
-        if c == 3:
-            self.page.openFile.emit(self.row_doc(r)[1], 0)
+        if c in (1, 3):
+            path = self.row_doc(r)[1]
+            if path:
+                self.page.openFile.emit(path, 0)
 
     def set_icon(self, did, ic):
         db().update_doc(did, icon=ic)
@@ -1109,6 +1132,167 @@ def court_menu(main, cid, anchor):
     m.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
 
 
+INSTANCE_KEYS = ("court", "number", "judge", "court_url")
+
+
+class InstanceCard(QFrame):
+    """Одна инстанция: уровень суда (список) и полное название рядом, номер дела, судья, ссылка."""
+
+    def __init__(self, editor, inst, index):
+        super().__init__()
+        self.editor, self.iid = editor, inst["id"]
+        self.setObjectName("card")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(14, 10, 14, 10)
+        h = QHBoxLayout()
+        n = QLabel(f"{index + 1}.")
+        n.setObjectName("subtitle")
+        h.addWidget(n)
+        self.level = QComboBox()
+        self.level.addItems(CS.LEVEL_NAMES)
+        self.level.setCurrentText(inst["level"] or CS.guess_level(inst["court"], inst["number"]))
+        self.level.setMinimumWidth(300)
+        h.addWidget(self.level, 1)
+        self.cur = QLabel("текущая" if editor.is_last(inst) else "")
+        self.cur.setObjectName("hint")
+        h.addWidget(self.cur)
+        rm = QPushButton("Удалить")
+        rm.setObjectName("compact")
+        rm.setProperty("danger", True)
+        rm.setToolTip("Удалить эту инстанцию")
+        rm.clicked.connect(lambda: editor.remove(self.iid))
+        h.addWidget(rm)
+        v.addLayout(h)
+        f = QFormLayout()
+        f.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.court = M.GrowEdit(inst["court"], "Полное название: «Девятый арбитражный апелляционный суд»")
+        self.number = M.GrowEdit(inst["number"], "Номер дела в этом суде")
+        self.judge = M.GrowEdit(inst["judge"], "ФИО судьи или состав")
+        self.url = M.GrowEdit(inst["url"], "Ссылка на карточку дела на сайте суда")
+        urow = QHBoxLayout()
+        urow.addWidget(self.url, 1)
+        ob = QPushButton("Открыть")
+        ob.setObjectName("compact")
+        ob.clicked.connect(lambda: self.url.text().strip() and QDesktopServices.openUrl(QUrl(self.url.text().strip())))
+        urow.addWidget(ob)
+        f.addRow("Суд", self.court)
+        f.addRow("Номер дела", self.number)
+        f.addRow("Судья", self.judge)
+        f.addRow("Сайт суда", urow)
+        v.addLayout(f)
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.setInterval(600)
+        self.timer.timeout.connect(self.save)
+        for e in (self.court, self.number, self.judge, self.url):
+            e.textChanged.connect(self.timer.start)
+        self.level.currentTextChanged.connect(lambda *_: self.save())
+
+    def save(self):
+        self.timer.stop()
+        db().update_instance(self.iid, level=self.level.currentText(), court=self.court.text().strip(),
+                             number=self.number.text().strip(), judge=self.judge.text().strip(),
+                             url=self.url.text().strip())
+        self.editor.changed()
+
+
+class InstancesEditor(QWidget):
+    """«Суды и инстанции» в сведениях о деле: путь дела от первой инстанции дальше.
+    Последняя инстанция — текущая: её суд, номер и судья используются во всей программе."""
+
+    def __init__(self, page):
+        super().__init__()
+        self.page = page
+        self.cid = None
+        self.cards = []
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 4, 0, 8)
+        h = QHBoxLayout()
+        t = QLabel("Суды и инстанции")
+        t.setObjectName("subtitle")
+        h.addWidget(t)
+        h.addStretch(1)
+        self.b_next = QPushButton("→ Следующая инстанция")
+        self.b_next.setObjectName("primary")
+        self.b_next.setToolTip("Дело перешло дальше: апелляция, кассация, Верховный Суд…")
+        self.b_next.clicked.connect(self.add_next)
+        h.addWidget(self.b_next)
+        v.addLayout(h)
+        hint = QLabel("Выберите уровень суда и впишите полное название. Когда дело переходит в апелляцию, "
+                      "кассацию и дальше — «→ Следующая инстанция»: программа предложит уровень, стадия дела "
+                      "обновится сама. Последняя инстанция — текущая: её суд и номер подставляются в шаблоны.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+        self.box = QVBoxLayout()
+        self.box.setSpacing(8)
+        v.addLayout(self.box)
+
+    def is_last(self, inst):
+        return self._last_id == inst["id"]
+
+    def set_case(self, cid):
+        self.cid = cid
+        if not cid:
+            return
+        db().ensure_instances(cid)
+        if not db().instances(cid):
+            db().add_instance(cid, "Районный (городской) суд")
+        self.reload()
+
+    def reload(self):
+        for c in self.cards:
+            c.timer.isActive() and c.save()
+            self.box.removeWidget(c)
+            c.deleteLater()
+        self.cards = []
+        inst = db().instances(self.cid)
+        self._last_id = inst[-1]["id"] if inst else None
+        for i, it in enumerate(inst):
+            card = InstanceCard(self, it, i)
+            self.box.addWidget(card)
+            self.cards.append(card)
+        M.polish_ui(self)
+
+    def add_next(self):
+        inst = db().instances(self.cid)
+        for c in self.cards:
+            c.timer.isActive() and c.save()
+        cur = inst[-1]["level"] if inst else ""
+        nxt = CS.next_level(cur) or cur or "Районный (городской) суд"
+        db().add_instance(self.cid, nxt)
+        self.reload()
+        self.changed()
+        if self.cards:
+            self.cards[-1].court.setFocus()
+
+    def remove(self, iid):
+        inst = db().instances(self.cid)
+        if len(inst) <= 1:
+            QMessageBox.information(self, M.APP_NAME, "Это единственная инстанция — её можно только изменить.")
+            return
+        it = next((i for i in inst if i["id"] == iid), None)
+        if QMessageBox.question(self, M.APP_NAME, f"Удалить инстанцию «{it['court'] or it['level']}»?") != QMessageBox.Yes:
+            return
+        db().delete_instance(iid)
+        self.reload()
+        self.changed()
+
+    def changed(self):
+        """Текущая инстанция поменялась — обновить стадию в форме, заголовок и обзор."""
+        c = db().case(self.cid) or {}
+        st = self.page.fields.get("stage")
+        if st is not None and st.currentText() != c.get("stage", ""):
+            st.blockSignals(True)
+            st.setCurrentText(c.get("stage", ""))
+            st.blockSignals(False)
+        for card in self.cards:
+            card.cur.setText("текущая" if card.iid == self._last_id else "")
+        main = self.page.main
+        if getattr(main, "overview", None) is not None and main.overview.cid == self.cid:
+            main.overview.set_case(self.cid)
+
+
 class OverviewTab(QWidget):
     """Обзор дела: главное о деле, ближайшие сроки, последние документы, быстрые действия."""
 
@@ -1272,6 +1456,12 @@ class OverviewTab(QWidget):
         rows = [[("Номер дела", c.get("number")), ("Суд", c.get("court")), ("Судья", c.get("judge"))],
                 [("Доверитель", c.get("client")), ("Оппонент", c.get("opponent")), ("Стадия", c.get("stage"))]]
         t = "".join("<tr>" + "".join(fact(a, b) for a, b in r) + "</tr>" for r in rows)
+        inst = db().instances(cid)
+        if len(inst) > 1:                               # путь дела по инстанциям
+            steps = " → ".join(f"{html.escape(i['court'] or i['level'])}"
+                               + (f" <span style='color:{M.T['muted']}'>({html.escape(i['number'])})</span>"
+                                  if i["number"] else "") for i in inst)
+            t += f'<tr><td colspan="3" style="padding:6px 0 0 0"><span style="color:{M.T["muted"]}">Путь дела</span><br>{steps}</td></tr>'
         claim = html.escape(c.get("claim") or "")
         self.facts.setText(f'<table>{t}</table>' + (f'<p style="margin-top:6px">{claim}</p>' if claim else "") +
                            f'<p><a href="info" style="color:{M.T["accent"]}">Изменить сведения о деле</a></p>')
@@ -1491,7 +1681,7 @@ NO_DOC_TOOLS = {"merge", "img2pdf", "word2pdf", "xls2pdf", "ppt2pdf", "html2pdf"
 
 class PrepareTab(QWidget):
     """Подготовить: все инструменты для документов дела — крупными карточками по разделам, с поиском
-    и прокруткой; ниже — комплект документов для подачи."""
+    и прокруткой. Комплект для подачи — во вкладке «Документы»."""
     COLS = 2
 
     def __init__(self, main, submission):
@@ -1541,14 +1731,12 @@ class PrepareTab(QWidget):
         self.nothing.setObjectName("hint")
         self.nothing.hide()
         v.addWidget(self.nothing)
-        lab = QLabel("Комплект документов для подачи")
-        lab.setObjectName("subtitle")
-        v.addSpacing(8)
-        v.addWidget(lab)
-        submission.setMinimumHeight(560)
-        v.addWidget(submission)
-        self.kit_label = lab
-        self.kit = submission
+        kit = QPushButton("📦  Комплект для подачи — во вкладке «Документы» →")
+        kit.setToolTip("Собрать документы комплекта в один PDF и сверить их")
+        kit.clicked.connect(lambda: self.main.show_kit())
+        v.addSpacing(6)
+        v.addWidget(kit, 0, Qt.AlignLeft)
+        v.addStretch(1)
 
     def _slot(self, key):
         m = self.main
@@ -1581,8 +1769,6 @@ class PrepareTab(QWidget):
             box.setVisible(bool(vis))
             shown += len(vis)
         self.nothing.setVisible(shown == 0)
-        self.kit_label.setVisible(not t)
-        self.kit.setVisible(not t)
 
 
 class CasesPage(QWidget):
@@ -1666,7 +1852,7 @@ class CasesPage(QWidget):
         self._build_quotes()
         # новые вкладки: подача, карта дела, нормы права — сразу после «Сведения»
         self.events_tab = self.tabs.widget(1)
-        self.sub_tab = CT.SubmissionTab(main)
+        self.sub_tab = CT.KitPanel(main)
         self.board_tab = CT.BoardTab(main)
         self.laws_tab = CT.LawsTab(main)
         self.tabs.insertTab(1, self.sub_tab, "Подача")
@@ -1686,9 +1872,16 @@ class CasesPage(QWidget):
     # ------------------------------------------------------------ вкладки
     def _build_info(self):
         w = QWidget()
-        f = QFormLayout(w)
+        outer = QVBoxLayout(w)
+        self.instances = InstancesEditor(self)
+        outer.addWidget(self.instances)
+        f = QFormLayout()
+        outer.addLayout(f)
+        outer.addStretch(1)
         self.fields = {}
         for key, label in CS.CASE_FIELDS:
+            if key in INSTANCE_KEYS:
+                continue                                # суд, номер, судья, ссылка — в блоке «Суды и инстанции»
             if key == "stage":
                 e = QComboBox()
                 e.setEditable(True)
@@ -1758,15 +1951,20 @@ class CasesPage(QWidget):
     def _build_docs(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        hint = QLabel("Щелчок по документу — открыть справа. Выберите строку и нажмите кнопку ниже, чтобы "
-                      "переименовать документ, отметить дату и время отправки или поставить значок.")
+        hint = QLabel("Двойной щелчок или перетаскивание вправо — открыть документ. Перетащите в уже открытый "
+                      "документ — страницы добавятся. Галочка «Отправлен» ставит текущие дату и время.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         v.addWidget(hint)
         self.l_docs = DocsTable(self)
         v.addWidget(self.l_docs, 1)
         er = QHBoxLayout()
-        self.doc_edit_btns = []
+        b_open = QPushButton("Открыть →")
+        b_open.setObjectName("compact")
+        b_open.setToolTip("Открыть выбранный документ справа")
+        b_open.clicked.connect(self.open_doc)
+        er.addWidget(b_open)
+        self.doc_edit_btns = [b_open]
         for text, fn, tip in (("✎ Название", self.l_docs.rename_current, "Изменить название документа"),
                               ("📅 Отправка", self.l_docs.sent_current, "Когда документ отправлен: дата и время"),
                               ("🙂 Значок", self.l_docs.icon_current, "Выбрать значок для документа")):
@@ -1781,6 +1979,7 @@ class CasesPage(QWidget):
         v.addLayout(er)
         self.l_docs.itemSelectionChanged.connect(
             lambda: [b.setEnabled(len(self.l_docs.selected_rows()) == 1) for b in self.doc_edit_btns])
+        b_open.setEnabled(False)
         r = QHBoxLayout()
         b_add = QToolButton()
         b_add.setText("+ Добавить")
@@ -1978,6 +2177,7 @@ class CasesPage(QWidget):
             else:
                 w.setText(str(v))
         self._loading = False
+        self.instances.set_case(self.cid)
         self.load_events()
         self.load_docs()
         self.sub_tab.set_case(self.cid)
@@ -2007,7 +2207,8 @@ class CasesPage(QWidget):
         self.h_title.setText(vals["title"])
         it = self.list.currentItem()
         if it:
-            sub = " · ".join(x for x in (vals["number"], vals["client"], vals["stage"]) if x)
+            c = db().case(self.cid) or {}
+            sub = " · ".join(x for x in (c.get("number"), vals.get("client"), vals.get("stage")) if x)
             it.setText(vals["title"] + (f"\n{sub}" if sub else ""))
 
     def new_case(self):
@@ -3892,3 +4093,216 @@ class BackupsDialog(QDialog):
                                 ) != QMessageBox.Yes:
             return
         self.main.restore_backup(b["path"])
+
+
+# =============================================================================
+#  Главная (HUB): вся работа юриста на одном экране
+# =============================================================================
+WEEKDAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+MONTHS_G = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября",
+            "ноября", "декабря"]
+KIND_ICON = {"Заседание": "⚖️", "Срок": "⏳", "Задача": "✅", "Встреча": "🤝", "Напоминание": "⏰"}
+
+
+class StatTile(QPushButton):
+    def __init__(self, icon, caption, slot):
+        super().__init__()
+        self.setObjectName("actioncard")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(86)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(16, 10, 14, 10)
+        ic = QLabel(icon)
+        ic.setObjectName("cardicon")
+        f = ic.font()
+        f.setPointSize(17)
+        ic.setFont(f)
+        ic.setFixedSize(42, 42)
+        ic.setAlignment(Qt.AlignCenter)
+        ic.setAttribute(Qt.WA_TransparentForMouseEvents)
+        h.addWidget(ic)
+        v = QVBoxLayout()
+        v.setSpacing(0)
+        self.value = QLabel("—")
+        self.value.setObjectName("bigresult")
+        self.value.setAttribute(Qt.WA_TransparentForMouseEvents)
+        cap = QLabel(caption)
+        cap.setObjectName("carddesc")
+        cap.setWordWrap(True)
+        cap.setAttribute(Qt.WA_TransparentForMouseEvents)
+        v.addWidget(self.value)
+        v.addWidget(cap)
+        h.addLayout(v, 1)
+        self.clicked.connect(slot)
+
+    def set(self, text, color=None):
+        self.value.setText(text)
+        self.value.setStyleSheet(f"color: {color};" if color else "")
+
+
+class HomePage(QWidget):
+    """Главная: что сегодня и на неделе, горящие сроки, напоминания, недавние дела, быстрые действия."""
+
+    def __init__(self, main):
+        super().__init__()
+        self.main = main
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setFrameShape(QFrame.NoFrame)
+        outer.addWidget(sc)
+        body = QWidget()
+        sc.setWidget(body)
+        v = QVBoxLayout(body)
+        v.setContentsMargins(26, 20, 26, 20)
+        v.setSpacing(14)
+        self.hello = QLabel()
+        self.hello.setObjectName("title")
+        v.addWidget(self.hello)
+        self.today_lbl = QLabel()
+        self.today_lbl.setObjectName("hint")
+        v.addWidget(self.today_lbl)
+        tiles = QHBoxLayout()
+        tiles.setSpacing(12)
+        m = main
+        self.t_cases = StatTile("📁", "дел в работе", lambda: m.show_cases())
+        self.t_today = StatTile("📅", "событий сегодня", lambda: self.focus_list())
+        self.t_over = StatTile("🔥", "просрочено", lambda: self.focus_list())
+        self.t_money = StatTile("💰", "к оплате доверителями", lambda: m.show_cases())
+        for t in (self.t_cases, self.t_today, self.t_over, self.t_money):
+            tiles.addWidget(t)
+        v.addLayout(tiles)
+        cols = QHBoxLayout()
+        cols.setSpacing(14)
+        self.l_week = self._card(cols, "🗓  Сегодня и ближайшие 7 дней", 3)
+        self.l_recent = self._card(cols, "🕘  Недавние дела", 2)
+        v.addLayout(cols)
+        cols2 = QHBoxLayout()
+        cols2.setSpacing(14)
+        self.l_over = self._card(cols2, "🔥  Горящие и просроченные", 3)
+        self.l_rem = self._card(cols2, "⏰  Напоминания", 2)
+        v.addLayout(cols2)
+        lab = QLabel("Быстрые действия")
+        lab.setObjectName("subtitle")
+        v.addWidget(lab)
+        v.addLayout(card_grid([
+            ActionCard("➕", "Новое дело", "Создать дело: папка, сроки, документы", lambda: m.cases_page.new_case()),
+            ActionCard("📝", "Документ по шаблону", "Иски, жалобы, ходатайства, выступление",
+                       lambda: tool_template(m, m.last_case)),
+            ActionCard("📂", "Без дела — просто PDF", "Открыть, собрать, подписать, сжать PDF", lambda: m.enter_loose()),
+            ActionCard("⏱️", "Посчитать срок", "Процессуальные сроки с праздниками", lambda: m.show_calc(0)),
+            ActionCard("📥", "Открыть дело из папки", "Перенесённое с другого компьютера", lambda: open_case_from_folder(m)),
+            ActionCard("🛟", "Резервные копии", "Сделать копию или вернуть данные", lambda: BackupsDialog(m).exec()),
+        ]))
+        v.addStretch(1)
+        self.timer = QTimer(self)
+        self.timer.setInterval(5 * 60 * 1000)
+        self.timer.timeout.connect(lambda: self.isVisible() and self.refresh())
+        self.timer.start()
+
+    def _card(self, row, title, stretch):
+        box = QFrame()
+        box.setObjectName("card")
+        bv = QVBoxLayout(box)
+        bv.setContentsMargins(14, 12, 14, 12)
+        lab = QLabel(title)
+        lab.setObjectName("subtitle")
+        bv.addWidget(lab)
+        lst = QListWidget()
+        lst.setObjectName("overlist")
+        lst.setMinimumHeight(200)
+        lst.setWordWrap(True)
+        lst.itemClicked.connect(self.open_item)
+        bv.addWidget(lst, 1)
+        row.addWidget(box, stretch)
+        return lst
+
+    def focus_list(self):
+        self.l_over.setFocus() if self.l_over.count() else self.l_week.setFocus()
+
+    def open_item(self, it):
+        cid = it.data(Qt.UserRole)
+        if cid:
+            self.main.enter_case(cid)
+            self.main.open_case_tab("overview")
+
+    @staticmethod
+    def _empty(lst, text):
+        it = QListWidgetItem(text)
+        it.setFlags(Qt.NoItemFlags)
+        lst.addItem(it)
+
+    def refresh(self):
+        today = now().date()
+        name = (profile_values().get("Представитель") or "").split()
+        first = name[1] if len(name) > 1 else ""
+        h = now().hour
+        greet = "Доброе утро" if 5 <= h < 12 else "Добрый день" if h < 18 else "Добрый вечер" if h < 23 else "Доброй ночи"
+        self.hello.setText(f"{greet}{', ' + first if first else ''}!")
+        self.today_lbl.setText(f"Сегодня {WEEKDAYS[today.weekday()]}, {today.day} {MONTHS_G[today.month - 1]} "
+                               f"{today.year} г.")
+        cases = db().cases()
+        self.t_cases.set(str(len(cases)))
+        events = db().events(include_done=False)
+        active = [e for e in events if e["case_id"] is None or any(c["id"] == e["case_id"] for c in cases)]
+        todays = [e for e in active if e["date"] == today.isoformat()]
+        over = [e for e in active if e["date"] < today.isoformat() and e["kind"] != CS.CaseDB.REMINDER]
+        self.t_today.set(str(len(todays)))
+        self.t_over.set(str(len(over)), M.T["danger"] if over else None)
+        due = sum(max(0.0, db().balance(c["id"])["due"]) for c in cases)
+        self.t_money.set(f"{L.money(due, cents=False)} ₽" if due else "0 ₽")
+
+        def line(e, with_date=True):
+            d = dt.date.fromisoformat(e["date"])
+            left = (d - today).days
+            when = "сегодня" if left == 0 else "завтра" if left == 1 else (
+                f"просрочено {CS.ru(e['date'])}" if left < 0 else f"{WEEKDAYS[d.weekday()][:2].capitalize()}, {CS.ru(e['date'])}")
+            t = f" {e['time']}" if e["time"] else ""
+            return (f"{KIND_ICON.get(e['kind'], '•')}  {e['title'] or e['kind']}\n"
+                    f"     {when if with_date else ''}{t} · {e['case_title'] or 'без дела'}")
+        self.l_week.clear()
+        week = [e for e in active if today.isoformat() <= e["date"] <= (today + dt.timedelta(days=7)).isoformat()]
+        for e in sorted(week, key=lambda e: (e["date"], e["time"] or "")):
+            it = QListWidgetItem(line(e))
+            it.setData(Qt.UserRole, e["case_id"])
+            if e["date"] == today.isoformat():
+                it.setForeground(QColor(M.T["accent"]))
+            self.l_week.addItem(it)
+        if not week:
+            self._empty(self.l_week, "На неделе ничего не запланировано 🎉")
+        self.l_over.clear()
+        soon = [e for e in active if e["kind"] in ("Срок", "Заседание") and
+                e["date"] <= (today + dt.timedelta(days=2)).isoformat()]
+        for e in sorted(soon, key=lambda e: (e["date"], e["time"] or "")):
+            it = QListWidgetItem(line(e))
+            it.setData(Qt.UserRole, e["case_id"])
+            it.setForeground(QColor(M.T["danger"]))
+            self.l_over.addItem(it)
+        if not soon:
+            self._empty(self.l_over, "Горящих сроков нет — всё под контролем")
+        self.l_rem.clear()
+        rems = sorted(db().reminders(), key=event_dt)[:8]
+        for e in rems:
+            w = event_dt(e)
+            it = QListWidgetItem(f"⏰  {e['title']}\n     {w:%d.%m %H:%M} · {e['case_title'] or 'без дела'}")
+            it.setData(Qt.UserRole, e["case_id"])
+            self.l_rem.addItem(it)
+        if not rems:
+            self._empty(self.l_rem, "Напоминаний нет. Их можно поставить в обзоре дела.")
+        self.l_recent.clear()
+        nexts = {}
+        for e in sorted(active, key=lambda e: (e["date"], e["time"] or "")):
+            if e["case_id"] and e["date"] >= today.isoformat():
+                nexts.setdefault(e["case_id"], e)
+        for c in cases[:8]:
+            sub = " · ".join(x for x in (c["number"], c["stage"]) if x)
+            nx = nexts.get(c["id"])
+            if nx:
+                sub += ("\n     " if sub else "") + f"ближайшее: {CS.ru(nx['date'])} {nx['time'] or ''} {nx['kind'].lower()}".rstrip()
+            it = QListWidgetItem(f"📁  {c['title']}" + (f"\n     {sub}" if sub else ""))
+            it.setData(Qt.UserRole, c["id"])
+            self.l_recent.addItem(it)
+        if not cases:
+            self._empty(self.l_recent, "Дел пока нет — «➕ Новое дело» ниже")
