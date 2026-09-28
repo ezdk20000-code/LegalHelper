@@ -2,9 +2,9 @@
 """
 Проверка и загрузка обновлений LegalHelper с GitHub (без интерфейса).
 
-Как выпускается новая версия: в репозитории меняется APP_VERSION в pdf_master.py и файл
-version.json, ставится тег vX.Y. Программа читает version.json из ветки main и, если версия там
-новее установленной, скачивает архив тега — в нём есть update.bat, который собирает и ставит программу.
+Ветка main — всегда выпущенная версия (работа идёт в других ветках и попадает в main при выпуске).
+Программа читает version.json из main и, если версия там новее установленной, скачивает архив
+ветки main — в нём есть update.bat, который собирает и ставит программу.
 """
 import json
 import os
@@ -45,8 +45,7 @@ def fetch_info(timeout=10):
     info["version"] = ver
     notes = info.get("notes") or []
     info["notes"] = [notes] if isinstance(notes, str) else [str(n) for n in notes]
-    tag = info.get("tag") or f"v{ver}"
-    info.setdefault("zip", f"https://github.com/{REPO}/archive/refs/tags/{tag}.zip")
+    info.setdefault("zip", f"https://github.com/{REPO}/archive/refs/heads/main.zip")
     return info
 
 
