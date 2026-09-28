@@ -20,13 +20,15 @@ from PySide6.QtWidgets import (
     QInputDialog, QLineEdit, QDialog, QDialogButtonBox, QSpinBox, QDoubleSpinBox, QComboBox,
     QCheckBox, QPlainTextEdit, QColorDialog, QProgressDialog, QTreeWidget, QTreeWidgetItem, QSplitter,
     QScrollArea, QMenu, QSlider, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QToolButton,
-    QSizePolicy, QStyle, QFrame, QRadioButton, QButtonGroup)
+    QSizePolicy, QStyle, QFrame, QRadioButton, QButtonGroup, QStackedWidget)
 
 import pdf_core as C
+import legal_core as L
+import legal_ui as U
 
 APP_NAME = "PDF Мастер"
-APP_VERSION = "1.1"
-ACCENT = "#d9363e"
+APP_VERSION = "1.2"
+ACCENT = "#007aff"
 FAILED = object()
 PDF_FILTER = "PDF (*.pdf)"
 OPEN_FILTER = ("Все поддерживаемые (*.pdf *.jpg *.jpeg *.png *.bmp *.gif *.tif *.tiff *.webp "
@@ -615,7 +617,7 @@ class PageCanvas(QLabel):
         self.start = None
         self.cur = None
         self.stroke = []
-        self.color = QColor(ACCENT)
+        self.color = QColor("#e0322b")
         self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.setMouseTracking(False)
 
@@ -694,6 +696,7 @@ class PageEditor(QDialog):
         ("field_text", "Поле ввода", "rect", "Нарисуйте поле формы для ввода текста"),
         ("field_check", "Флажок", "rect", "Нарисуйте поле-флажок"),
         ("erase", "Удалить объект", "point", "Щёлкните по заметке, пометке, полю или ссылке, чтобы удалить"),
+        ("quote", "Выписка в дело", "rect", "Выделите фрагмент текста — он попадёт в заметки дела с номером листа"),
     ]
 
     def __init__(self, main, index, mode="text"):
@@ -874,6 +877,10 @@ class PageEditor(QDialog):
         u = C.vis_to_unrot_rect(page, vis)
         m = self.mode
         try:
+            if m == "quote":
+                if not tiny:
+                    U.save_quote(self.parent(), L.quote_from_rect(page, u), self.index + 1)
+                return
             if m == "text":
                 d = TextDialog(self, "Добавить текст")
                 if d.exec() != QDialog.Accepted or not d.values()["text"].strip():
@@ -1122,58 +1129,87 @@ class FormsDialog(QDialog):
 #  Главное окно
 # =============================================================================
 TOOLS = [
-    ("Организация", [
-        ("merge", "Объединить PDF", "Добавить PDF-файлы и картинки в конец документа. Порядок меняется перетаскиванием"),
-        ("organize", "Организовать страницы", "Перетаскивайте миниатюры мышью, удаляйте и добавляйте страницы"),
+    ("Для суда и почты", [
+        ("package", "Пакет в суд / на почту", "Иск и приложения — под «Мой арбитр», ГАС «Правосудие» или Почту России"),
+        ("f107", "Опись вложения (ф. 107)", "Бланк описи для ценного письма, два экземпляра на листе"),
+        ("sheetnum", "Нумерация листов дела", "Номера листов в углу, разбивка на тома по 250 листов"),
+        ("certify", "Штамп «Копия верна»", "Заверительная надпись на страницах"),
+        ("preflight", "Проверка перед подачей", "Размер, формат, пустые и перевёрнутые страницы, текстовый слой"),
+    ]),
+    ("Материалы дела", [
+        ("anonymize", "Обезличить (152-ФЗ)", "Скрыть ФИО, паспорта, СНИЛС, ИНН, адреса, телефоны, счета"),
+        ("compare_ed", "Сравнить редакции", "Было / стало: удалённое и добавленное цветом"),
+        ("case_search", "Поиск по документам дела", "Найти слово во всех файлах сразу, с номером страницы"),
+        ("quote", "Выписка с номером листа", "Выделите фрагмент — он попадёт в заметки дела"),
+        ("template", "Документ по шаблону", "Заполнить шаблон Word данными дела"),
+    ]),
+    ("Калькуляторы", [
+        ("calc_deadline", "Процессуальные сроки", "С учётом выходных, праздников и переносов"),
+        ("calc_duty", "Госпошлина", "По ст. 333.19 и 333.21 НК РФ"),
+        ("calc_interest", "Проценты ст. 395 ГК и неустойка", "По ключевой ставке ЦБ, с частичными оплатами"),
+    ]),
+    ("Страницы", [
+        ("merge", "Объединить PDF", "Добавить PDF-файлы и картинки в конец документа"),
+        ("organize", "Упорядочить страницы", "Перетаскивайте миниатюры мышью"),
         ("split", "Разделить PDF", "Разбить документ на несколько файлов"),
-        ("rotate", "Повернуть PDF", "Повернуть все или выбранные страницы"),
+        ("rotate", "Повернуть", "Повернуть все или выбранные страницы"),
         ("delete", "Удалить страницы", "Удалить страницы по номерам"),
         ("extract", "Извлечь страницы", "Сохранить выбранные страницы в новый файл"),
-        ("pagesize", "Размер страниц (A4, A5, Letter…)", "Привести страницы к нужному формату бумаги и ориентации"),
-        ("blank", "Вставить пустую страницу", "Добавить чистый лист нужного формата после выбранной страницы"),
+        ("pagesize", "Размер страниц", "A4, A5, Letter или свой размер"),
+        ("blank", "Пустая страница", "Добавить чистый лист нужного формата"),
         ("reverse", "Обратный порядок", "Развернуть порядок страниц"),
     ]),
-    ("Оптимизация", [
-        ("compress", "Сжать PDF", "Уменьшить размер файла"),
-        ("repair", "Восстановить PDF", "Починить повреждённый файл"),
-        ("ocr", "OCR — распознать текст", "Сделать скан доступным для поиска и копирования"),
-        ("pdfa", "PDF в PDF/A", "Архивный формат (нужен Ghostscript)"),
-    ]),
-    ("Конвертировать в PDF", [
-        ("img2pdf", "JPG / картинки в PDF", "Собрать PDF из изображений"),
-        ("word2pdf", "Word в PDF", "DOC, DOCX, RTF, ODT (нужен MS Office или LibreOffice)"),
-        ("ppt2pdf", "PowerPoint в PDF", "PPT, PPTX (нужен MS Office или LibreOffice)"),
-        ("xls2pdf", "Excel в PDF", "XLS, XLSX (нужен MS Office или LibreOffice)"),
-        ("html2pdf", "HTML / сайт в PDF", "Страница сайта или HTML-файл (через Edge/Chrome)"),
-    ]),
-    ("Конвертировать из PDF", [
-        ("pdf2word", "PDF в Word", "Редактируемый DOCX"),
-        ("pdf2excel", "PDF в Excel", "Таблицы из PDF в XLSX"),
-        ("pdf2ppt", "PDF в PowerPoint", "Каждая страница — слайд"),
-        ("pdf2jpg", "PDF в JPG / PNG", "Страницы в картинки или извлечь все изображения"),
-        ("pdf2md", "PDF в Markdown", "Для заметок (Obsidian и т.п.) и нейросетей"),
-        ("pdf2txt", "PDF в текст (TXT)", "Весь текст документа"),
-    ]),
     ("Редактирование", [
-        ("edit", "Редактировать PDF", "Текст, картинки, фигуры, пометки, ссылки"),
-        ("sign", "Подписать PDF", "Нарисовать, напечатать или вставить скан подписи/печати"),
+        ("edit", "Редактировать", "Текст, картинки, фигуры, пометки, ссылки"),
+        ("sign", "Подписать", "Нарисовать, напечатать или вставить скан подписи/печати"),
         ("watermark", "Водяной знак", "Текст или картинка поверх страниц"),
         ("numbers", "Номера страниц", "Пронумеровать страницы"),
-        ("crop", "Обрезка PDF", "Обрезать поля страниц"),
-        ("redact", "Скрыть данные", "Найти и безвозвратно закрасить текст, e-mail, телефоны"),
+        ("crop", "Обрезать поля", "Обрезать поля страниц"),
+        ("redact", "Скрыть данные", "Найти и безвозвратно закрасить текст"),
         ("highlight", "Найти и выделить", "Подсветить все вхождения слов"),
         ("forms", "PDF-формы", "Заполнить поля формы"),
-        ("meta", "Свойства документа", "Название, автор, тема, ключевые слова"),
+        ("meta", "Свойства документа", "Название, автор, тема"),
     ]),
-    ("Безопасность и сравнение", [
-        ("protect", "Защитить паролем", "Зашифровать PDF (AES-256)"),
-        ("unlock", "Снять пароль", "Открыть защищённый PDF и сохранить без пароля"),
-        ("compare", "Сравнить PDF", "Найти отличия между двумя версиями"),
+    ("Оптимизация", [
+        ("compress", "Сжать", "Уменьшить размер файла"),
+        ("ocr", "Распознать текст (OCR)", "Сделать скан доступным для поиска и копирования"),
+        ("repair", "Восстановить", "Починить повреждённый файл"),
+        ("pdfa", "PDF/A", "Архивный формат (нужен Ghostscript)"),
+    ]),
+    ("Конвертировать в PDF", [
+        ("img2pdf", "Картинки в PDF", "JPG, PNG и др."),
+        ("word2pdf", "Word в PDF", "Нужен MS Office или LibreOffice"),
+        ("xls2pdf", "Excel в PDF", "Нужен MS Office или LibreOffice"),
+        ("ppt2pdf", "PowerPoint в PDF", "Нужен MS Office или LibreOffice"),
+        ("html2pdf", "Сайт / HTML в PDF", "Через Edge или Chrome"),
+    ]),
+    ("Конвертировать из PDF", [
+        ("pdf2word", "В Word", "Редактируемый DOCX"),
+        ("pdf2excel", "В Excel", "Таблицы в XLSX"),
+        ("pdf2ppt", "В PowerPoint", "Каждая страница — слайд"),
+        ("pdf2jpg", "В картинки", "JPG / PNG или извлечь изображения"),
+        ("pdf2txt", "В текст", "Весь текст документа"),
+        ("pdf2md", "В Markdown", "Для заметок и нейросетей"),
+    ]),
+    ("Защита и сравнение", [
+        ("protect", "Поставить пароль", "Зашифровать PDF (AES-256)"),
+        ("unlock", "Снять пароль", "Сохранить без пароля"),
+        ("compare", "Сравнить два PDF", "Найти отличия между версиями"),
     ]),
 ]
+EXPANDED = {"Для суда и почты", "Материалы дела", "Страницы"}
+LEGAL_TOOLS = ["package", "f107", "sheetnum", "certify", "preflight", "anonymize", "compare_ed",
+               "case_search", "quote", "template"]
+# инструменты со справкой «?»
+HELP_KEYS = set(LEGAL_TOOLS) | {"calc_deadline", "calc_duty", "calc_interest", "ocr", "compress", "pdfa",
+                                "redact", "split", "protect", "compare", "pagesize", "forms"}
 
 
 class MainWindow(QMainWindow):
+    for _k in LEGAL_TOOLS:
+        locals()["tool_" + _k] = (lambda k: lambda self: getattr(U, "tool_" + k)(self))(_k)
+    del _k
+
     def __init__(self):
         super().__init__()
         self.doc = fitz.open()
@@ -1190,8 +1226,12 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon(resource("app.ico")))
         self.resize(1400, 900)
         self.setAcceptDrops(True)
+        self.cases_page = None
+        self.last_case = None
+        U.bind(globals())
         self._build()
         self.update_title()
+        self.reminders = U.Reminders(self)
 
     # ------------------------------------------------------------------ UI
     def _build(self):
@@ -1200,6 +1240,7 @@ class MainWindow(QMainWindow):
         tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         tb.setIconSize(QSize(18, 18))
         self.addToolBar(tb)
+        self.toolbar = tb
         st = self.style()
 
         def act(text, slot, shortcut=None, icon=None, tip=None):
@@ -1232,7 +1273,6 @@ class MainWindow(QMainWindow):
         self.a_selall = act("Выделить всё", lambda: self.pages.selectAll(), QKeySequence.SelectAll)
         for a in (self.a_open, self.a_add, self.a_save):
             tb.addAction(a)
-        tb.addAction(self.a_saveas)
         mb = self.menuBar()
         mf = mb.addMenu("Файл")
         for a in (self.a_open, self.a_add, self.a_save, self.a_saveas):
@@ -1257,11 +1297,22 @@ class MainWindow(QMainWindow):
             a.setChecked(key == cur)
             grp.addAction(a)
             a.triggered.connect(lambda _=False, k=key: self.set_theme(k))
+        mv.addSeparator()
+        for i, name in enumerate(("Документ", "Дела", "Калькуляторы")):
+            a = mv.addAction(name, lambda i=i: self.show_section(i))
+            a.setShortcut(f"Ctrl+{i + 1}")
         mt = mb.addMenu("Инструменты")
-        for cat, items in TOOLS:
+        for cat, items in TOOLS[3:]:
             sub = mt.addMenu(cat)
             for key, label, _tip in items:
                 sub.addAction(label, getattr(self, "tool_" + key))
+        ml = mb.addMenu("Юристу")
+        ml.addAction("Дела и сроки", self.show_cases)
+        ml.addSeparator()
+        for cat, items in TOOLS[:3]:
+            for key, label, _tip in items:
+                ml.addAction(label, getattr(self, "tool_" + key))
+            ml.addSeparator()
         mh = mb.addMenu("Справка")
         mh.addAction("Как пользоваться", self.tool_organize)
         mh.addAction("Установить обновление из архива…", self.install_update)
@@ -1277,13 +1328,14 @@ class MainWindow(QMainWindow):
             tb.addAction(a)
             tb.widgetForAction(a).setToolButtonStyle(Qt.ToolButtonIconOnly)
         tb.addSeparator()
-        for a in (self.a_rl, self.a_rr, self.a_del, self.a_dup, self.a_blank, self.a_extract, self.a_edit):
+        for a in (self.a_rl, self.a_rr, self.a_del, self.a_edit):
             tb.addAction(a)
-        self.addAction(self.a_selall)
+        for a in (self.a_selall, self.a_dup, self.a_extract):
+            self.addAction(a)
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
-        tb.addWidget(QLabel("Размер миниатюр "))
+        tb.addWidget(QLabel("Миниатюры "))
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(80, 320)
         self.slider.setValue(self.thumb_w)
@@ -1294,23 +1346,40 @@ class MainWindow(QMainWindow):
         # левая панель инструментов
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
-        self.tree.setIndentation(10)
+        self.tree.setIndentation(12)
         self.tree.setObjectName("tools")
-        bold = QFont()
-        bold.setBold(True)
+        self.tree.setColumnCount(2)
+        self.tree.setRootIsDecorated(True)
+        self.tree.setFocusPolicy(Qt.NoFocus)
+        hdr = self.tree.header()
+        hdr.setStretchLastSection(False)
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.Fixed)
+        hdr.resizeSection(1, 30)
+        self.tree.setRootIsDecorated(False)
         for cat, items in TOOLS:
-            top = QTreeWidgetItem([cat])
-            top.setFont(0, bold)
+            top = QTreeWidgetItem([cat.upper()])
             top.setFlags(Qt.ItemIsEnabled)
+            top.setData(0, Qt.UserRole + 1, "header")
+            f = top.font(0)
+            f.setPointSizeF(max(7.5, f.pointSizeF() * 0.8))
+            f.setBold(True)
+            f.setLetterSpacing(QFont.PercentageSpacing, 104)
+            top.setFont(0, f)
             self.tree.addTopLevelItem(top)
             for key, label, tip in items:
                 it = QTreeWidgetItem([label])
                 it.setData(0, Qt.UserRole, key)
                 it.setToolTip(0, tip)
                 top.addChild(it)
-            top.setExpanded(True)
+                if key in HELP_KEYS:
+                    self.tree.setItemWidget(it, 1, U.HelpButton(key))
+            top.setExpanded(cat in EXPANDED)
+            self._chevron(top)
+        self.tree.itemExpanded.connect(self._chevron)
+        self.tree.itemCollapsed.connect(self._chevron)
         self.tree.itemClicked.connect(self.on_tool)
-        self.tree.setMinimumWidth(240)
+        self.tree.setMinimumWidth(250)
 
         self.pages = PageList()
         self.pages.orderChanged.connect(self.on_reorder)
@@ -1321,11 +1390,62 @@ class MainWindow(QMainWindow):
         self.pages.itemSelectionChanged.connect(self.update_status)
 
         split = QSplitter()
+        split.setHandleWidth(1)
         split.addWidget(self.tree)
         split.addWidget(self.pages)
         split.setStretchFactor(1, 1)
-        split.setSizes([260, 1100])
-        self.setCentralWidget(split)
+        split.setSizes([270, 1100])
+
+        # навигация слева (как в приложениях Apple)
+        nav = QWidget()
+        nav.setObjectName("nav")
+        nv = QVBoxLayout(nav)
+        nv.setContentsMargins(8, 12, 8, 12)
+        nv.setSpacing(6)
+        self.nav_btns = []
+        for i, (glyph, name, tip) in enumerate((("📄", "Документ", "Работа с PDF (Ctrl+1)"),
+                                                ("⚖️", "Дела", "Карточки дел, сроки, заседания (Ctrl+2)"),
+                                                ("🧮", "Расчёты", "Сроки, госпошлина, проценты (Ctrl+3)"))):
+            b = QToolButton()
+            b.setObjectName("navbtn")
+            b.setText(f"{glyph}\n{name}")
+            b.setToolTip(tip)
+            b.setCheckable(True)
+            b.setAutoExclusive(True)
+            b.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            b.setFixedSize(84, 62)
+            b.clicked.connect(lambda _=False, i=i: self.show_section(i))
+            nv.addWidget(b)
+            self.nav_btns.append(b)
+        nv.addStretch(1)
+        self.nav_btns[0].setChecked(True)
+
+        self.cases_page = U.CasesPage(self)
+        self.cases_page.openFile.connect(self.open_external)
+        self.calc_page = U.CalcPage()
+        self.stack = QStackedWidget()
+        for w in (split, self.cases_page, self.calc_page):
+            self.stack.addWidget(w)
+
+        self.banner = QPushButton()
+        self.banner.setObjectName("banner")
+        self.banner.setCursor(Qt.PointingHandCursor)
+        self.banner.clicked.connect(self.show_cases)
+        self.banner.hide()
+
+        right = QWidget()
+        rv = QVBoxLayout(right)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(0)
+        rv.addWidget(self.banner)
+        rv.addWidget(self.stack, 1)
+        central = QWidget()
+        ch = QHBoxLayout(central)
+        ch.setContentsMargins(0, 0, 0, 0)
+        ch.setSpacing(0)
+        ch.addWidget(nav)
+        ch.addWidget(right, 1)
+        self.setCentralWidget(central)
         self.status_lbl = QLabel()
         self.statusBar().addPermanentWidget(self.status_lbl)
         self.apply_thumb_geometry()
@@ -1961,9 +2081,73 @@ class MainWindow(QMainWindow):
             self.open_paths(paths, insert_at=(sel[-1] + 1) if sel else None)
 
     # ------------------------------------------------------------- tools
+    def _chevron(self, item):
+        if item.data(0, Qt.UserRole + 1) != "header":
+            return
+        name = item.text(0).lstrip("▾▸ ").strip()
+        item.setText(0, ("▾  " if item.isExpanded() else "▸  ") + name)
+
+    # ------------------------------------------------------------- разделы и юр. функции
+    def show_section(self, i):
+        self.stack.setCurrentIndex(i)
+        self.nav_btns[i].setChecked(True)
+        self.toolbar.setVisible(i == 0)
+        if i == 1:
+            self.cases_page.reload()
+
+    def show_cases(self):
+        self.show_section(1)
+
+    def show_calc(self, tab=0):
+        self.show_section(2)
+        self.calc_page.tabs.setCurrentIndex(tab)
+
+    def tool_calc_deadline(self):
+        self.show_calc(0)
+
+    def tool_calc_duty(self):
+        self.show_calc(1)
+
+    def tool_calc_interest(self):
+        self.show_calc(2)
+
+    def set_banner(self, text):
+        self.banner.setText(text)
+        self.banner.setVisible(bool(text))
+
+    def refresh_cases(self):
+        if self.cases_page:
+            self.cases_page.reload()
+            try:
+                self.cases_page.reload_upcoming()
+            except Exception:
+                pass
+            if self.last_case:
+                self.cases_page.select_case(self.last_case)
+
+    def open_external(self, path, page=0):
+        if not os.path.exists(path):
+            return QMessageBox.warning(self, APP_NAME, f"Файл не найден:\n{path}")
+        if not self.maybe_save():
+            return
+        self.show_section(0)
+        self.open_paths([path], replace=True)
+        if 0 <= page < self.doc.page_count:
+            self.pages.clearSelection()
+            it = self.pages.item(page)
+            it.setSelected(True)
+            self.pages.scrollToItem(it)
+
+    def ask_password(self, name):
+        pw, ok = QInputDialog.getText(self, APP_NAME, f"Файл «{name}» защищён паролем.\nВведите пароль:",
+                                      QLineEdit.Password)
+        return pw if ok else None
+
     def on_tool(self, item, _col=0):
         key = item.data(0, Qt.UserRole)
         if not key:
+            if item.childCount():
+                item.setExpanded(not item.isExpanded())
             return
         fn = getattr(self, "tool_" + key, None)
         if fn:
@@ -2539,72 +2723,124 @@ class MainWindow(QMainWindow):
 
 
 # =============================================================================
-THEMES = {
-    "light": dict(win="#f4f5f7", panel="#ffffff", base="#ffffff", alt="#f7f8fa", text="#23272e", muted="#6b7280",
-                  border="#e1e3e8", input_border="#c9ccd3", hover="#f1f2f5", pressed="#e6e8ec",
-                  pages="#eceef1", tool_hover="#fdecec", note_bg="#fff7e6", note_border="#f3d9a4",
-                  note_text="#5a4a1f", canvas="#6b7078", item_hover="rgba(0,0,0,0.05)",
-                  disabled="#a0a4ab", thumb_border="#c9ccd1", tooltip="#ffffe1"),
-    "dark": dict(win="#1e1f22", panel="#2b2d31", base="#26282c", alt="#303236", text="#e6e7ea", muted="#9aa0a8",
-                 border="#3a3d42", input_border="#4a4e55", hover="#3a3d42", pressed="#45484e",
-                 pages="#18191b", tool_hover="#3d2426", note_bg="#3a3120", note_border="#6b5a2e",
-                 note_text="#f0dfb0", canvas="#111214", item_hover="rgba(255,255,255,0.06)",
-                 disabled="#6a6e75", thumb_border="#4a4e55", tooltip="#3a3d42"),
+THEMES = {      # палитры в духе iOS / macOS (systemGroupedBackground, secondarySystemBackground…)
+    "light": dict(win="#f2f2f7", panel="#ffffff", base="#ffffff", alt="#f2f2f7", text="#1c1c1e", muted="#8e8e93",
+                  border="#e5e5ea", input_border="#d1d1d6", hover="#e9e9ee", pressed="#dcdce1",
+                  pages="#f2f2f7", tool_hover="#e9e9ee", note_bg="#fff8e6", note_border="#f5e2b0",
+                  note_text="#6b5410", canvas="#8e8e93", item_hover="rgba(0,0,0,0.04)",
+                  disabled="#b0b0b6", thumb_border="#d1d1d6", tooltip="#ffffff", accent="#007aff",
+                  accent_soft="rgba(0,122,255,0.12)", banner="#fff4e5", banner_text="#8a5300",
+                  nav="#e9e9ee", danger="#ff3b30"),
+    "dark": dict(win="#000000", panel="#1c1c1e", base="#1c1c1e", alt="#2c2c2e", text="#f2f2f7", muted="#98989f",
+                 border="#38383a", input_border="#48484a", hover="#2c2c2e", pressed="#3a3a3c",
+                 pages="#0b0b0c", tool_hover="#2c2c2e", note_bg="#2e2616", note_border="#5a4a22",
+                 note_text="#f5dfa4", canvas="#111112", item_hover="rgba(255,255,255,0.05)",
+                 disabled="#5b5b60", thumb_border="#48484a", tooltip="#2c2c2e", accent="#0a84ff",
+                 accent_soft="rgba(10,132,255,0.22)", banner="#33280f", banner_text="#ffd28a",
+                 nav="#141415", danger="#ff453a"),
 }
 THEME_NAMES = {"system": "Как в Windows", "light": "Светлая", "dark": "Тёмная"}
 T = dict(THEMES["light"])            # текущие цвета (меняются при смене темы)
 
 
 def make_style(t):
+    A = t["accent"]
     return f"""
+* {{ outline: 0; }}
 QMainWindow, QDialog {{ background: {t['win']}; }}
 QWidget {{ color: {t['text']}; }}
-QMenuBar {{ background: {t['panel']}; color: {t['text']}; }}
+QMenuBar {{ background: {t['win']}; color: {t['text']}; padding: 2px 6px; }}
+QMenuBar::item {{ padding: 4px 10px; border-radius: 6px; }}
 QMenuBar::item:selected {{ background: {t['hover']}; }}
-QMenu {{ background: {t['panel']}; color: {t['text']}; border: 1px solid {t['border']}; }}
-QMenu::item:selected {{ background: {ACCENT}; color: white; }}
+QMenu {{ background: {t['panel']}; color: {t['text']}; border: 1px solid {t['border']}; border-radius: 10px; padding: 6px; }}
+QMenu::item {{ padding: 6px 22px 6px 12px; border-radius: 6px; }}
+QMenu::item:selected {{ background: {A}; color: white; }}
 QMenu::item:disabled {{ color: {t['disabled']}; }}
-QMenu::separator {{ height: 1px; background: {t['border']}; margin: 4px 8px; }}
-QToolBar {{ background: {t['panel']}; border: none; border-bottom: 1px solid {t['border']}; padding: 4px; spacing: 2px; }}
-QToolBar QToolButton {{ padding: 5px 9px; border-radius: 6px; color: {t['text']}; }}
+QMenu::separator {{ height: 1px; background: {t['border']}; margin: 5px 8px; }}
+QToolBar {{ background: {t['win']}; border: none; border-bottom: 1px solid {t['border']}; padding: 6px 10px; spacing: 4px; }}
+QToolBar::separator {{ width: 1px; background: {t['border']}; margin: 6px 6px; }}
+QToolBar QToolButton {{ padding: 6px 10px; border-radius: 8px; color: {t['text']}; }}
 QToolBar QToolButton:hover {{ background: {t['hover']}; }}
 QToolBar QToolButton:pressed {{ background: {t['pressed']}; }}
 QToolBar QToolButton:disabled {{ color: {t['disabled']}; }}
-QTreeWidget#tools {{ background: {t['panel']}; color: {t['text']}; border: none; border-right: 1px solid {t['border']}; font-size: 10pt; padding: 6px 4px; }}
-QTreeWidget#tools::item {{ padding: 5px 4px; border-radius: 6px; }}
-QTreeWidget#tools::item:hover {{ background: {t['tool_hover']}; color: {ACCENT}; }}
-QTreeWidget#tools::item:selected {{ background: {ACCENT}; color: white; }}
-QListWidget#pages {{ background: {t['pages']}; color: {t['text']}; border: none; padding: 10px; }}
-QListWidget#pages::item {{ border-radius: 8px; }}
-QListWidget#pages::item:selected {{ background: rgba(217,54,62,0.18); border: 2px solid {ACCENT}; }}
+QToolBar QLabel {{ color: {t['muted']}; }}
+QWidget#nav {{ background: {t['nav']}; border-right: 1px solid {t['border']}; }}
+QToolButton#navbtn {{ border: none; border-radius: 12px; padding: 4px; color: {t['muted']}; font-size: 9pt; }}
+QToolButton#navbtn:hover {{ background: {t['hover']}; color: {t['text']}; }}
+QToolButton#navbtn:checked {{ background: {t['panel']}; color: {A}; font-weight: 600; border: 1px solid {t['border']}; }}
+QPushButton#banner {{ background: {t['banner']}; color: {t['banner_text']}; border: none; border-bottom: 1px solid {t['border']};
+    border-radius: 0; padding: 8px 16px; text-align: left; font-weight: 600; }}
+QPushButton#banner:hover {{ background: {t['banner']}; text-decoration: underline; }}
+QTreeWidget#tools {{ background: {t['win']}; color: {t['text']}; border: none; border-right: 1px solid {t['border']}; padding: 8px 6px; }}
+QTreeWidget#tools::item {{ padding: 5px 4px; border-radius: 8px; margin: 1px 0; }}
+QTreeWidget#tools::item:hover {{ background: {t['hover']}; }}
+QTreeWidget#tools::item:selected {{ background: {t['accent_soft']}; color: {A}; }}
+QTreeWidget#tools::branch {{ background: transparent; }}
+QToolButton#help {{ border: 1px solid {t['input_border']}; border-radius: 11px; color: {t['muted']}; background: {t['panel']};
+    font-weight: 700; font-size: 9pt; padding: 0; }}
+QToolButton#help:hover {{ background: {A}; color: white; border-color: {A}; }}
+QListWidget#pages {{ background: {t['pages']}; color: {t['text']}; border: none; padding: 14px; }}
+QListWidget#pages::item {{ border-radius: 10px; }}
+QListWidget#pages::item:selected {{ background: {t['accent_soft']}; border: 2px solid {A}; }}
 QListWidget#pages::item:hover {{ background: {t['item_hover']}; }}
-QPushButton {{ padding: 6px 14px; border: 1px solid {t['input_border']}; border-radius: 6px; background: {t['base']}; color: {t['text']}; }}
-QPushButton:hover {{ border-color: {ACCENT}; }}
+QPushButton {{ padding: 7px 16px; border: 1px solid {t['input_border']}; border-radius: 8px; background: {t['panel']}; color: {t['text']}; }}
+QPushButton:hover {{ background: {t['hover']}; }}
+QPushButton:pressed {{ background: {t['pressed']}; }}
 QPushButton:disabled {{ color: {t['disabled']}; }}
-QPushButton#primary, QDialogButtonBox QPushButton:default {{ background: {ACCENT}; color: white; border-color: {ACCENT}; }}
-QToolButton#mode {{ text-align: left; padding: 7px 10px; border-radius: 6px; border: 1px solid transparent; background: {t['base']}; color: {t['text']}; }}
-QToolButton#mode:hover {{ border-color: #e5b3b5; }}
-QToolButton#mode:checked {{ background: {ACCENT}; color: white; }}
-QLabel#note {{ background: {t['note_bg']}; border: 1px solid {t['note_border']}; border-radius: 6px; padding: 8px; color: {t['note_text']}; }}
-QLabel#hint {{ color: {t['muted']}; font-style: italic; }}
+QPushButton#primary, QDialogButtonBox QPushButton:default {{ background: {A}; color: white; border: 1px solid {A}; font-weight: 600; }}
+QPushButton#primary:hover, QDialogButtonBox QPushButton:default:hover {{ background: {A}; border-color: {A}; }}
+QPushButton#primary:disabled {{ background: {t['input_border']}; border-color: {t['input_border']}; color: {t['panel']}; }}
+QToolButton#mode {{ text-align: left; padding: 7px 10px; border-radius: 8px; border: 1px solid transparent; background: transparent; color: {t['text']}; }}
+QToolButton#mode:hover {{ background: {t['hover']}; }}
+QToolButton#mode:checked {{ background: {A}; color: white; }}
+QFrame#card {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 12px; }}
+QWidget#sidepanel {{ background: {t['win']}; border-right: 1px solid {t['border']}; }}
+QLabel#title {{ font-size: 18pt; font-weight: 700; }}
+QLabel#subtitle {{ font-size: 12pt; font-weight: 600; }}
+QLabel#bigresult {{ font-size: 17pt; font-weight: 700; color: {A}; }}
+QLabel#note {{ background: {t['note_bg']}; border: 1px solid {t['note_border']}; border-radius: 10px; padding: 10px; color: {t['note_text']}; }}
+QLabel#hint {{ color: {t['muted']}; }}
+QTextBrowser#result {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 12px; padding: 8px; }}
+QListWidget#caselist, QListWidget#upcoming {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 12px; padding: 4px; }}
+QListWidget#caselist::item, QListWidget#upcoming::item {{ padding: 8px 8px; border-radius: 8px; }}
+QListWidget#caselist::item:selected, QListWidget#upcoming::item:selected {{ background: {A}; color: white; }}
 QScrollArea#canvasArea {{ background: {t['canvas']}; border: none; }}
-QStatusBar {{ background: {t['panel']}; color: {t['text']}; border-top: 1px solid {t['border']}; }}
-QStatusBar QLabel {{ color: {t['text']}; }}
-QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit {{ padding: 4px 6px; border: 1px solid {t['input_border']}; border-radius: 5px; background: {t['base']}; color: {t['text']}; selection-background-color: {ACCENT}; selection-color: white; }}
-QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {{ color: {t['disabled']}; background: {t['alt']}; }}
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus {{ border-color: {ACCENT}; }}
-QComboBox QAbstractItemView {{ background: {t['base']}; color: {t['text']}; selection-background-color: {ACCENT}; selection-color: white; }}
-QTableWidget, QTreeWidget, QListWidget {{ background: {t['base']}; color: {t['text']}; alternate-background-color: {t['alt']}; gridline-color: {t['border']}; }}
-QHeaderView::section {{ background: {t['alt']}; color: {t['text']}; border: none; border-bottom: 1px solid {t['border']}; padding: 4px; }}
-QTabWidget::pane {{ border: 1px solid {t['border']}; }}
-QTabBar::tab {{ background: {t['alt']}; color: {t['text']}; padding: 6px 12px; border: 1px solid {t['border']}; border-bottom: none; }}
-QTabBar::tab:selected {{ background: {t['base']}; border-top: 2px solid {ACCENT}; }}
+QScrollArea {{ background: transparent; }}
+QStatusBar {{ background: {t['win']}; color: {t['muted']}; border-top: 1px solid {t['border']}; }}
+QStatusBar QLabel {{ color: {t['muted']}; }}
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit, QDateEdit {{ padding: 6px 8px; border: 1px solid {t['input_border']};
+    border-radius: 8px; background: {t['base']}; color: {t['text']}; selection-background-color: {A}; selection-color: white; }}
+QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled, QDateEdit:disabled {{ color: {t['disabled']}; background: {t['alt']}; }}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus, QDateEdit:focus {{ border: 2px solid {A}; padding: 5px 7px; }}
+QComboBox::drop-down, QDateEdit::drop-down {{ border: none; width: 22px; }}
+QComboBox QAbstractItemView {{ background: {t['panel']}; color: {t['text']}; border: 1px solid {t['border']}; border-radius: 8px;
+    selection-background-color: {A}; selection-color: white; padding: 4px; }}
+QTableWidget, QTreeWidget, QListWidget {{ background: {t['base']}; color: {t['text']}; alternate-background-color: {t['alt']};
+    gridline-color: {t['border']}; border: 1px solid {t['border']}; border-radius: 10px; }}
+QTableWidget::item:selected, QListWidget::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; }}
+QHeaderView::section {{ background: {t['alt']}; color: {t['muted']}; border: none; border-bottom: 1px solid {t['border']}; padding: 6px; font-weight: 600; }}
+QTabWidget::pane {{ border: none; }}
+QTabBar::tab {{ background: {t['hover']}; color: {t['text']}; padding: 6px 18px; border: none; margin: 0 1px; }}
+QTabBar::tab:first {{ border-top-left-radius: 8px; border-bottom-left-radius: 8px; }}
+QTabBar::tab:last {{ border-top-right-radius: 8px; border-bottom-right-radius: 8px; }}
+QTabBar::tab:selected {{ background: {t['panel']}; color: {A}; font-weight: 600; border: 1px solid {t['border']}; }}
 QCheckBox, QRadioButton, QLabel {{ color: {t['text']}; }}
 QCheckBox:disabled, QRadioButton:disabled, QLabel:disabled {{ color: {t['disabled']}; }}
-QToolTip {{ background: {t['tooltip']}; color: {t['text']}; border: 1px solid {t['border']}; }}
-QProgressDialog {{ background: {t['win']}; }}
+QCheckBox::indicator, QRadioButton::indicator {{ width: 18px; height: 18px; }}
+QToolTip {{ background: {t['tooltip']}; color: {t['text']}; border: 1px solid {t['border']}; border-radius: 6px; padding: 4px 6px; }}
+QSplitter::handle {{ background: {t['border']}; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+QScrollBar::handle:vertical {{ background: {t['input_border']}; border-radius: 4px; min-height: 30px; }}
+QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
+QScrollBar::handle:horizontal {{ background: {t['input_border']}; border-radius: 4px; min-width: 30px; }}
+QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
+QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 0; border: none; }}
+QSpinBox::up-button, QSpinBox::down-button, QDateEdit::up-button, QDateEdit::down-button {{ width: 16px; border: none; background: transparent; }}
 QSlider::groove:horizontal {{ height: 4px; background: {t['input_border']}; border-radius: 2px; }}
-QSlider::handle:horizontal {{ background: {ACCENT}; width: 14px; margin: -6px 0; border-radius: 7px; }}
+QSlider::sub-page:horizontal {{ background: {A}; border-radius: 2px; }}
+QSlider::handle:horizontal {{ background: white; border: 1px solid {t['input_border']}; width: 18px; margin: -8px 0; border-radius: 9px; }}
+QProgressDialog {{ background: {t['win']}; }}
 """
 
 
@@ -2657,7 +2893,7 @@ def apply_theme(app, choice=None):
         QPalette.Window: t["win"], QPalette.WindowText: t["text"], QPalette.Base: t["base"],
         QPalette.AlternateBase: t["alt"], QPalette.Text: t["text"], QPalette.Button: t["panel"],
         QPalette.ButtonText: t["text"], QPalette.ToolTipBase: t["tooltip"], QPalette.ToolTipText: t["text"],
-        QPalette.PlaceholderText: t["muted"], QPalette.Highlight: ACCENT, QPalette.HighlightedText: "#ffffff",
+        QPalette.PlaceholderText: t["muted"], QPalette.Highlight: t["accent"], QPalette.HighlightedText: "#ffffff",
         QPalette.Link: "#4a8fe7" if name == "dark" else "#1f5fbf", QPalette.BrightText: "#ffffff",
         QPalette.Light: t["hover"], QPalette.Midlight: t["border"], QPalette.Mid: t["input_border"],
         QPalette.Dark: t["pressed"], QPalette.Shadow: "#000000",
@@ -2689,8 +2925,15 @@ def main():
     sys.excepthook = hook
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    from PySide6.QtCore import QLocale
+    QLocale.setDefault(QLocale(QLocale.Russian, QLocale.Russia))
     app.setStyle("Fusion")
     f = app.font()
+    fams = set(QFontDatabase.families())
+    for fam in ("Segoe UI Variable Text", "SF Pro Text", "Segoe UI", "Helvetica Neue", "Inter"):
+        if fam in fams:
+            f.setFamily(fam)
+            break
     f.setPointSize(10)
     app.setFont(f)
     apply_theme(app)

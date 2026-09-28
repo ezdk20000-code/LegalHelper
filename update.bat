@@ -78,7 +78,7 @@ echo [3/5] Собираю программу...
 pushd "%BSRC%"
 "%VPY%" -m PyInstaller --noconfirm --clean --windowed --log-level WARN --name PDFMaster --icon app.ico ^
   --add-data "app.ico;." --add-data "tessdata;tessdata" ^
-  --collect-data pptx --collect-all pymupdf4llm --collect-all pdf2docx ^
+  --collect-data pptx --collect-data docx --collect-all pymupdf4llm --collect-all pdf2docx --hidden-import legal_ui --hidden-import legal_core --hidden-import cases --hidden-import legal_data ^
   pdf_master.py >>"%LOG%" 2>&1
 set "BERR=%errorlevel%"
 popd
