@@ -1,0 +1,348 @@
+{
+"files": [
+{
+"path": "CHANGELOG.md",
+"size": 22308
+},
+{
+"path": "README.md",
+"size": 7739
+},
+{
+"path": "anim.py",
+"size": 7133
+},
+{
+"path": "app.ico",
+"size": 38663
+},
+{
+"path": "backup.py",
+"size": 8144
+},
+{
+"path": "build_exe.bat",
+"size": 202
+},
+{
+"path": "case_tabs.py",
+"size": 68654
+},
+{
+"path": "casefile.py",
+"size": 10531
+},
+{
+"path": "cases.py",
+"size": 24524
+},
+{
+"path": "excalidraw/Assistant-Bold-ZDZZ6JHA.woff2",
+"size": 20380
+},
+{
+"path": "excalidraw/Assistant-Medium-DZ25RZU3.woff2",
+"size": 20320
+},
+{
+"path": "excalidraw/Assistant-Regular-PLF2XOGW.woff2",
+"size": 20232
+},
+{
+"path": "excalidraw/Assistant-SemiBold-CZ5MX6FK.woff2",
+"size": 20212
+},
+{
+"path": "excalidraw/LICENSE-excalidraw.txt",
+"size": 745
+},
+{
+"path": "excalidraw/app.css",
+"size": 144624
+},
+{
+"path": "excalidraw/app.js",
+"size": 8483406
+},
+{
+"path": "excalidraw/fonts/Assistant/Assistant-Bold.woff2",
+"size": 20380
+},
+{
+"path": "excalidraw/fonts/Assistant/Assistant-Medium.woff2",
+"size": 20320
+},
+{
+"path": "excalidraw/fonts/Assistant/Assistant-Regular.woff2",
+"size": 20232
+},
+{
+"path": "excalidraw/fonts/Assistant/Assistant-SemiBold.woff2",
+"size": 20212
+},
+{
+"path": "excalidraw/fonts/Cascadia/CascadiaCode-Regular.woff2",
+"size": 65732
+},
+{
+"path": "excalidraw/fonts/ComicShanns/ComicShanns-Regular-279a7b317d12eb88de06167bd672b4b4.woff2",
+"size": 17488
+},
+{
+"path": "excalidraw/fonts/ComicShanns/ComicShanns-Regular-6e066e8de2ac57ea9283adb9c24d7f0c.woff2",
+"size": 1292
+},
+{
+"path": "excalidraw/fonts/ComicShanns/ComicShanns-Regular-dc6a8806fa96795d7b3be5026f989a17.woff2",
+"size": 2816
+},
+{
+"path": "excalidraw/fonts/ComicShanns/ComicShanns-Regular-fcb0fc02dcbee4c9846b3e2508668039.woff2",
+"size": 9856
+},
+{
+"path": "excalidraw/fonts/Excalifont/Excalifont-Regular-349fac6ca4700ffec595a7150a0d1e1d.woff2",
+"size": 2656
+},
+{
+"path": "excalidraw/fonts/Excalifont/Excalifont-Regular-3f2c5db56cc93c5a6873b1361d730c16.woff2",
+"size": 2104
+},
+{
+"path": "excalidraw/fonts/Excalifont/Excalifont-Regular-41b173a47b57366892116a575a43e2b6.woff2",
+"size": 8712
+},
+{
+"path": "excalidraw/fonts/Excalifont/Excalifont-Regular-623ccf21b21ef6b3a0d87738f77eb071.woff2",
+"size": 824
+},
+{
+"path": "excalidraw/fonts/Excalifont/Excalifont-Regular-a88b72a24fb54c9f94e3b5fdaa7481c9.woff2",
+"size": 24956
+},
+{
+"path": "excalidraw/fonts/Excalifont/Excalifont-Regular-b9dcf9d2e50a1eaf42fc664b50a3fd0d.woff2",
+"size": 13296
+},
+{
+"path": "excalidraw/fonts/Excalifont/Excalifont-Regular-be310b9bcd4f1a43f571c46df7809174.woff2",
+"size": 12220
+},
+{
+"path": "excalidraw/fonts/Liberation/LiberationSans-Regular.woff2",
+"size": 70668
+},
+{
+"path": "excalidraw/fonts/Lilita/Lilita-Regular-i7dPIFZ9Zz-WBtRtedDbYE98RXi4EwSsbg.woff2",
+"size": 1416
+},
+{
+"path": "excalidraw/fonts/Lilita/Lilita-Regular-i7dPIFZ9Zz-WBtRtedDbYEF8RXi4EwQ.woff2",
+"size": 10676
+},
+{
+"path": "excalidraw/fonts/Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTA3j6zbXWjgevT5.woff2",
+"size": 8392
+},
+{
+"path": "excalidraw/fonts/Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTQ3j6zbXWjgeg.woff2",
+"size": 16476
+},
+{
+"path": "excalidraw/fonts/Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTk3j6zbXWjgevT5.woff2",
+"size": 11104
+},
+{
+"path": "excalidraw/fonts/Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTo3j6zbXWjgevT5.woff2",
+"size": 15476
+},
+{
+"path": "excalidraw/fonts/Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTs3j6zbXWjgevT5.woff2",
+"size": 6116
+},
+{
+"path": "excalidraw/fonts/Virgil/Virgil-Regular.woff2",
+"size": 56156
+},
+{
+"path": "excalidraw/index.html",
+"size": 448
+},
+{
+"path": "excalidraw/source-app.jsx",
+"size": 4937
+},
+{
+"path": "forms/LiberationSans-Bold.ttf",
+"size": 414568
+},
+{
+"path": "forms/README.md",
+"size": 673
+},
+{
+"path": "forms/f107_blank.pdf",
+"size": 154210
+},
+{
+"path": "help/img/00_home.png",
+"size": 196863
+},
+{
+"path": "help/img/01_main.png",
+"size": 198097
+},
+{
+"path": "help/img/02_sidebar.png",
+"size": 72657
+},
+{
+"path": "help/img/03_loose.png",
+"size": 138120
+},
+{
+"path": "help/img/04_toolbar.png",
+"size": 10035
+},
+{
+"path": "help/img/05_editor.png",
+"size": 162543
+},
+{
+"path": "help/img/06_package.png",
+"size": 61096
+},
+{
+"path": "help/img/07_f107.png",
+"size": 49282
+},
+{
+"path": "help/img/08_anonymize.png",
+"size": 60422
+},
+{
+"path": "help/img/09_preflight.png",
+"size": 19464
+},
+{
+"path": "help/img/10_templates.png",
+"size": 186352
+},
+{
+"path": "help/img/11_profile.png",
+"size": 40313
+},
+{
+"path": "help/img/12_case.png",
+"size": 194722
+},
+{
+"path": "help/img/13_banner.png",
+"size": 12517
+},
+{
+"path": "help/img/14_events.png",
+"size": 139044
+},
+{
+"path": "help/img/15_docs.png",
+"size": 180299
+},
+{
+"path": "help/img/16_prepare.png",
+"size": 216538
+},
+{
+"path": "help/img/17_laws.png",
+"size": 153484
+},
+{
+"path": "help/img/18_money.png",
+"size": 153754
+},
+{
+"path": "help/img/19_board.png",
+"size": 174121
+},
+{
+"path": "help/img/20_deadline.png",
+"size": 173344
+},
+{
+"path": "help/img/21_duty.png",
+"size": 153045
+},
+{
+"path": "help/img/22_interest.png",
+"size": 160674
+},
+{
+"path": "help/img/23_dark.png",
+"size": 202492
+},
+{
+"path": "help_ui.py",
+"size": 51592
+},
+{
+"path": "installer.iss",
+"size": 3333
+},
+{
+"path": "legal_core.py",
+"size": 61872
+},
+{
+"path": "legal_data.py",
+"size": 15344
+},
+{
+"path": "legal_ui.py",
+"size": 209972
+},
+{
+"path": "pdf_core.py",
+"size": 49436
+},
+{
+"path": "pdf_master.py",
+"size": 222851
+},
+{
+"path": "requirements.txt",
+"size": 147
+},
+{
+"path": "run.bat",
+"size": 314
+},
+{
+"path": "templates_lib.py",
+"size": 59406
+},
+{
+"path": "tessdata/eng.traineddata",
+"size": 4113088
+},
+{
+"path": "tessdata/rus.traineddata",
+"size": 3861738
+},
+{
+"path": "timecheck.py",
+"size": 2839
+},
+{
+"path": "update.bat",
+"size": 12665
+},
+{
+"path": "updater.py",
+"size": 6556
+},
+{
+"path": "version.json",
+"size": 764
+}
+]
+}

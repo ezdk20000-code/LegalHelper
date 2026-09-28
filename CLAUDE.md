@@ -9,7 +9,8 @@
 - Папки с данными пользователя (`%LOCALAPPDATA%\PDFMaster`, `PDFMaster-build`) остались от старого названия — не переименовывать.
 - **`main` — выпущенная версия**: установленные программы читают `version.json` из `main` и скачивают архив `main`.
   Выпуск: поднять `APP_VERSION` (pdf_master.py), `MyAppVersion` (installer.iss), `version.json` (версия + notes),
-  дописать `CHANGELOG.md`, затем влить в `main`.
+  дописать `CHANGELOG.md`, запустить `python tools/make_manifest.py` (список файлов для запасного скачивания),
+  затем влить в `main`.
 - Оформление (iOS-стиль) — `THEMES` и `make_style()` в `pdf_master.py`; мелочи, не задаваемые стилями, — `polish_ui()`.
 - Снимки для справки: `QT_QPA_PLATFORM=offscreen python tools/screenshots.py help/img` (светлая тема) и
   `... tools/screenshots.py /tmp/dark dark` → `01_main.png` скопировать в `help/img/23_dark.png`.

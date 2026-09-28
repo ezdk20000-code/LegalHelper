@@ -34,7 +34,7 @@ import casefile as CF
 import anim
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "2.2"
+APP_VERSION = "2.3"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
 ACCENT = "#007aff"
 FAILED = object()
@@ -2076,7 +2076,7 @@ class MainWindow(QMainWindow):
         notes.clicked.connect(self.show_update_notes)
         install = QPushButton("Установить сейчас")
         install.setObjectName("updateinstall")
-        install.clicked.connect(self.download_update)
+        install.clicked.connect(lambda: self.download_update())
         later = QPushButton("Позже")
         later.setToolTip("Скрыть. Напомню при следующем запуске программы.")
         later.clicked.connect(bar.hide)
@@ -2131,11 +2131,11 @@ class MainWindow(QMainWindow):
         if box.clickedButton() is now:
             self.download_update()
 
-    def download_update(self):
+    def download_update(self, ask=True):
         info = self._update_info
         if not info or self._update_dlg:
             return
-        if QMessageBox.question(
+        if ask and QMessageBox.question(
                 self, APP_NAME, f"Установить версию {info['version']}?\n\nПрограмма скачает обновление, "
                                 "закроется, в отдельном окне соберёт и установит новую версию (обычно 2–4 минуты, "
                                 "в первый раз дольше) и откроется снова. Дела, шаблоны и настройки сохранятся."
@@ -2145,7 +2145,7 @@ class MainWindow(QMainWindow):
             return
         import threading, time
         dest = os.path.join(tempfile.gettempdir(), f"LegalHelper_{info['version']}_{int(time.time())}.zip")
-        dlg = QProgressDialog("Скачиваю обновление…", "Отмена", 0, 0, self)
+        dlg = QProgressDialog("Соединяюсь с GitHub…", "Отмена", 0, 0, self)
         dlg.setWindowTitle(APP_NAME)
         dlg.setWindowModality(Qt.WindowModal)
         dlg.setMinimumDuration(0)
@@ -2188,8 +2188,22 @@ class MainWindow(QMainWindow):
             return
         if err or not path:
             log_error("Не удалось скачать обновление", tb=err)
-            QMessageBox.warning(self, APP_NAME, f"Не удалось скачать обновление.\n\n{err}\n\n"
-                                                "Попробуйте позже: «Справка → Проверить обновления…».")
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle(APP_NAME)
+            box.setText("<b>Не удалось скачать обновление.</b>")
+            box.setInformativeText(
+                "Похоже, GitHub сейчас отвечает медленно или соединение прерывается. Можно повторить или скачать "
+                "архив в браузере: сохраните его, затем «Справка → Установить обновление из архива…».")
+            box.setDetailedText(err or "")
+            again = box.addButton("Повторить", QMessageBox.AcceptRole)
+            web = box.addButton("Скачать в браузере", QMessageBox.ActionRole)
+            box.addButton("Позже", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() is again:
+                QTimer.singleShot(0, lambda: self.download_update(ask=False))
+            elif box.clickedButton() is web:
+                QDesktopServices.openUrl(QUrl(UPD.ZIP_URLS[0]))
             return
         self.install_update(path, ask=False)
 
