@@ -13,3 +13,7 @@
 - Оформление (iOS-стиль) — `THEMES` и `make_style()` в `pdf_master.py`; мелочи, не задаваемые стилями, — `polish_ui()`.
 - Снимки для справки: `QT_QPA_PLATFORM=offscreen python tools/screenshots.py help/img` (светлая тема) и
   `... tools/screenshots.py /tmp/dark dark` → `01_main.png` скопировать в `help/img/23_dark.png`.
+- Сохранность: `backup.py` (резервные копии, проверка базы), `casefile.py` (папка дела + LegalHelper-дело.json).
+  Миграции базы — только добавлением колонок (`CaseDB._migrate`), чтобы откат на старую версию не ломал данные.
+- Пользователь может пропускать версии: `version.json` → `notes` пишем так, чтобы было понятно и тем, кто обновляется
+  через несколько версий.

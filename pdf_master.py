@@ -29,9 +29,11 @@ import legal_ui as U
 import help_ui as H
 import updater as UPD
 import timecheck as TC
+import backup as BK
+import casefile as CF
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.9"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
 ACCENT = "#007aff"
 FAILED = object()
@@ -1456,6 +1458,11 @@ class MainWindow(QMainWindow):
         self._update_cancel = False
         if self.auto_update_enabled():
             QTimer.singleShot(3000, lambda: self.check_updates(silent=True))
+        QTimer.singleShot(8000, self.daily_backup)
+        self.case_sync_timer = QTimer(self)
+        self.case_sync_timer.setInterval(3 * 60 * 1000)      # сведения о деле — в его папку
+        self.case_sync_timer.timeout.connect(self.sync_current_case)
+        self.case_sync_timer.start()
         self.clockChecked.connect(self._on_clock_checked)
         self._clock_warned = False
         QTimer.singleShot(5000, lambda: self.check_clock(silent=True))
@@ -1531,6 +1538,9 @@ class MainWindow(QMainWindow):
         mf.addAction("Новый (пустой) документ", self.new_doc)
         mf.addAction("Закрыть документ", lambda: self.close_ws(), "Ctrl+W")
         mf.addSeparator()
+        mf.addAction("📂 Открыть дело из папки…", lambda: U.open_case_from_folder(self))
+        mf.addAction("🛟 Резервные копии…", lambda: U.BackupsDialog(self).exec())
+        mf.addSeparator()
         mf.addAction("Выход", self.close)
         me = mb.addMenu("Правка")
         for a in (self.a_undo, self.a_redo, self.a_selall):
@@ -1584,6 +1594,7 @@ class MainWindow(QMainWindow):
         a_auto.toggled.connect(lambda on: settings().setValue("auto_update", "1" if on else "0"))
         mh.addAction("Установить обновление из архива…", lambda: self.install_update())
         mh.addAction("Проверить часы компьютера…", lambda: self.check_clock(silent=False))
+        mh.addAction("Вернуть предыдущую версию программы…", self.rollback_program)
         mh.addAction("Журнал ошибок", self.show_error_log)
         mh.addSeparator()
         mh.addAction("О программе", lambda: QMessageBox.about(
@@ -1896,6 +1907,13 @@ class MainWindow(QMainWindow):
             return
         if not self.maybe_save():
             return
+        self._shutdown_data()
+        try:                                     # страховка: копия данных и номер версии для отката
+            BK.make_backup(data_dir(), "update", APP_VERSION)
+            with open(os.path.join(data_dir(), "previous_version.txt"), "w", encoding="utf-8") as f:
+                f.write(APP_VERSION)
+        except Exception as e:
+            log_error("Резервная копия перед обновлением", e)
         try:
             if C.IS_WIN:
                 subprocess.Popen(["cmd", "/c", "start", f"Обновление {APP_NAME}", "cmd", "/c", bat],
@@ -2507,15 +2525,85 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         if self.save_all_ws():
-            try:
-                self.cases_page.flush()
-                self.cases_page.board_tab.shutdown()
-            except Exception as ex:
-                log_error("Сохранение дел при выходе", ex)
+            self._shutdown_data()
             U.M.settings().setValue("section", self.stack.currentIndex())
             e.accept()
         else:
             e.ignore()
+
+    def _shutdown_data(self):
+        """Сохранить всё по делам на диск: при выходе, перед обновлением и восстановлением."""
+        try:
+            self.cases_page.flush()
+            self.overview.notes_timer.isActive() and self.overview.save_notes()
+            self.cases_page.board_tab.shutdown()
+        except Exception as ex:
+            log_error("Сохранение дел при выходе", ex)
+        U.sync_case_file(self.mode_cid or self.last_case)
+
+    # --- сохранность данных
+    def daily_backup(self):
+        import threading
+
+        def work():
+            try:
+                if BK.needs_daily():
+                    BK.make_backup(data_dir(), "auto", APP_VERSION)
+            except Exception as ex:
+                log_error("Ежедневная резервная копия", ex)
+        threading.Thread(target=work, daemon=True).start()
+
+    def sync_current_case(self):
+        U.sync_case_file(self.mode_cid)
+
+    def restore_backup(self, path):
+        if not self.save_all_ws():
+            return
+        self._shutdown_data()
+        try:
+            U.db().close()
+            U._db = None
+            BK.restore(path, data_dir(), APP_VERSION)
+        except Exception as ex:
+            self.error("Не удалось восстановить из резервной копии", ex)
+            return
+        restart_app()
+
+    def rollback_program(self):
+        """Вернуть программу, которая стояла до последнего обновления (update.bat сохраняет её копию)."""
+        work = os.path.join(os.environ.get("LOCALAPPDATA", ""), "PDFMaster-build")
+        prev = os.path.join(work, "previous")
+        exe = next((n for n in ("LegalHelper.exe", "PDFMaster.exe") if os.path.exists(os.path.join(prev, n))), None)
+        if not getattr(sys, "frozen", False) or not C.IS_WIN or not exe:
+            QMessageBox.information(self, APP_NAME, "Предыдущая версия не сохранена — она появится после следующего "
+                                                    "обновления программы.")
+            return
+        try:
+            with open(os.path.join(data_dir(), "previous_version.txt"), encoding="utf-8") as f:
+                pv = f.read().strip()
+        except OSError:
+            pv = "предыдущую"
+        if QMessageBox.question(self, APP_NAME, f"Вернуть версию {pv} вместо {APP_VERSION}?\n\nДела и настройки "
+                                "не меняются. Программа закроется и через несколько секунд откроется предыдущая "
+                                "версия. Уведомление о новой версии можно будет пропустить кнопкой «Позже»."
+                                ) != QMessageBox.Yes or not self.save_all_ws():
+            return
+        self._shutdown_data()
+        target = os.path.dirname(sys.executable)
+        cmd = os.path.join(work, "rollback.cmd")
+        with open(cmd, "w", encoding="utf-8") as f:
+            f.write("@echo off\r\nchcp 65001 >nul\r\ntitle LegalHelper - возврат предыдущей версии\r\n"
+                    "echo Возвращаю предыдущую версию программы...\r\n"
+                    "timeout /t 3 /nobreak >nul\r\n"
+                    "taskkill /IM LegalHelper.exe /F >nul 2>&1\r\ntaskkill /IM PDFMaster.exe /F >nul 2>&1\r\n"
+                    f'robocopy "{prev}" "{target}" /MIR /XF unins*.* /R:3 /W:2 /NFL /NDL /NJH /NJS /NP >nul\r\n'
+                    "if errorlevel 8 powershell -NoProfile -Command \"Start-Process -FilePath robocopy -ArgumentList "
+                    f"('\\\"{prev}\\\" \\\"{target}\\\" /MIR /XF unins*.* /R:3 /W:2') -Verb RunAs -Wait -WindowStyle Hidden\"\r\n"
+                    f'start "" "{os.path.join(target, exe)}"\r\n')
+        subprocess.Popen(["cmd", "/c", "start", "Возврат версии", "cmd", "/c", cmd], cwd=work,
+                         creationflags=0x00000008)
+        self.modified = False
+        QApplication.quit()
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
@@ -2776,6 +2864,9 @@ class MainWindow(QMainWindow):
         for key, title in (("info", "Сведения о деле"), ("laws", "Нормы права"), ("money", "Время и оплата"),
                            ("quotes", "Выписки")):
             mm.addAction(title, lambda k=key: self.open_case_tab(k))
+        mm.addSeparator()
+        mm.addAction("📁 Открыть папку дела", lambda: U.open_case_folder(self.mode_cid))
+        mm.addAction("📦 Собрать все файлы в папку дела", lambda: U.collect_case_files(self, self.mode_cid))
         more.setMenu(mm)
         tabs.setCornerWidget(more, Qt.TopRightCorner)
         tabs.currentChanged.connect(self._on_case_tab)
@@ -2829,6 +2920,8 @@ class MainWindow(QMainWindow):
     def enter_case(self, cid):
         if self._entering:
             return
+        if self.mode_cid and self.mode_cid != cid:
+            U.sync_case_file(self.mode_cid)
         self._entering = True
         try:
             self.mode_cid = cid
@@ -4087,6 +4180,46 @@ def apply_theme(app, choice=None):
     return name
 
 
+def restart_app():
+    """Запустить программу заново (после восстановления из копии) и выйти без сохранения настроек."""
+    if getattr(sys, "frozen", False):
+        args = [sys.executable]
+    else:
+        args = [sys.executable, os.path.abspath(sys.argv[0])]
+    try:
+        subprocess.Popen(args, cwd=os.path.dirname(args[-1]), creationflags=0x00000008 if C.IS_WIN else 0)
+    except Exception as e:
+        log_error("Перезапуск программы", e)
+    os._exit(0)
+
+
+def startup_db_check():
+    """До открытия окна: если база дел повреждена — предложить вернуть последнюю целую копию."""
+    path = os.path.join(data_dir(), BK.DB_NAME)
+    if BK.check_db(path):
+        return
+    log_error("База дел повреждена при запуске")
+    good = next((b for b in BK.list_backups() if BK.backup_is_valid(b["path"])), None)
+    if good:
+        cases = "" if good["cases"] is None else f", дел: {good['cases']}"
+        ans = QMessageBox.warning(
+            None, APP_NAME, "База дел повреждена (например, после сбоя питания или ошибки).\n\n"
+            f"Восстановить её из резервной копии от {good['created']:%d.%m.%Y %H:%M}{cases}?\n"
+            "Повреждённый файл будет сохранён рядом.", QMessageBox.Yes | QMessageBox.No)
+        if ans == QMessageBox.Yes:
+            try:
+                import shutil
+                shutil.copy2(path, path + f".повреждена-{int(__import__('time').time())}")
+                BK.restore(good["path"], data_dir(), APP_VERSION)
+                QMessageBox.information(None, APP_NAME, "Данные восстановлены.")
+            except Exception as e:
+                QMessageBox.critical(None, APP_NAME, f"Не удалось восстановить: {e}")
+            return
+    else:
+        QMessageBox.warning(None, APP_NAME, "База дел повреждена, а резервных копий нет. Программа попробует "
+                                            "открыть её как есть; повреждённый файл: " + path)
+
+
 def polish_ui(root):
     """Мелочи оформления, которые не задаются стилями: красные кнопки «Удалить» (как деструктивные
     действия в iOS), таблицы без вертикальной сетки, вкладки без линии под ними."""
@@ -4133,6 +4266,7 @@ def main():
     f.setPointSize(10)
     app.setFont(f)
     apply_theme(app)
+    startup_db_check()
     try:   # «Как в Windows»: следить за сменой темы системы на лету
         app.styleHints().colorSchemeChanged.connect(
             lambda *_: theme_choice() == "system" and (apply_theme(app), [w.refresh_theme() for w in

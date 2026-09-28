@@ -62,6 +62,7 @@ class CaseDB:
         self.path = path
         self.con = sqlite3.connect(path)
         self.con.row_factory = sqlite3.Row
+        self.con.execute("PRAGMA synchronous=FULL")      # запись на диск до конца — меньше риск порчи при сбое
         self.con.executescript(SCHEMA)
         self._migrate()
         self.con.commit()
@@ -75,6 +76,18 @@ class CaseDB:
         cols = {r[1] for r in self.con.execute("PRAGMA table_info(cases)")}
         if "court_url" not in cols:
             self.con.execute("ALTER TABLE cases ADD COLUMN court_url TEXT DEFAULT ''")
+        if "uid" not in cols:                   # постоянный номер дела — чтобы узнать его в перенесённой папке
+            self.con.execute("ALTER TABLE cases ADD COLUMN uid TEXT DEFAULT ''")
+        import uuid
+        for (cid,) in self.con.execute("SELECT id FROM cases WHERE uid IS NULL OR uid=''").fetchall():
+            self.con.execute("UPDATE cases SET uid=? WHERE id=?", (uuid.uuid4().hex, cid))
+
+    def close(self):
+        try:
+            self.con.commit()
+            self.con.close()
+        except Exception:
+            pass
 
     # ---------------------------------------------------------------- общее
     def _all(self, sql, args=()):
@@ -100,11 +113,12 @@ class CaseDB:
         return self._one("SELECT * FROM cases WHERE id=?", (cid,))
 
     def add_case(self, **kw):
+        import uuid
         now = dt.datetime.now().isoformat(timespec="seconds")
         kw.setdefault("title", "Новое дело")
         keys = [k for k, _ in CASE_FIELDS if k in kw]
-        return self._exec(f"INSERT INTO cases({','.join(keys)},created,updated) VALUES "
-                          f"({','.join('?' * len(keys))},?,?)", [kw[k] for k in keys] + [now, now])
+        return self._exec(f"INSERT INTO cases({','.join(keys)},uid,created,updated) VALUES "
+                          f"({','.join('?' * len(keys))},?,?,?)", [kw[k] for k in keys] + [uuid.uuid4().hex, now, now])
 
     def update_case(self, cid, **kw):
         keys = [k for k in kw if k in dict(CASE_FIELDS) or k == "archived"]

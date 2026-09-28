@@ -80,7 +80,7 @@ echo [3/5] Собираю программу...
 pushd "%BSRC%"
 "%VPY%" -m PyInstaller --noconfirm --clean --windowed --log-level WARN --name LegalHelper --icon app.ico ^
   --add-data "app.ico;." --add-data "tessdata;tessdata" --add-data "excalidraw;excalidraw" --add-data "help;help" --add-data "forms;forms" ^
-  --collect-data pptx --collect-data docx --collect-all pymupdf4llm --collect-all pdf2docx --hidden-import case_tabs --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore --hidden-import legal_ui --hidden-import legal_core --hidden-import cases --hidden-import legal_data --hidden-import templates_lib --hidden-import help_ui --hidden-import updater --hidden-import timecheck ^
+  --collect-data pptx --collect-data docx --collect-all pymupdf4llm --collect-all pdf2docx --hidden-import case_tabs --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore --hidden-import legal_ui --hidden-import legal_core --hidden-import cases --hidden-import legal_data --hidden-import templates_lib --hidden-import help_ui --hidden-import updater --hidden-import timecheck --hidden-import backup --hidden-import casefile ^
   pdf_master.py >>"%LOG%" 2>&1
 set "BERR=%errorlevel%"
 popd
@@ -102,6 +102,15 @@ echo       Закрываю программу, если она открыта..
 taskkill /IM LegalHelper.exe /F >nul 2>&1
 taskkill /IM PDFMaster.exe /F >nul 2>&1
 timeout /t 2 /nobreak >nul
+rem сохраняю нынешнюю версию — её можно вернуть: «Справка → Вернуть предыдущую версию программы»
+set "CUR="
+if defined INST set "CUR=!INST!"
+if not defined CUR if exist "%PORTABLE%\LegalHelper.exe" set "CUR=%PORTABLE%"
+if not defined CUR if exist "%OLDPORTABLE%\PDFMaster.exe" set "CUR=%OLDPORTABLE%"
+if defined CUR (
+    echo       Сохраняю предыдущую версию для возможного отката...
+    robocopy "!CUR!" "%WORK%\previous" /MIR /XF unins*.* /R:1 /W:1 /NFL /NDL /NJH /NJS /NP >nul
+)
 
 echo [5/5] Устанавливаю...
 if defined ISCC goto :via_installer

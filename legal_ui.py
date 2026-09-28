@@ -24,6 +24,8 @@ import legal_data as D
 import cases as CS
 import sys as _sys
 import case_tabs as CT
+import backup as BK
+import casefile as CF
 CT.U = _sys.modules[__name__]
 
 M = None          # пространство имён главного модуля (bind)
@@ -1735,6 +1737,13 @@ class CasesPage(QWidget):
         mm.addAction("Пакет в суд из выбранных", self.package_from_docs)
         mm.addAction("Поиск по документам", self.search_docs)
         mm.addSeparator()
+        mm.addAction("📦 Собрать все файлы в папку дела", lambda: collect_case_files(self.main, self.cid))
+        mm.addAction("📁 Открыть папку дела", lambda: open_case_folder(self.cid))
+        a_copy = mm.addAction("Копировать добавляемые файлы в папку дела")
+        a_copy.setCheckable(True)
+        a_copy.setChecked(copy_docs_enabled())
+        a_copy.toggled.connect(lambda on: M.settings().setValue("copy_docs", "1" if on else "0"))
+        mm.addSeparator()
         mm.addAction("Убрать выбранные из дела", self.del_doc)
         b_more.setMenu(mm)
         r.addWidget(b_more)
@@ -1937,6 +1946,7 @@ class CasesPage(QWidget):
         if ok and name.strip():
             cid = db().add_case(title=name.strip(), stage=D.CASE_STAGES[1])
             self.cid = cid
+            sync_case_file(cid)                       # своя папка дела с файлом сведений — сразу
             self.show_arch.setChecked(False)
             self.reload()
             # reload() выбирает строку «молча» (сигналы выключены) — открываем новое дело явно
@@ -1949,7 +1959,13 @@ class CasesPage(QWidget):
     def delete_case(self):
         c = db().case(self.cid)
         if c and QMessageBox.question(self, M.APP_NAME, f"Удалить дело «{c['title']}» со всеми сроками, учётом "
-                                      "времени и выписками?\nФайлы документов на диске не удаляются.") == QMessageBox.Yes:
+                                      "времени и выписками?\nФайлы документов на диске не удаляются, а перед удалением "
+                                      "делается резервная копия.") == QMessageBox.Yes:
+            try:
+                sync_case_file(self.cid)
+                BK.make_backup(M.data_dir(), "delete", M.APP_VERSION)
+            except Exception as e:
+                M.log_error("Резервная копия перед удалением дела", e)
             db().delete_case(self.cid)
             self.cid = None
             self.reload()
@@ -2061,9 +2077,11 @@ class CasesPage(QWidget):
     def add_docs(self):
         paths, _ = QFileDialog.getOpenFileNames(self, "Документы дела", self.fields["folder"].text() or
                                                 str(Path.home() / "Documents"), M.OPEN_FILTER)
+        copy = copy_docs_enabled()
         for p in paths:
-            db().add_doc(self.cid, p)
+            db().add_doc(self.cid, copy_into_case(self.cid, p) if copy else p)
         self.load_docs()
+        sync_case_file(self.cid)
 
     def add_doc_path(self, cid, path):
         db().add_doc(cid, path)
@@ -3363,3 +3381,207 @@ class Reminders:
             self.tray.showMessage("Сроки и заседания", text, QSystemTrayIcon.Information, 15000)
             for e in new:
                 db().update_event(e["id"], notified=1)
+
+
+# =============================================================================
+#  Сохранность данных: папка дела, перенос, резервные копии
+# =============================================================================
+def sync_case_file(cid):
+    """Обновить LegalHelper-дело.json в папке дела. Ошибки — только в журнал: это страховка, а не работа."""
+    if not cid:
+        return
+    try:
+        if db().case(cid):
+            CF.save_case_file(db(), cid)
+    except Exception as e:
+        M.log_error("Файл сведений в папке дела", e)
+
+
+def copy_docs_enabled():
+    return str(M.settings().value("copy_docs", "1")) != "0"
+
+
+def copy_into_case(cid, path):
+    """Файл вне папки дела — копия в «<папка>/Документы», иначе тот же путь."""
+    try:
+        folder = CF.ensure_folder(db(), cid)
+        if "rel" in CF._rel(path, folder) or not os.path.isfile(path):
+            return path
+        dest = os.path.join(folder, CF.DOCS_SUBDIR)
+        os.makedirs(dest, exist_ok=True)
+        stem, ext = os.path.splitext(os.path.basename(path))
+        new, n = os.path.join(dest, stem + ext), 2
+        while os.path.exists(new):
+            new, n = os.path.join(dest, f"{stem} ({n}){ext}"), n + 1
+        import shutil
+        shutil.copy2(path, new)
+        return new
+    except Exception as e:
+        M.log_error("Копирование файла в папку дела", e)
+        return path
+
+
+def open_case_folder(cid):
+    if cid:
+        sync_case_file(cid)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(CF.ensure_folder(db(), cid)))
+
+
+def collect_case_files(main, cid):
+    if not cid:
+        return
+    c = db().case(cid)
+    folder = CF.ensure_folder(db(), cid)
+    if QMessageBox.question(main, M.APP_NAME,
+                            f"Скопировать все файлы дела «{c['title']}» в его папку?\n\n{folder}\n\n"
+                            "Оригиналы останутся на месте, а дело будет работать с копиями в папке. После этого "
+                            "папку можно целиком перенести на другой компьютер (флешкой, облаком) и открыть там: "
+                            "«Файл → Открыть дело из папки…».") != QMessageBox.Yes:
+        return
+    try:
+        copied, missing = CF.collect_files(db(), cid)
+    except Exception as e:
+        return main.error("Не удалось собрать файлы дела", e)
+    main.cases_page.refresh_docs_if(cid) if hasattr(main.cases_page, "refresh_docs_if") else None
+    text = f"Готово. Скопировано файлов: {copied}."
+    if missing:
+        text += "\n\nНе найдены (возможно, перемещены или удалены):\n" + "\n".join(missing[:10])
+    box = QMessageBox(main)
+    box.setWindowTitle(M.APP_NAME)
+    box.setText(text)
+    op = box.addButton("Открыть папку", QMessageBox.AcceptRole)
+    box.addButton("OK", QMessageBox.RejectRole)
+    box.exec()
+    if box.clickedButton() is op:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+
+
+def open_case_from_folder(main):
+    folder = QFileDialog.getExistingDirectory(main, "Папка дела (с файлом «LegalHelper-дело.json»)",
+                                              CF.cases_root() if os.path.isdir(CF.cases_root()) else str(Path.home()))
+    if not folder:
+        return
+    try:
+        data = CF.read_case_file(folder)
+    except Exception as e:
+        QMessageBox.warning(main, M.APP_NAME, str(e))
+        return
+    title = data["case"].get("title", "")
+    existing = CF.find_by_uid(db(), data["case"].get("uid"))
+    replace = None
+    if existing:
+        box = QMessageBox(main)
+        box.setWindowTitle(M.APP_NAME)
+        box.setText(f"Дело «{title}» уже есть в программе.")
+        box.setInformativeText("Заменить его сведениями из папки (например, более свежими с другого компьютера) "
+                               "или просто открыть то, что уже есть? Перед заменой делается резервная копия.")
+        b_rep = box.addButton("Заменить из папки", QMessageBox.AcceptRole)
+        b_open = box.addButton("Открыть имеющееся", QMessageBox.RejectRole)
+        box.addButton("Отмена", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is b_open:
+            main.enter_case(existing)
+            main.open_case_tab("overview")
+            return
+        if box.clickedButton() is not b_rep:
+            return
+        replace = existing
+    try:
+        main.cases_page.flush()
+        BK.make_backup(M.data_dir(), "import", M.APP_VERSION)
+        cid = CF.import_case(db(), folder, replace_cid=replace)
+    except Exception as e:
+        return main.error("Не удалось открыть дело из папки", e)
+    main.cases_page.show_arch.setChecked(False)
+    main.cases_page.reload()
+    main.cases_page.on_select(None)
+    main.enter_case(cid)
+    main.open_case_tab("overview")
+    missing = [d["path"] for d in db().docs(cid) if not os.path.exists(d["path"])]
+    msg = f"Дело «{title}» открыто."
+    if missing:
+        msg += (f"\n\nФайлов не нашлось: {len(missing)} — они лежали вне папки дела. Перед переносом используйте "
+                "«Документы → Ещё → Собрать все файлы в папку дела».")
+    QMessageBox.information(main, M.APP_NAME, msg)
+
+
+class BackupsDialog(QDialog):
+    """Резервные копии: список, «сделать сейчас», «восстановить»."""
+
+    def __init__(self, main):
+        super().__init__(main)
+        self.main = main
+        self.setWindowTitle("Резервные копии")
+        self.resize(720, 480)
+        v = QVBoxLayout(self)
+        v.addLayout(title_row("Резервные копии", big=True))
+        note = QLabel("Программа сама сохраняет копию дел, настроек и своих шаблонов раз в день, перед каждым "
+                      "обновлением, удалением дела и загрузкой дела из папки. Хранятся последние "
+                      f"{BK.KEEP} копий в папке «Документы\\LegalHelper\\Резервные копии». Файлы документов лежат в "
+                      "папках дел — их копия делается вместе с папкой дела.")
+        note.setObjectName("note")
+        note.setWordWrap(True)
+        v.addWidget(note)
+        self.t = QTableWidget(0, 4)
+        self.t.setHorizontalHeaderLabels(["Когда", "Почему", "Дел", "Версия"])
+        self.t.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.t.setColumnWidth(0, 170)
+        self.t.setColumnWidth(2, 60)
+        self.t.setColumnWidth(3, 80)
+        self.t.verticalHeader().hide()
+        self.t.setShowGrid(False)
+        self.t.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.t.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.t.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.t.itemSelectionChanged.connect(lambda: self.b_restore.setEnabled(bool(self.t.selectedItems())))
+        v.addWidget(self.t, 1)
+        r = QHBoxLayout()
+        b = QPushButton("Сделать копию сейчас")
+        b.clicked.connect(self.make_now)
+        r.addWidget(b)
+        b = QPushButton("Открыть папку с копиями")
+        b.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(BK.backups_dir())))
+        r.addWidget(b)
+        r.addStretch(1)
+        self.b_restore = QPushButton("Восстановить выбранную…")
+        self.b_restore.setObjectName("primary")
+        self.b_restore.setEnabled(False)
+        self.b_restore.clicked.connect(self.restore)
+        r.addWidget(self.b_restore)
+        v.addLayout(r)
+        self.load()
+
+    def load(self):
+        self.items = BK.list_backups()
+        self.t.setRowCount(0)
+        for b in self.items:
+            r = self.t.rowCount()
+            self.t.insertRow(r)
+            for c, text in enumerate((b["created"].strftime("%d.%m.%Y  %H:%M"), b["reason_text"],
+                                      "" if b["cases"] is None else str(b["cases"]), b["version"])):
+                self.t.setItem(r, c, QTableWidgetItem(text))
+        if not self.items:
+            self.t.insertRow(0)
+            self.t.setItem(0, 1, QTableWidgetItem("Копий пока нет — нажмите «Сделать копию сейчас»"))
+
+    def make_now(self):
+        try:
+            self.main.cases_page.flush()
+            BK.make_backup(M.data_dir(), "manual", M.APP_VERSION)
+        except Exception as e:
+            return self.main.error("Не удалось сделать резервную копию", e)
+        self.load()
+        self.main.statusBar().showMessage("Резервная копия сохранена", 6000)
+
+    def restore(self):
+        rows = sorted({i.row() for i in self.t.selectedItems()})
+        if not rows or rows[0] >= len(self.items):
+            return
+        b = self.items[rows[0]]
+        if QMessageBox.question(self, M.APP_NAME, f"Вернуть дела, настройки и шаблоны к состоянию на "
+                                f"{b['created']:%d.%m.%Y %H:%M}?\n\nВсё, что изменено после этого, пропадёт из "
+                                "программы, но текущее состояние сначала сохранится отдельной копией («перед "
+                                "восстановлением») — его тоже можно будет вернуть.\n\nПрограмма перезапустится."
+                                ) != QMessageBox.Yes:
+            return
+        self.main.restore_backup(b["path"])
