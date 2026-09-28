@@ -857,6 +857,12 @@ class DocsTable(QTableWidget):
     def selected_rows(self):
         return sorted({i.row() for i in self.selectedIndexes()})
 
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Delete and self.state() != QAbstractItemView.EditingState:
+            self.page.del_doc()
+            return
+        super().keyPressEvent(e)
+
     def paths(self, only_selected=False):
         rows = self.selected_rows() if only_selected else range(self.rowCount())
         return [self.row_doc(r)[1] for r in rows]
@@ -956,7 +962,9 @@ class DocsTable(QTableWidget):
         m.addAction("Ниже", lambda: (self.selectRow(r), self.move(1)))
         m.addAction("Показать в папке", lambda: self.page.main.show_in_folder(path))
         m.addSeparator()
-        m.addAction("Убрать из дела (файл останется)", lambda: (db().delete_doc(did), self.page.load_docs()))
+        if r not in self.selected_rows():
+            self.selectRow(r)
+        m.addAction("🗑  Удалить…", self.page.del_doc)
         m.exec(self.viewport().mapToGlobal(pos))
 
 
@@ -2012,7 +2020,8 @@ class CasesPage(QWidget):
         a_copy.setChecked(copy_docs_enabled())
         a_copy.toggled.connect(lambda on: M.settings().setValue("copy_docs", "1" if on else "0"))
         mm.addSeparator()
-        mm.addAction("Убрать выбранные из дела", self.del_doc)
+        mm.addAction("🗑  Удалить выбранные…", self.del_doc)
+        mm.addAction("Убрать из списка файлы, которых больше нет", self.drop_missing_docs)
         b_more.setMenu(mm)
         r.addWidget(b_more)
         v.addLayout(r)
@@ -2373,9 +2382,46 @@ class CasesPage(QWidget):
         SearchDialog(self.main, paths).exec()
 
     def del_doc(self):
-        for r in self.l_docs.selected_rows():
-            db().delete_doc(self.l_docs.row_doc(r)[0])
+        """Удалить выбранные документы: только из списка дела или вместе с файлом (в Корзину)."""
+        docs = [self.l_docs.row_doc(r) for r in self.l_docs.selected_rows()]
+        docs = [d for d in docs if d[0] is not None]
+        if not docs:
+            return
+        what = f"«{docs[0][2]}»" if len(docs) == 1 else f"выбранные документы ({len(docs)})"
+        box = QMessageBox(self)
+        box.setWindowTitle("Удалить")
+        box.setIcon(QMessageBox.Question)
+        box.setText(f"Удалить {what}?")
+        box.setInformativeText("«Удалить файл совсем» — файл уйдёт в Корзину Windows и исчезнет из программы "
+                               "(документ закроется, пропадёт из комплектов). Из Корзины его можно вернуть.\n\n"
+                               "«Только из дела» — файл останется на диске, программа его забудет.")
+        b_file = box.addButton("🗑  Удалить файл совсем", QMessageBox.DestructiveRole)
+        b_list = box.addButton("Только из дела", QMessageBox.AcceptRole)
+        box.addButton("Отмена", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() not in (b_file, b_list):
+            return
+        gone = 0
+        for did, path, _t in docs:
+            if box.clickedButton() is b_file and path and os.path.exists(path):
+                if not self.main.delete_file_completely(path):
+                    continue
+                db().forget_path(path)
+                gone += 1
+            db().delete_doc(did)
         self.load_docs()
+        sync_case_file(self.cid)
+        if gone:
+            self.main.toast(f"🗑  В Корзину: {gone} файл(ов)")
+
+    def drop_missing_docs(self):
+        n = 0
+        for d in db().docs(self.cid):
+            if not d["path"] or not os.path.exists(d["path"]):
+                db().delete_doc(d["id"])
+                n += 1
+        self.load_docs()
+        self.main.toast(f"Убрано из списка: {n}" if n else "Все файлы на месте")
 
     # ------------------------------------------------------------ время и деньги
     def load_money(self):
@@ -2959,7 +3005,7 @@ class SearchDialog(QDialog):
             r2.addWidget(bb)
         v.addLayout(r2)
         self.t = QTableWidget(0, 3)
-        self.t.setHorizontalHeaderLabels(["Файл", "Стр.", "Фрагмент"])
+        self.t.setHorizontalHeaderLabels(["Файл", "Где", "Фрагмент"])
         self.t.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.t.verticalHeader().setVisible(False)
         self.t.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -2991,6 +3037,7 @@ class SearchDialog(QDialog):
         q = self.q.text().strip()
         if not q or not self.paths:
             return
+        L.SEARCH_CACHE = os.path.join(M.data_dir(), "search_cache.sqlite")
         res = self.main.run("Поиск…", L.search_files, [p for p in self.paths if os.path.exists(p)], q)
         if res is M.FAILED:
             return
@@ -3012,7 +3059,8 @@ class SearchDialog(QDialog):
 
     def open_hit(self, row, _c):
         p = self.t.item(row, 0).data(Qt.UserRole)
-        pg = int(self.t.item(row, 1).text())
+        lab = self.t.item(row, 1).text()
+        pg = int(lab) if lab.isdigit() else 1           # у Word — номер абзаца, открываем с начала
         self.main.open_external(p, pg - 1)
 
 

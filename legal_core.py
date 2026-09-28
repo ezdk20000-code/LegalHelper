@@ -1102,34 +1102,81 @@ def compare_versions(old_path, new_path, out_base, only_changes=False):
 # ============================================================================
 #  Поиск по документам дела, цитаты
 # ============================================================================
+SEARCH_CACHE = None          # путь к кэшу текста (задаёт программа: папка данных/search_cache.sqlite)
+
+
+def _cache_con():
+    import sqlite3
+    if not SEARCH_CACHE:
+        return None
+    con = sqlite3.connect(SEARCH_CACHE, timeout=5)
+    con.execute("CREATE TABLE IF NOT EXISTS texts(path TEXT PRIMARY KEY, size INTEGER, mtime REAL, units TEXT)")
+    return con
+
+
+def file_text_units(p, con=None):
+    """Текст файла кусками [(метка, текст)]: PDF — по страницам, Word (.docx) — по абзацам без конвертации
+    через Office. Результат кэшируется по (размер, время изменения) — повторный поиск почти мгновенный."""
+    import json as _json
+    st = os.stat(p)
+    if con is not None:
+        r = con.execute("SELECT size, mtime, units FROM texts WHERE path=?", (p,)).fetchone()
+        if r and r[0] == st.st_size and abs(r[1] - st.st_mtime) < 0.001:
+            return [tuple(u) for u in _json.loads(r[2])]
+    ext = Path(p).suffix.lower()
+    units = []
+    if ext == ".docx":
+        import docx
+        d = docx.Document(p)
+        n = 0
+        for par in _iter_paragraphs(d):
+            if par.text.strip():
+                n += 1
+                units.append((f"абз. {n}", par.text))
+    elif ext in (".txt", ".md", ".csv"):
+        units = [("", Path(p).read_text(encoding="utf-8", errors="replace"))]
+    else:
+        d = fitz.open(p) if ext == ".pdf" else C.open_as_pdf(p)
+        units = [(str(i + 1), page.get_text()) for i, page in enumerate(d)]
+    if con is not None:
+        con.execute("INSERT OR REPLACE INTO texts(path,size,mtime,units) VALUES (?,?,?,?)",
+                    (p, st.st_size, st.st_mtime, _json.dumps(units, ensure_ascii=False)))
+        con.commit()
+    return units
+
+
 def search_files(paths, query, case_sensitive=False, progress=None):
-    """Возвращает (результаты [(путь, стр., фрагмент)], [пути со сканами без текста])."""
+    """Возвращает (результаты [(путь, стр./абзац, фрагмент)], [пути со сканами без текста])."""
     res, no_text = [], []
     q = query if case_sensitive else query.lower()
-    for k, p in enumerate(paths):
-        try:
-            d = fitz.open(p) if Path(p).suffix.lower() == ".pdf" else C.open_as_pdf(p)
-        except Exception:
-            continue
-        empty = 0
-        for i, page in enumerate(d):
-            t = page.get_text()
-            if not t.strip():
-                empty += 1
+    con = None
+    try:
+        con = _cache_con()
+    except Exception:
+        con = None
+    try:
+        for k, p in enumerate(paths):
+            if progress:
+                progress(k, len(paths))
+            try:
+                units = file_text_units(p, con)
+            except Exception:
                 continue
-            tt = t if case_sensitive else t.lower()
-            pos = tt.find(q)
-            while pos >= 0:
-                a, b = max(0, pos - 60), min(len(t), pos + len(q) + 60)
-                snip = re.sub(r"\s+", " ", t[a:b]).strip()
-                res.append((p, i + 1, snip))
-                pos = tt.find(q, pos + len(q))
-                if len(res) > 2000:
-                    break
-        if empty and empty == d.page_count:
-            no_text.append(p)
-        if progress:
-            progress(k + 1, len(paths))
+            if units and not any(t.strip() for _l, t in units):
+                no_text.append(p)
+                continue
+            for label, t in units:
+                tt = t if case_sensitive else t.lower()
+                pos = tt.find(q)
+                while pos >= 0:
+                    a, b = max(0, pos - 60), min(len(t), pos + len(q) + 60)
+                    res.append((p, label, re.sub(r"\s+", " ", t[a:b]).strip()))
+                    pos = tt.find(q, pos + len(q))
+                    if len(res) > 2000:
+                        return res, no_text
+    finally:
+        if con is not None:
+            con.close()
     return res, no_text
 
 

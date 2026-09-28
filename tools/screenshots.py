@@ -172,9 +172,24 @@ def main():
     grab("03_loose")
     w.open_paths([os.path.join(HOME, "Документы", "Исковое заявление.pdf")], replace=True)
     pump(600)
-    tb = w.findChild(P.QToolBar)
+    tb = w.toolbar
     if tb and tb.isVisible():
-        grab("04_toolbar", tb)
+        from PySide6.QtCore import QRect
+        grab("04_toolbar", w.docarea, QRect(0, 0, w.docarea.width(), tb.height() + w.toolbar2.height()))
+    # файлы внутри документа: второй файл свёрнут, справа — крупный просмотр
+    w.cases_page.list.setCurrentRow(0)
+    w.open_case_tab("docs")
+    pump(300)
+    w.open_paths([os.path.join(HOME, "Документы", n) for n in ("Исковое заявление.pdf", "Договор поставки № 12.pdf")],
+                 replace=True)
+    pump(300)
+    w.set_thumb_size_saved(100)
+    w.set_preview(True)
+    w.toggle_group(w.doc.page_count - 1, collapse=True)
+    w.pages.setCurrentRow(1)
+    w.pages.item(1).setSelected(True)
+    pump(700)
+    grab("24_groups")
     dialog_shot("05_editor", lambda: w.open_editor(0), (1000, 680))
     for name, opener, size in (
             ("07_f107", lambda: U.tool_f107(w), None),

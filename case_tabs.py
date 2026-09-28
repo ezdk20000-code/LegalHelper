@@ -4,6 +4,7 @@
 import os
 import sys
 import html
+import uuid
 from pathlib import Path
 
 import pymupdf as fitz
@@ -631,6 +632,10 @@ def assemble_pdf(items, out, progress=None):
             continue
         start = doc.page_count
         doc.insert_pdf(d)
+        gid, nm = fitz.get_pdf_str(uuid.uuid4().hex[:10]), fitz.get_pdf_str(title)
+        for i in range(start, doc.page_count):       # страницы документа сворачиваются в рабочей области
+            doc.xref_set_key(doc[i].xref, "LHGroup", gid)
+            doc.xref_set_key(doc[i].xref, "LHName", nm)
         ranges[iid] = (start, doc.page_count - 1)
         toc.append([1, title, start + 1])
     if not doc.page_count:

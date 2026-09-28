@@ -295,6 +295,11 @@ class CaseDB:
     def delete_doc(self, did):
         self._exec("DELETE FROM docs WHERE id=?", (did,))
 
+    def forget_path(self, path):
+        """Файл удалён: убрать его из всех дел и комплектов."""
+        self._exec("DELETE FROM docs WHERE path=?", (path,))
+        self._exec("DELETE FROM pack_items WHERE path=?", (path,))
+
     # ---------------------------------------------------------------- время и оплаты
     def time_entries(self, cid):
         return self._all("SELECT * FROM time_entries WHERE case_id=? ORDER BY date", (cid,))

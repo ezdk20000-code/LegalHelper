@@ -34,7 +34,9 @@ import casefile as CF
 import anim
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.4"
+DEV_EMAIL = "axis.juris@bk.ru"
+DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
 ACCENT = "#007aff"
 FAILED = object()
@@ -130,6 +132,76 @@ def reveal_in_folder(path):
         QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path) if os.path.isfile(path) else path))
 
 
+def send_to_trash(path):
+    """Удалить файл в Корзину (в Windows — можно вернуть). Где Корзины нет — удалить насовсем."""
+    path = os.path.abspath(path)
+    if not os.path.exists(path):
+        return True
+    if C.IS_WIN:
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class SHFILEOPSTRUCTW(ctypes.Structure):
+                _fields_ = [("hwnd", wintypes.HWND), ("wFunc", ctypes.c_uint), ("pFrom", wintypes.LPCWSTR),
+                            ("pTo", wintypes.LPCWSTR), ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", wintypes.BOOL),
+                            ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
+            FO_DELETE, FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 3, 4, 0x10, 0x40, 0x400
+            op = SHFILEOPSTRUCTW(None, FO_DELETE, path + "\0", None,
+                                 FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI, False, None, None)
+            if ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0 and not os.path.exists(path):
+                return True
+        except Exception:
+            pass
+    os.remove(path)
+    return True
+
+
+def cleanup_junk(days=1):
+    """Убрать временные файлы программы старше суток: конвертации, загрузки обновлений, кэш поиска
+    по удалённым файлам. Возвращает, сколько удалено."""
+    import shutil
+    import time
+    tmp, n = tempfile.gettempdir(), 0
+    limit = time.time() - days * 86400
+    try:
+        names = os.listdir(tmp)
+    except OSError:
+        names = []
+    for fn in names:
+        if not (fn.startswith(("pdfm_", "lh_", "LegalHelper_update_"))
+                or (fn.startswith("LegalHelper_") and fn.endswith((".zip", ".zip.part")))):
+            continue
+        full = os.path.join(tmp, fn)
+        try:
+            if os.path.getmtime(full) > limit:
+                continue
+            if os.path.isdir(full):
+                shutil.rmtree(full, ignore_errors=True)
+            else:
+                os.remove(full)
+            n += 1
+        except OSError:
+            pass
+    try:                                                  # кэш поиска: строки по файлам, которых больше нет
+        import sqlite3
+        cp = os.path.join(data_dir(), "search_cache.sqlite")
+        if os.path.exists(cp):
+            con = sqlite3.connect(cp, timeout=5)
+            try:
+                gone = [(r[0],) for r in con.execute("SELECT path FROM texts") if not os.path.exists(r[0])]
+                if gone:
+                    con.executemany("DELETE FROM texts WHERE path=?", gone)
+                    con.commit()
+                    con.execute("VACUUM")
+                    n += len(gone)
+            finally:
+                con.close()
+    except Exception:
+        pass
+    return n
+
+
 # =============================================================================
 #  Мелкие виджеты
 # =============================================================================
@@ -183,6 +255,79 @@ def font_combo(default=None):
     if default in names:
         cb.setCurrentText(default)
     return cb
+
+
+class PagePreview(QWidget):
+    """Крупный просмотр выбранной страницы справа от миниатюр: прочитать и рассмотреть."""
+
+    def __init__(self, main):
+        super().__init__()
+        self.main = main
+        self.index = None
+        self.zoom = 1.0                           # 1.0 — по ширине окна
+        v = QVBoxLayout(self)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(6)
+        h = QHBoxLayout()
+        self.title = QLabel("Выберите страницу")
+        self.title.setObjectName("hint")
+        h.addWidget(self.title, 1)
+        for text, tip, fn in (("−", "Мельче", lambda: self.set_zoom(self.zoom / 1.25)),
+                              ("По ширине", "Вписать по ширине", lambda: self.set_zoom(1.0)),
+                              ("+", "Крупнее", lambda: self.set_zoom(self.zoom * 1.25))):
+            b = QPushButton(text)
+            b.setObjectName("compact")
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            h.addWidget(b)
+        close = QPushButton("✕")
+        close.setObjectName("compact")
+        close.setToolTip("Скрыть просмотр («Вид ▾ → Просмотр страницы крупно»)")
+        close.clicked.connect(lambda: main.set_preview(False))
+        h.addWidget(close)
+        v.addLayout(h)
+        self.sc = QScrollArea()
+        self.sc.setWidgetResizable(False)
+        self.sc.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self.sc.setObjectName("canvasArea")
+        self.img = QLabel()
+        self.img.setAlignment(Qt.AlignCenter)
+        self.sc.setWidget(self.img)
+        v.addWidget(self.sc, 1)
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.setInterval(90)
+        self.timer.timeout.connect(self.render)
+
+    def show_page(self, i):
+        self.index = i
+        self.timer.start()
+
+    def set_zoom(self, z):
+        self.zoom = max(0.3, min(4.0, z))
+        self.render()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.timer.start()
+
+    def render(self):
+        doc = self.main.doc
+        i = self.index
+        if not self.isVisible() or i is None or not (0 <= i < doc.page_count):
+            self.img.clear()
+            self.title.setText("Выберите страницу слева" if doc.page_count else "Документ не открыт")
+            return
+        page = doc[i]
+        dpr = self.devicePixelRatioF()
+        width = max(200, self.sc.viewport().width() - 16) * self.zoom
+        z = width / page.rect.width
+        pix = page.get_pixmap(matrix=fitz.Matrix(z * dpr, z * dpr), alpha=False)
+        pm = QPixmap.fromImage(to_qimage(pix))
+        pm.setDevicePixelRatio(dpr)
+        self.img.setPixmap(pm)
+        self.img.resize(int(pix.width / dpr), int(pix.height / dpr))
+        self.title.setText(f"Страница {i + 1} из {doc.page_count}")
 
 
 class GrowEdit(QPlainTextEdit):
@@ -1523,6 +1668,7 @@ class MainWindow(QMainWindow):
         if self.auto_update_enabled():
             QTimer.singleShot(3000, lambda: self.check_updates(silent=True))
         QTimer.singleShot(8000, self.daily_backup)
+        QTimer.singleShot(12000, self.cleanup_in_background)
         self.case_sync_timer = QTimer(self)
         self.case_sync_timer.setInterval(3 * 60 * 1000)      # сведения о деле — в его папку
         self.case_sync_timer.timeout.connect(self.sync_current_case)
@@ -1579,7 +1725,6 @@ class MainWindow(QMainWindow):
         tb.addAction(self.a_nav)
         self.doc_title = QLabel("Новый документ")
         self.doc_title.setObjectName("doctitle")
-        self.doc_title_act = tb.addWidget(self.doc_title)
         self.case_btn = QToolButton()
         self.case_btn.setObjectName("casebtn")
         self.case_btn.setPopupMode(QToolButton.InstantPopup)
@@ -1587,7 +1732,6 @@ class MainWindow(QMainWindow):
         self.case_menu = QMenu(self)
         self.case_menu.aboutToShow.connect(self.fill_case_menu)
         self.case_btn.setMenu(self.case_menu)
-        self.case_btn_act = tb.addWidget(self.case_btn)
         sep_w = QWidget()
         sep_w.setFixedWidth(10)
         tb.addWidget(sep_w)
@@ -1673,6 +1817,7 @@ class MainWindow(QMainWindow):
         mh.addAction("Вернуть предыдущую версию программы…", self.rollback_program)
         mh.addAction("Создать ярлык на рабочем столе", self.make_desktop_shortcut)
         mh.addAction("Журнал ошибок", self.show_error_log)
+        mh.addAction("✉️  Связаться с разработчиком…", self.contact_dev)
         mh.addSeparator()
         mh.addAction("О программе", lambda: QMessageBox.about(
             self, APP_NAME, f"<b>{APP_NAME}</b> версия {APP_VERSION}<br>Рабочее место юриста и настольный редактор PDF.<br><br>"
@@ -1684,22 +1829,34 @@ class MainWindow(QMainWindow):
         for a in (self.a_undo, self.a_redo):
             tb.addAction(a)
             tb.widgetForAction(a).setToolButtonStyle(Qt.ToolButtonIconOnly)
-        tb.addSeparator()
+        # второй ряд — действия со страницами и «Вид» (в один ряд всё не помещается рядом со списком документов)
+        tb2 = QToolBar("Страницы")
+        tb2.setObjectName("pagebar")
+        tb2.setMovable(False)
+        tb2.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        tb2.setIconSize(QSize(16, 16))
+        self.toolbar2 = tb2
+        self.doc_title_act = tb2.addWidget(self.doc_title)        # «Без дела»: название и «Привязать к делу»
+        self.case_btn_act = tb2.addWidget(self.case_btn)
         for a in (self.a_rl, self.a_rr, self.a_del, self.a_edit):
-            tb.addAction(a)
+            tb2.addAction(a)
         for a in (self.a_selall, self.a_dup, self.a_extract):
             self.addAction(a)
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        tb.addWidget(spacer)
+        self._tb_spacer = tb.addWidget(spacer)
+        spacer2 = QWidget()
+        spacer2.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._tb2_spacer = tb2.addWidget(spacer2)
         pass
         self.slider = QSlider(Qt.Horizontal)
-        self.slider.setRange(80, 320)
+        self.slider.setRange(60, 320)
         self.slider.setValue(self.thumb_w)
         self.slider.setFixedWidth(70)
         self.slider.setToolTip("Размер миниатюр")
         self.slider.valueChanged.connect(self.set_thumb_size)
-        tb.addWidget(self.slider)
+        self.slider.sliderReleased.connect(lambda: settings().setValue("thumb_w", self.slider.value()))
+        tb2.addWidget(self.slider)
 
         # левая панель инструментов
         self.tree = QTreeWidget()
@@ -1744,7 +1901,7 @@ class MainWindow(QMainWindow):
         self.pages = PageList()
         self.pages.orderChanged.connect(self.on_reorder)
         self.pages.filesDropped.connect(lambda paths, idx: self.open_paths(paths, insert_at=idx))
-        self.pages.itemDoubleClicked.connect(lambda it: self.open_editor(self.pages.row(it)))
+        self.pages.itemDoubleClicked.connect(self._page_double)
         self.pages.setContextMenuPolicy(Qt.CustomContextMenu)
         self.pages.customContextMenuRequested.connect(self.context_menu)
         self.pages.itemSelectionChanged.connect(self.update_status)
@@ -1772,6 +1929,7 @@ class MainWindow(QMainWindow):
         self.calc_page = U.CalcPage()
         self.help_page = H.HelpPage(sys.modules[__name__])
         self.help_page.on_back = self.leave_help
+        self.help_page.on_contact = self.contact_dev
         for w in (self.cases_page, self.calc_page):
             w.setObjectName("page")
         self.navigator = CaseNavigator(self)          # старая панель: не показывается
@@ -1819,9 +1977,29 @@ class MainWindow(QMainWindow):
         dv.setContentsMargins(0, 0, 0, 0)
         dv.setSpacing(0)
         dv.addWidget(self.toolbar)
-        dv.addWidget(self.pages, 1)
+        dv.addWidget(self.toolbar2)
+        self.page_split = QSplitter()
+        self.page_split.setChildrenCollapsible(False)
+        self.page_split.addWidget(self.pages)
+        self.preview = PagePreview(self)
+        self.preview.setMinimumWidth(280)
+        self.page_split.addWidget(self.preview)
+        self.page_split.setStretchFactor(0, 1)
+        self.page_split.setStretchFactor(1, 1)
+        dv.addWidget(self.page_split, 1)
         self.toolbar.show()
+        self.toolbar2.show()
+        tw = int(settings().value("thumb_w", 0) or 0)
+        if tw:
+            self.thumb_w = tw
+            self.slider.blockSignals(True)
+            self.slider.setValue(tw)
+            self.slider.blockSignals(False)
+            self.apply_thumb_geometry()
         self._add_tools_button()
+        self._add_view_button()
+        self._sync_preview()
+        self.pages.itemSelectionChanged.connect(self._preview_current)
 
         self._restructure_case_tabs()
 
@@ -1851,11 +2029,20 @@ class MainWindow(QMainWindow):
         self.loose_list = QListWidget()
         self.loose_list.setObjectName("overlist")
         self.loose_list.itemClicked.connect(lambda it: self.switch_ws(it.data(Qt.UserRole)))
+        self.loose_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.loose_list.customContextMenuRequested.connect(self._loose_menu)
         llv.addWidget(self.loose_list, 1)
+        lr = QHBoxLayout()
+        bc = QPushButton("✕ Закрыть")
+        bc.setObjectName("compact")
+        bc.setToolTip("Закрыть выбранный документ. Правый щелчок по документу — удалить его файл в Корзину")
+        bc.clicked.connect(lambda: self.close_loose())
+        lr.addWidget(bc)
         bo = QPushButton("Открыть файл…")
         bo.setObjectName("primary")
         bo.clicked.connect(self.open_dialog)
-        llv.addWidget(bo)
+        lr.addWidget(bo, 1)
+        llv.addLayout(lr)
         ldh.addWidget(lleft)
         self.loose_doc_slot = self._slot()
         ldh.addWidget(self.loose_doc_slot, 1)
@@ -2236,14 +2423,44 @@ class MainWindow(QMainWindow):
             return False
         return True
 
+    def _src(self):
+        """Исходный файл открытого документа (например, Word, из которого получены страницы)."""
+        try:
+            return self.ws[self.cur_ws].get("src")
+        except Exception:
+            return None
+
     def base_name(self):
-        return Path(self.path).stem if self.path else "документ"
+        src = self._src()
+        return Path(self.path).stem if self.path else (Path(src).stem if src else "документ")
 
     def default_dir(self):
         if self.path:
             return str(Path(self.path).parent)
+        src = self._src()
+        if src and os.path.isdir(os.path.dirname(src)):
+            return os.path.dirname(src)
+        cid = self.ws[self.cur_ws].get("case_id") if self.ws else None
+        if cid:
+            try:
+                return CF.ensure_folder(U.db(), cid)
+            except Exception:
+                pass
         docs = Path.home() / "Documents"
         return str(docs if docs.exists() else Path.home())
+
+    def toast(self, text, ms=2600):
+        """Заметное короткое сообщение поверх рабочей области («✓ Сохранено»)."""
+        host = self.pages.viewport() if self.pages.isVisible() else self
+        lab = QLabel(text, host)
+        lab.setObjectName("toast")
+        lab.setStyleSheet(f"background: {T['text']}; color: {T['panel']}; border-radius: 12px; padding: 10px 18px;"
+                          "font-weight: 600;")
+        lab.adjustSize()
+        lab.move(max(10, (host.width() - lab.width()) // 2), max(10, host.height() - lab.height() - 28))
+        lab.show()
+        lab.raise_()
+        QTimer.singleShot(ms, lab.deleteLater)
 
     def ask_save_path(self, title, suffix, flt, name_suffix=""):
         default = os.path.join(self.default_dir(), f"{self.base_name()}{name_suffix}{suffix}")
@@ -2291,7 +2508,11 @@ class MainWindow(QMainWindow):
             reveal_in_folder(path)
 
     def selected(self):
-        return sorted(self.pages.row(it) for it in self.pages.selectedItems())
+        rows = {self.pages.row(it) for it in self.pages.selectedItems()}
+        for h, (_name, n) in getattr(self, "_heads", {}).items():   # свёрнутый файл = все его страницы
+            if h in rows:
+                rows.update(range(h, h + n))
+        return sorted(r for r in rows if r < self.doc.page_count)
 
     def selected_or_all(self):
         return self.selected() or list(range(self.doc.page_count))
@@ -2402,6 +2623,13 @@ class MainWindow(QMainWindow):
         for k, al in ((6, 0.18), (3, 0.35), (1, 0.6)):          # мягкая тень листа
             p.setBrush(QColor(sc[0], sc[1], sc[2], int(sc[3] * al)))
             p.drawRoundedRect(QRectF(x - k / 2, y + k / 2 + 1, w + k, h + k / 2), 2, 2)
+        head = getattr(self, "_heads", {}).get(i)
+        if head:                                                  # свёрнутый файл — стопка листов
+            p.setPen(QPen(QColor(T["thumb_border"]), 1))
+            p.setBrush(QColor("#ffffff"))
+            for k in (8, 4):
+                p.drawRect(QRectF(x + k, y - k, w, h))
+            p.setPen(Qt.NoPen)
         if img is not None:
             p.drawImage(QRectF(x, y, w, h), img)
         else:
@@ -2417,7 +2645,9 @@ class MainWindow(QMainWindow):
         f.setBold(selected)
         p.setFont(f)
         label = str(i + 1)
-        bw = max(24, p.fontMetrics().horizontalAdvance(label) + 14)
+        if head:
+            label = p.fontMetrics().elidedText(f"{head[0]} · {head[1]} стр.", Qt.ElideMiddle, int(s.width() - 6))
+        bw = min(s.width() - 2, max(24, p.fontMetrics().horizontalAdvance(label) + 14))
         br = QRectF((s.width() - bw) / 2, s.height() - 24, bw, 19)
         if selected:                                              # номер-«оттиск»
             p.setPen(Qt.NoPen)
@@ -2433,6 +2663,7 @@ class MainWindow(QMainWindow):
     def refresh_all(self, keep_selection=None):
         n = self.doc.page_count
         self.thumbs = [None] * n
+        self._compute_groups()
         lst = self.pages
         lst.blockSignals(True)
         while lst.count() > n:
@@ -2446,12 +2677,20 @@ class MainWindow(QMainWindow):
             it = lst.item(i)
             it.setData(Qt.UserRole, i)
             it.setSizeHint(self.cell_size())
-            it.setToolTip(f"Страница {i + 1} — двойной щелчок для редактирования")
+            src = self._pg[i][1] if i < len(self._pg) and self._pg[i][1] else ""
+            it.setToolTip(f"Страница {i + 1}" + (f" · из файла «{src}»" if src else "") +
+                          " — двойной щелчок для редактирования")
             it.setIcon(self.compose_icon(i))
+        for i in range(n):
+            lst.setRowHidden(i, i in self._hidden)
+            if i in self._heads:
+                name, cnt = self._heads[i]
+                lst.item(i).setToolTip(f"{name} — {cnt} стр. Двойной щелчок — развернуть")
         for i in keep_selection or []:
-            if 0 <= i < n:
+            if 0 <= i < n and i not in self._hidden:
                 lst.item(i).setSelected(True)
         lst.blockSignals(False)
+        self._sync_preview()
         self._thumb_pos = 0
         if n:
             self.thumb_timer.start()
@@ -2566,7 +2805,10 @@ class MainWindow(QMainWindow):
             first_path, first = loaded[0]
             self.doc = first
             self.path = first_path if (len(loaded) == 1 and first_path.lower().endswith(".pdf")) else None
+            self.ws[self.cur_ws]["src"] = first_path
             self.modified = len(loaded) > 1 or not first_path.lower().endswith(".pdf")
+            if first.page_count and self._page_group(0)[0] is None:
+                self._tag_pages(0, first.page_count, Path(first_path).name)
             rest = loaded[1:]
         else:
             self.push_undo()
@@ -2580,6 +2822,7 @@ class MainWindow(QMainWindow):
             else:
                 self.doc.insert_pdf(d, start_at=pos)
                 pos += d.page_count
+            self._tag_pages(start, d.page_count, Path(p).name)
             new_sel += list(range(start, start + d.page_count))
             self.modified = True
         cid = self.ws[self.cur_ws].get("case_id")
@@ -2625,6 +2868,7 @@ class MainWindow(QMainWindow):
                 pass
         self.update_title()
         self.msg(f"Сохранено: {p}")
+        self.toast(f"✓  Сохранено: {Path(p).name}")
         return True
 
     def closeEvent(self, e):
@@ -2657,6 +2901,66 @@ class MainWindow(QMainWindow):
                 log_error("Ежедневная резервная копия", ex)
         threading.Thread(target=work, daemon=True).start()
 
+    def cleanup_in_background(self):
+        import threading
+
+        def work():
+            try:
+                cleanup_junk()
+            except Exception as ex:
+                log_error("Очистка временных файлов", ex)
+        threading.Thread(target=work, daemon=True).start()
+
+    def forget_open_file(self, path):
+        """Закрыть документ этого файла, если он открыт (без вопроса о сохранении — файл удаляется)."""
+        i = self.find_ws(path)
+        while i is not None:
+            if i == self.cur_ws:
+                self.modified = False
+            self.ws[i]["modified"] = False
+            self.close_ws(i)
+            i = self.find_ws(path)
+        self.refresh_loose_list()
+
+    def delete_file_completely(self, path):
+        """Закрыть файл в программе и удалить его в Корзину. True — удалён."""
+        try:
+            self.forget_open_file(path)
+            send_to_trash(path)
+            return True
+        except Exception as ex:
+            QMessageBox.warning(self, "Удаление", f"Не удалось удалить файл:\n{path}\n\n{ex}\n\n"
+                                "Возможно, он открыт в другой программе (Word, просмотрщик PDF).")
+            return False
+
+    def close_loose(self, it=None, delete=False):
+        """«Без дела»: закрыть документ (и при желании удалить его файл)."""
+        it = it or self.loose_list.currentItem()
+        i = it.data(Qt.UserRole) if it else None
+        if i is None or not (0 <= i < len(self.ws)):
+            return
+        path = self.ws[i]["path"]
+        if delete and path:
+            if QMessageBox.question(self, "Удалить файл",
+                                    f"Удалить файл «{Path(path).name}» в Корзину?\n\nЕго можно будет вернуть "
+                                    "из Корзины Windows.") != QMessageBox.Yes:
+                return
+            if self.delete_file_completely(path):
+                self.toast(f"🗑  Удалён в Корзину: {Path(path).name}")
+        else:
+            self.close_ws(i)
+        self.refresh_loose_list()
+
+    def _loose_menu(self, pos):
+        it = self.loose_list.itemAt(pos)
+        if not it or it.data(Qt.UserRole) is None:
+            return
+        m = QMenu(self)
+        m.addAction("Закрыть", lambda: self.close_loose(it))
+        a = m.addAction("🗑  Закрыть и удалить файл в Корзину", lambda: self.close_loose(it, delete=True))
+        a.setEnabled(bool(self.ws[it.data(Qt.UserRole)]["path"]))
+        m.exec(self.loose_list.viewport().mapToGlobal(pos))
+
     def sync_current_case(self):
         U.sync_case_file(self.mode_cid)
 
@@ -2672,6 +2976,49 @@ class MainWindow(QMainWindow):
             self.error("Не удалось восстановить из резервной копии", ex)
             return
         restart_app()
+
+    def contact_dev(self):
+        """Почта и Telegram разработчика; письмо — сразу с версией программы и последними ошибками."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Связаться с разработчиком")
+        dlg.setMinimumWidth(460)
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(22, 18, 22, 16)
+        v.setSpacing(10)
+        t = QLabel("Связаться с разработчиком")
+        t.setObjectName("title")
+        v.addWidget(t)
+        info = QLabel("Нашли ошибку, есть идея или вопрос — напишите. Если что-то сломалось, приложите снимок экрана "
+                      "и опишите, что делали.")
+        info.setWordWrap(True)
+        v.addWidget(info)
+
+        def row(icon, text, open_url, copy_text):
+            h = QHBoxLayout()
+            lab = QLabel(f"{icon}  <b>{text}</b>")
+            lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            h.addWidget(lab, 1)
+            b = QPushButton("Скопировать")
+            b.clicked.connect(lambda: (QApplication.clipboard().setText(copy_text),
+                                       self.msg(f"Скопировано: {copy_text}")))
+            h.addWidget(b)
+            o = QPushButton("Написать")
+            o.setObjectName("primary")
+            o.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(open_url)))
+            h.addWidget(o)
+            v.addLayout(h)
+        from urllib.parse import quote
+        body = quote(f"\n\n—\n{APP_NAME} {APP_VERSION}, {sys.platform}")
+        row("✉️", DEV_EMAIL, f"mailto:{DEV_EMAIL}?subject={quote(APP_NAME + ' ' + APP_VERSION)}&body={body}", DEV_EMAIL)
+        row("✈️", f"Telegram @{DEV_TELEGRAM}", f"https://t.me/{DEV_TELEGRAM}", f"@{DEV_TELEGRAM}")
+        hint = QLabel("Журнал ошибок для письма: «Справка → Журнал ошибок → Скопировать последние ошибки».")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(dlg.accept)
+        v.addWidget(close, 0, Qt.AlignRight)
+        dlg.exec()
 
     def make_desktop_shortcut(self):
         """Ярлык LegalHelper на рабочем столе (если пропал)."""
@@ -2737,6 +3084,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------- page ops
     def on_reorder(self):
         order = [self.pages.item(i).data(Qt.UserRole) for i in range(self.pages.count())]
+        heads, hidden = getattr(self, "_heads", {}), getattr(self, "_hidden", set())
+        if heads:                                   # свёрнутый файл переезжает целиком
+            full = []
+            for k in order:
+                if k in hidden:
+                    continue
+                full.extend(range(k, k + heads[k][1]) if k in heads else [k])
+            order = full
         if order == list(range(len(order))) or len(order) != self.doc.page_count:
             return
         sel = self.selected()
@@ -2847,6 +3202,13 @@ class MainWindow(QMainWindow):
         if ed.changed:
             self.after_change(keep_selection=[ed.index])
 
+    def _page_double(self, it):
+        i = self.pages.row(it)
+        if i in getattr(self, "_heads", {}):
+            self.toggle_group(i, False)
+        else:
+            self.open_editor(i)
+
     def context_menu(self, pos):
         if not self.doc.page_count:
             return
@@ -2855,6 +3217,14 @@ class MainWindow(QMainWindow):
             self.pages.clearSelection()
             it.setSelected(True)
         m = QMenu(self)
+        row = self.pages.row(it) if it else -1
+        run = self._run_of(row) if row >= 0 else None
+        if run and run[0] and run[3] > run[2]:
+            if run[0] in self._collapsed():
+                m.addAction(f"▸ Развернуть «{run[1]}»", lambda: self.toggle_group(row, False))
+            else:
+                m.addAction(f"▾ Свернуть «{run[1]}» ({run[3] - run[2] + 1} стр.)", lambda: self.toggle_group(row, True))
+            m.addSeparator()
         m.addAction("✎ Редактировать страницу", lambda: self.open_editor())
         m.addAction("Подписать", lambda: self.open_editor(mode="sign"))
         m.addSeparator()
@@ -2870,6 +3240,7 @@ class MainWindow(QMainWindow):
         m.addAction("Изменить размер страниц (A4, A5…)…", self.tool_pagesize)
         m.addAction("Вставить файл после…", self.insert_file_after)
         m.addSeparator()
+        m.addAction("Сохранить выделенные как PDF…", lambda: self.save_open_as_pdf("Сохранить выделенные как PDF"))
         m.addAction("Извлечь в новый PDF…", self.extract_selected)
         m.addAction("Сохранить как картинки…", lambda: self.tool_pdf2jpg(self.selected_text()))
         m.addSeparator()
@@ -2912,6 +3283,121 @@ class MainWindow(QMainWindow):
             self._mount(self.docarea, self.loose_doc_slot)
             self._mount(self.calc_page, self.loose_calc_slot)
 
+    THUMB_SIZES = (("Мини-значки", 64), ("Маленькие", 100), ("Средние", 150), ("Крупные", 210))
+
+    def _add_view_button(self):
+        b = QToolButton()
+        b.setText("Вид ▾")
+        b.setObjectName("toolsbtn")
+        b.setPopupMode(QToolButton.InstantPopup)
+        b.setToolTip("Размер миниатюр, крупный просмотр страницы, свернуть/развернуть файлы")
+        m = QMenu(b)
+        grp = QActionGroup(self)
+        for label, w in self.THUMB_SIZES:
+            a = m.addAction(label)
+            a.setCheckable(True)
+            a.setChecked(abs(self.thumb_w - w) < 5)
+            grp.addAction(a)
+            a.triggered.connect(lambda _=False, w=w: self.set_thumb_size_saved(w))
+        m.addSeparator()
+        self.a_preview = m.addAction("Просмотр страницы крупно")
+        self.a_preview.setCheckable(True)
+        self.a_preview.setChecked(str(settings().value("preview_on", "1")) == "1")
+        self.a_preview.setShortcut("F3")
+        self.a_preview.toggled.connect(self.set_preview)
+        self.addAction(self.a_preview)
+        m.addSeparator()
+        m.addAction("Свернуть все файлы", lambda: self.collapse_all(True))
+        m.addAction("Развернуть все файлы", lambda: self.collapse_all(False))
+        b.setMenu(m)
+        self.toolbar2.addWidget(b)
+
+    def set_thumb_size_saved(self, w):
+        settings().setValue("thumb_w", w)
+        self.slider.blockSignals(True)
+        self.slider.setValue(w)
+        self.slider.blockSignals(False)
+        self.set_thumb_size(w)
+
+    def set_preview(self, on):
+        settings().setValue("preview_on", "1" if on else "0")
+        if self.a_preview.isChecked() != on:
+            self.a_preview.setChecked(on)
+        self._sync_preview()
+
+    def _sync_preview(self):
+        """Окно просмотра видно, если включено и есть открытый документ."""
+        if not hasattr(self, "a_preview"):
+            return
+        on = self.a_preview.isChecked() and self.doc.page_count > 0
+        if self.preview.isHidden() == on:
+            self.preview.setVisible(on)
+        self._preview_current()
+
+    def _preview_current(self):
+        if not self.preview.isVisible():
+            return
+        sel = self.selected()
+        cur = self.pages.currentRow()
+        self.preview.show_page(cur if cur in sel else (sel[0] if sel else (0 if self.doc.page_count else None)))
+
+    # --- файлы в рабочей области: страницы помнят, из какого файла пришли (пометка в самой странице PDF)
+    def _tag_pages(self, start, n, name):
+        import uuid
+        gid = fitz.get_pdf_str(uuid.uuid4().hex[:10])
+        nm = fitz.get_pdf_str(name)
+        for i in range(start, start + n):
+            x = self.doc[i].xref
+            self.doc.xref_set_key(x, "LHGroup", gid)
+            self.doc.xref_set_key(x, "LHName", nm)
+
+    def _page_group(self, i):
+        x = self.doc[i].xref
+        t, g = self.doc.xref_get_key(x, "LHGroup")
+        if t != "string":
+            return None, None
+        return g, self.doc.xref_get_key(x, "LHName")[1]
+
+    def _collapsed(self):
+        return self.ws[self.cur_ws].setdefault("collapsed", set())
+
+    def _compute_groups(self):
+        """Непрерывные куски страниц из одного файла: [(gid, имя, первая, последняя)]."""
+        runs, n = [], self.doc.page_count
+        self._pg = [self._page_group(i) for i in range(n)]
+        i = 0
+        while i < n:
+            g, name = self._pg[i]
+            j = i
+            while g and j + 1 < n and self._pg[j + 1][0] == g:
+                j += 1
+            runs.append((g, name, i, j))
+            i = j + 1
+        self._runs = runs
+        coll = self._collapsed()
+        self._heads = {a: (name, b - a + 1) for g, name, a, b in runs if g and g in coll and b > a}
+        self._hidden = {k for g, name, a, b in runs if g and g in coll and b > a for k in range(a + 1, b + 1)}
+
+    def _run_of(self, i):
+        return next((r for r in getattr(self, "_runs", []) if r[2] <= i <= r[3]), None)
+
+    def toggle_group(self, i, collapse=None):
+        r = self._run_of(i)
+        if not r or not r[0] or r[3] == r[2]:
+            return
+        coll = self._collapsed()
+        on = (r[0] not in coll) if collapse is None else collapse
+        (coll.add if on else coll.discard)(r[0])
+        self.refresh_all([r[2]])
+
+    def collapse_all(self, on):
+        coll = self._collapsed()
+        self._compute_groups()
+        for g, _n, a, b in self._runs:
+            if g and b > a:
+                (coll.add if on else coll.discard)(g)
+        self.refresh_all()
+
     def _add_tools_button(self):
         b = QToolButton()
         b.setText("Инструменты ▾")
@@ -2927,8 +3413,7 @@ class MainWindow(QMainWindow):
                 a = sub.addAction(label, lambda k=key: self.run_tool(k))
                 a.setToolTip(tip)
         b.setMenu(m)
-        self.toolbar.insertWidget(self.a_rl, b)
-        self.toolbar.insertSeparator(self.a_rl)
+        self.toolbar.insertWidget(self._tb_spacer, b)
 
     def run_tool(self, key):
         fn = getattr(self, "tool_" + key, None)
@@ -2943,6 +3428,8 @@ class MainWindow(QMainWindow):
     def goto_page(self, page):
         """Выделить страницу и прокрутить к ней в рабочей области."""
         if 0 <= page < self.doc.page_count:
+            if page in getattr(self, "_hidden", ()):          # страница в свёрнутом файле — развернуть его
+                self.toggle_group(page, collapse=False)
             self.pages.clearSelection()
             it = self.pages.item(page)
             if it:
@@ -3449,7 +3936,69 @@ class MainWindow(QMainWindow):
             fn()
         self.tree.clearSelection()
 
+    def save_open_as_pdf(self, title="Сохранить как PDF"):
+        """Открытый документ (всё, что собрано в рабочей области, — Word, картинки, PDF) или только
+        выделенные страницы — в отдельный PDF-файл."""
+        sel = self.selected()
+        only = False
+        if sel and len(sel) < self.doc.page_count:
+            box = QMessageBox(self)
+            box.setWindowTitle(title)
+            box.setText(f"<b>{title}</b>")
+            box.setInformativeText(f"Выделено страниц: {len(sel)} из {self.doc.page_count}. Что сохранить в PDF?")
+            b_sel = box.addButton(f"Выделенные ({len(sel)} стр.)", QMessageBox.AcceptRole)
+            b_all = box.addButton(f"Весь документ ({self.doc.page_count} стр.)", QMessageBox.AcceptRole)
+            box.addButton("Отмена", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() not in (b_sel, b_all):
+                return
+            only = box.clickedButton() is b_sel
+        p = self.ask_save_path(title, ".pdf", PDF_FILTER, " (выбранные страницы)" if only else "")
+        if not p:
+            return
+        try:
+            if only:
+                out = fitz.open()
+                for i in sel:
+                    out.insert_pdf(self.doc, from_page=i, to_page=i)
+                C.save_pdf(out, p)
+            elif not self.path:
+                return self.save_to(p)                       # документ ещё без файла — теперь он и есть этот PDF
+            else:
+                C.save_pdf(self.doc, p)
+        except Exception as e:
+            return self.error("Не удалось сохранить PDF", e)
+        cid = self.ws[self.cur_ws].get("case_id")
+        if cid:
+            try:
+                U.db().add_doc(cid, p)
+                self.cases_page.refresh_docs_if(cid)
+            except Exception:
+                pass
+        self.toast(f"✓  PDF сохранён: {Path(p).name}")
+
+    def _convert_open_or_pick(self, title):
+        """«… в PDF», когда в рабочей области уже что-то открыто: сохранить это в PDF, а не спрашивать файлы."""
+        if not self.doc.page_count:
+            return False
+        self.save_open_as_pdf(title)
+        return True
+
     def tool_merge(self):
+        if self.doc.page_count:
+            box = QMessageBox(self)
+            box.setWindowTitle("Объединить")
+            box.setText("<b>Объединить в один PDF</b>")
+            box.setInformativeText("Всё, что лежит в рабочей области, — уже один документ: перетаскивайте файлы "
+                                   "прямо в окно страниц, меняйте порядок мышью. Что сделать сейчас?")
+            b_add = box.addButton("Добавить файлы в конец…", QMessageBox.AcceptRole)
+            b_save = box.addButton("Сохранить всё одним PDF…", QMessageBox.AcceptRole)
+            box.addButton("Отмена", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() is b_save:
+                return self.save_open_as_pdf("Сохранить одним PDF")
+            if box.clickedButton() is not b_add:
+                return
         paths, _ = QFileDialog.getOpenFileNames(self, "Выберите файлы для объединения", self.default_dir(),
                                                 OPEN_FILTER)
         if paths:
@@ -3660,6 +4209,8 @@ class MainWindow(QMainWindow):
 
     # --- в PDF
     def tool_img2pdf(self):
+        if self._convert_open_or_pick("Картинки в PDF"):
+            return
         paths, _ = QFileDialog.getOpenFileNames(self, "Выберите изображения", self.default_dir(), IMG_FILTER)
         if not paths:
             return
@@ -3698,12 +4249,18 @@ class MainWindow(QMainWindow):
             self.open_paths(paths, replace=self.doc.page_count == 0)
 
     def tool_word2pdf(self):
+        if self._convert_open_or_pick("Word в PDF"):
+            return
         self._office("Документы Word", "Word (*.doc *.docx *.rtf *.odt)")
 
     def tool_ppt2pdf(self):
+        if self._convert_open_or_pick("PowerPoint в PDF"):
+            return
         self._office("Презентации", "PowerPoint (*.ppt *.pptx *.pps *.ppsx *.odp)")
 
     def tool_xls2pdf(self):
+        if self._convert_open_or_pick("Excel в PDF"):
+            return
         self._office("Таблицы", "Excel (*.xls *.xlsx *.ods *.csv)")
 
     def tool_html2pdf(self):
@@ -4180,6 +4737,8 @@ QToolButton#help:hover {{ background: {A}; color: white; }}
 /* панель документа */
 QToolBar {{ background: {t['panel']}; border: none; border-bottom: 1px solid {t['border']}; padding: 6px 10px; spacing: 2px; }}
 QToolBar::separator {{ width: 1px; background: {t['border']}; margin: 8px 8px; }}
+QToolBar#pagebar {{ padding: 2px 10px; }}
+QToolBar#pagebar QToolButton {{ padding: 3px 9px; }}
 QToolBar QToolButton {{ padding: 6px 11px; border-radius: 8px; color: {A}; }}
 QToolBar QToolButton:hover {{ background: {t['fill']}; }}
 QToolBar QToolButton:pressed {{ background: {t['fill_hover']}; }}
@@ -4187,6 +4746,7 @@ QToolBar QToolButton:disabled {{ color: {t['disabled']}; }}
 QToolBar QToolButton#tbprimary {{ background: {A}; color: white; font-weight: 600; padding: 6px 16px; border-radius: 9px; }}
 QToolBar QLabel {{ color: {t['muted']}; }}
 QToolBar QLabel#doctitle {{ color: {t['text']}; font-family: "{S}"; font-size: 13pt; font-weight: 600; padding-right: 14px; }}
+QToolBar#pagebar QLabel#doctitle {{ font-size: 11pt; padding-right: 8px; }}
 
 /* уведомления сверху — скруглённые плашки */
 QPushButton#banner {{ background: {t['banner']}; color: {t['banner_text']}; border: none; border-radius: 12px;
