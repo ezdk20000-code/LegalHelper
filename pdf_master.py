@@ -11,7 +11,8 @@ import subprocess
 from pathlib import Path
 
 import pymupdf as fitz
-from PySide6.QtCore import Qt, QSize, QTimer, Signal, QPointF, QRectF, QUrl, QByteArray, QBuffer, QIODevice
+from PySide6.QtCore import (Qt, QSize, QTimer, Signal, QPointF, QRectF, QUrl, QByteArray, QBuffer,
+                            QIODevice)
 from PySide6.QtGui import (QAction, QActionGroup, QIcon, QImage, QPixmap, QPainter, QPen, QColor,
                            QFont, QKeySequence, QDesktopServices, QPainterPath, QPalette, QFontDatabase)
 from PySide6.QtWidgets import (
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QLineEdit, QDialog, QDialogButtonBox, QSpinBox, QDoubleSpinBox, QComboBox,
     QCheckBox, QPlainTextEdit, QColorDialog, QProgressDialog, QTreeWidget, QTreeWidgetItem, QSplitter,
     QScrollArea, QMenu, QSlider, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QToolButton,
-    QSizePolicy, QStyle, QFrame, QRadioButton, QButtonGroup, QStackedWidget)
+    QSizePolicy, QStyle, QFrame, QRadioButton, QButtonGroup, QStackedWidget, QTabBar)
 
 import pdf_core as C
 import legal_core as L
@@ -29,7 +30,7 @@ import help_ui as H
 import updater as UPD
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "1.6"
+APP_VERSION = "1.7"
 ACCENT = "#007aff"
 FAILED = object()
 PDF_FILTER = "PDF (*.pdf)"
@@ -183,7 +184,7 @@ class OptionsDialog(QDialog):
     """Универсальный диалог параметров.
     fields: (ключ, подпись, тип, значение_по_умолчанию, доп)"""
 
-    def __init__(self, parent, title, fields, note=None, ok_text="Выполнить", depends=None):
+    def __init__(self, parent, title, fields, note=None, ok_text="Выполнить", depends=None, help=None):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumWidth(460)
@@ -229,7 +230,14 @@ class OptionsDialog(QDialog):
         bb.button(QDialogButtonBox.Cancel).setText("Отмена")
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
-        lay.addWidget(bb)
+        if help:                                   # кнопка «?» с подсказкой к функции
+            row = QHBoxLayout()
+            row.addWidget(U.HelpButton(help))
+            row.addStretch(1)
+            row.addWidget(bb)
+            lay.addLayout(row)
+        else:
+            lay.addWidget(bb)
 
     def _make(self, kind, label, default, extra):
         if kind == "int":
@@ -295,8 +303,8 @@ class OptionsDialog(QDialog):
         return v
 
     @staticmethod
-    def ask(parent, title, fields, note=None, ok_text="Выполнить", depends=None):
-        d = OptionsDialog(parent, title, fields, note, ok_text, depends)
+    def ask(parent, title, fields, note=None, ok_text="Выполнить", depends=None, help=None):
+        d = OptionsDialog(parent, title, fields, note, ok_text, depends, help)
         return d.values() if d.exec() == QDialog.Accepted else None
 
 
@@ -1433,6 +1441,7 @@ class MainWindow(QMainWindow):
         self._build()
         self.update_title()
         self.reminders = U.Reminders(self)
+        polish_ui(self)
         sec = int(settings().value("section", 0) or 0)
         if sec in (1, 2):
             QTimer.singleShot(0, lambda: self.show_section(sec))
@@ -2972,7 +2981,7 @@ class MainWindow(QMainWindow):
         self._load_ws(len(self.ws) - 1)
 
     def switch_ws(self, i):
-        if i == self.cur_ws or not (0 <= i < len(self.ws)):
+        if i is None or i == self.cur_ws or not (0 <= i < len(self.ws)):
             return
         self._store_ws()
         self._load_ws(i)
@@ -3674,33 +3683,35 @@ class MainWindow(QMainWindow):
 
 
 # =============================================================================
-# «Кабинет адвоката»: корешок папки цвета штемпельной краски, бумага на прохладном столе,
-# фиолетово-синий оттиск печати как акцент, сургучно-красный — только для горящих сроков.
+# Оформление в духе iOS / iPadOS: светлая боковая панель, системный синий, сгруппированные белые
+# карточки на сером фоне без рамок, сегментированные вкладки, скругления 10–14 px, красный — только для сроков.
 THEMES = {
-    "light": dict(win="#eceef3", panel="#ffffff", base="#ffffff", alt="#f4f5f8", text="#1d2130", muted="#6b7185",
-                  border="#dde1e8", input_border="#c9ceda", hover="#e3e6ee", pressed="#d7dbe6",
-                  pages="#eceef3", tool_hover="#e3e6ee", note_bg="#f3f0ff", note_border="#d9d0ff",
-                  note_text="#3d2f86", canvas="#7c8296", item_hover="rgba(27,35,80,0.05)",
-                  disabled="#a9aebd", thumb_border="#d3d7e1", tooltip="#1b2350", tooltip_text="#ffffff",
-                  accent="#5b3fd0", accent_soft="rgba(91,63,208,0.12)", wax="#b8322a",
-                  banner="rgba(184,50,42,0.09)", banner_text="#9a2a23", nav="#1b2350", danger="#b8322a",
-                  side="#1b2350", side_text="#e8eaf6", side_muted="#9aa1c9", side_hover="rgba(255,255,255,0.07)",
-                  side_line="rgba(255,255,255,0.10)", side_active="#ffffff", shadow=(20, 26, 60, 40)),
-    "dark": dict(win="#14161d", panel="#1c1f29", base="#1c1f29", alt="#232735", text="#e6e8f0", muted="#8c92a8",
-                 border="#2a2e3b", input_border="#3a3f50", hover="#262a37", pressed="#2f3444",
-                 pages="#14161d", tool_hover="#262a37", note_bg="#241f3d", note_border="#3d3470",
-                 note_text="#d6ccff", canvas="#0c0d12", item_hover="rgba(255,255,255,0.04)",
-                 disabled="#555a6b", thumb_border="#2f3444", tooltip="#e8eaf6", tooltip_text="#1b2350",
-                 accent="#9b87ff", accent_soft="rgba(155,135,255,0.18)", wax="#e0584d",
-                 banner="rgba(224,88,77,0.14)", banner_text="#ff9e95", nav="#0e1330", danger="#e0584d",
-                 side="#0e1330", side_text="#e0e3f5", side_muted="#8990bb", side_hover="rgba(255,255,255,0.06)",
-                 side_line="rgba(255,255,255,0.08)", side_active="#1c1f29", shadow=(0, 0, 0, 90)),
+    "light": dict(win="#f2f2f7", panel="#ffffff", base="#ffffff", alt="#f7f7fa", text="#1c1c1e", muted="#8e8e93",
+                  border="#e5e5ea", input_border="#d1d1d6", hover="#ececf1", pressed="#dedee4",
+                  fill="rgba(118,118,128,0.12)", fill_hover="rgba(118,118,128,0.20)",
+                  pages="#f2f2f7", tool_hover="#ececf1", note_bg="rgba(0,122,255,0.08)", note_border="rgba(0,122,255,0.20)",
+                  note_text="#1c1c1e", canvas="#e5e5ea", item_hover="rgba(0,0,0,0.04)",
+                  disabled="#b0b0b8", thumb_border="#e5e5ea", tooltip="#1c1c1e", tooltip_text="#ffffff",
+                  accent="#007aff", accent_soft="rgba(0,122,255,0.12)", wax="#ff3b30",
+                  banner="rgba(255,59,48,0.10)", banner_text="#d70015", nav="#f7f7fa", danger="#ff3b30",
+                  side="#f7f7fa", side_text="#1c1c1e", side_muted="#8e8e93", side_hover="rgba(0,0,0,0.05)",
+                  side_line="#e5e5ea", side_active="#007aff", seg_on="#ffffff", shadow=(0, 0, 0, 28)),
+    "dark": dict(win="#000000", panel="#1c1c1e", base="#1c1c1e", alt="#232325", text="#f2f2f7", muted="#98989f",
+                 border="#2c2c2e", input_border="#3a3a3c", hover="#2c2c2e", pressed="#3a3a3c",
+                 fill="rgba(118,118,128,0.24)", fill_hover="rgba(118,118,128,0.34)",
+                 pages="#000000", tool_hover="#2c2c2e", note_bg="rgba(10,132,255,0.14)", note_border="rgba(10,132,255,0.30)",
+                 note_text="#f2f2f7", canvas="#0c0c0d", item_hover="rgba(255,255,255,0.05)",
+                 disabled="#5a5a5f", thumb_border="#2c2c2e", tooltip="#f2f2f7", tooltip_text="#1c1c1e",
+                 accent="#0a84ff", accent_soft="rgba(10,132,255,0.20)", wax="#ff453a",
+                 banner="rgba(255,69,58,0.16)", banner_text="#ff6961", nav="#1c1c1e", danger="#ff453a",
+                 side="#161618", side_text="#f2f2f7", side_muted="#98989f", side_hover="rgba(255,255,255,0.06)",
+                 side_line="#2c2c2e", side_active="#0a84ff", seg_on="#636366", shadow=(0, 0, 0, 90)),
 }
 THEME_NAMES = {"system": "Как в Windows", "light": "Светлая", "dark": "Тёмная"}
 T = dict(THEMES["light"])            # текущие цвета (меняются при смене темы)
-SERIF = "Georgia"                     # уточняется при запуске (Sitka в Windows)
-SERIF_CHOICES = ("Sitka Heading", "Sitka Subheading", "Sitka Text", "Georgia", "Cambria", "PT Serif",
-                 "Noto Serif", "DejaVu Serif")
+SERIF = "Segoe UI"                    # шрифт заголовков (уточняется при запуске); имя осталось от прежнего дизайна
+SERIF_CHOICES = ("SF Pro Display", "Segoe UI Variable Display", "Segoe UI", "Inter", "Helvetica Neue",
+                 "Noto Sans", "DejaVu Sans")
 
 
 def pick_serif():
@@ -3713,184 +3724,252 @@ def pick_serif():
     return SERIF
 
 
+def ui_asset(name, svg):
+    """SVG-значок для стилей (галочка чекбокса, стрелка списка) — пишется в папку данных."""
+    d = os.path.join(data_dir(), "ui")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, name)
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            if f.read() == svg:
+                return p.replace("\\", "/")
+    except OSError:
+        pass
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(svg)
+    return p.replace("\\", "/")
+
+
 def make_style(t):
     A = t["accent"]
     S = SERIF
+    dark = t.get("name") == "dark" or t["win"] == "#000000"
+    tick = ui_asset("check.svg", '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">'
+                    '<path d="M4.5 9.5l3 3 6-7" fill="none" stroke="#ffffff" stroke-width="2.2" '
+                    'stroke-linecap="round" stroke-linejoin="round"/></svg>')
+    arrow = ui_asset("chevron-dark.svg" if dark else "chevron.svg",
+                     '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12">'
+                     f'<path d="M3 4.5l3 3 3-3" fill="none" stroke="{t["muted"]}" stroke-width="1.6" '
+                     'stroke-linecap="round" stroke-linejoin="round"/></svg>')
     return f"""
 * {{ outline: 0; }}
 QMainWindow, QDialog {{ background: {t['win']}; }}
 QWidget {{ color: {t['text']}; }}
-QMenuBar {{ background: {t['side']}; color: {t['side_muted']}; padding: 3px 8px; border-bottom: 1px solid {t['side_line']}; }}
+QMenuBar {{ background: {t['side']}; color: {t['text']}; padding: 3px 8px; border-bottom: 1px solid {t['border']}; }}
 QMenuBar::item {{ padding: 4px 10px; border-radius: 6px; background: transparent; }}
-QMenuBar::item:selected {{ background: {t['side_hover']}; color: {t['side_text']}; }}
-QMenu {{ background: {t['panel']}; color: {t['text']}; border: 1px solid {t['border']}; border-radius: 8px; padding: 6px; }}
-QMenu::item {{ padding: 6px 24px 6px 12px; border-radius: 5px; }}
+QMenuBar::item:selected {{ background: {t['fill']}; }}
+QMenu {{ background: {t['panel']}; color: {t['text']}; border: 1px solid {t['border']}; border-radius: 12px; padding: 6px; }}
+QMenu::item {{ padding: 7px 26px 7px 12px; border-radius: 7px; }}
 QMenu::item:selected {{ background: {A}; color: white; }}
 QMenu::item:disabled {{ color: {t['disabled']}; }}
-QMenu::separator {{ height: 1px; background: {t['border']}; margin: 5px 8px; }}
+QMenu::separator {{ height: 1px; background: {t['border']}; margin: 5px 10px; }}
 
-/* боковая панель — «корешок дела» */
-QWidget#sidebar {{ background: {t['side']}; }}
-QLabel#brand {{ color: {t['side_text']}; font-family: "{S}"; font-size: 17pt; }}
-QLabel#brandsub {{ color: {t['side_muted']}; font-size: 9pt; }}
-QToolButton#seg {{ background: transparent; color: {t['side_muted']}; border: none; border-radius: 7px;
-    padding: 7px 2px; font-size: 9pt; }}
-QToolButton#seg:hover {{ color: {t['side_text']}; background: {t['side_hover']}; }}
-QToolButton#seg:checked {{ background: {t['side_active']}; color: {t['text']}; font-weight: 600; }}
-QFrame#segtrack {{ background: rgba(0,0,0,0.22); border-radius: 9px; }}
-QTreeWidget#tools {{ background: transparent; color: {t['side_text']}; border: none; padding: 4px 6px 10px 6px; }}
-QTreeWidget#tools::item {{ padding: 5px 6px; border-radius: 6px; margin: 0; }}
+/* боковая панель — как в iPadOS */
+QWidget#sidebar {{ background: {t['side']}; border-right: 1px solid {t['border']}; }}
+QLabel#brand {{ color: {t['text']}; font-family: "{S}"; font-size: 18pt; font-weight: 700; }}
+QLabel#brandsub {{ color: {t['muted']}; font-size: 9pt; }}
+QToolButton#seg {{ background: transparent; color: {t['text']}; border: none; border-radius: 7px;
+    padding: 6px 2px; font-size: 9pt; }}
+QToolButton#seg:hover {{ background: {t['fill']}; }}
+QToolButton#seg:checked {{ background: {t['seg_on']}; color: {t['text']}; font-weight: 600; }}
+QFrame#segtrack {{ background: {t['fill']}; border-radius: 9px; }}
+QTreeWidget#tools {{ background: transparent; color: {t['text']}; border: none; padding: 4px 6px 10px 6px; }}
+QTreeWidget#tools::item {{ padding: 6px 8px; border-radius: 8px; margin: 0; }}
 QTreeWidget#tools::item:hover {{ background: {t['side_hover']}; }}
-QTreeWidget#tools::item:selected {{ background: {t['side_hover']}; color: white; }}
-QTreeWidget#tools QScrollBar::handle:vertical {{ background: {t['side_line']}; }}
-QToolButton#help {{ border: none; border-radius: 10px; min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px; color: {t['side_muted']}; background: transparent;
-    font-family: "{S}"; font-size: 10pt; font-style: italic; padding: 0; }}
+QTreeWidget#tools::item:selected {{ background: {A}; color: white; }}
+QToolButton#help {{ border: none; border-radius: 10px; min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px;
+    color: {A}; background: {t['accent_soft']}; font-size: 9pt; font-weight: 700; padding: 0; }}
 QToolButton#help:hover {{ background: {A}; color: white; }}
-QDialog QToolButton#help, QWidget#page QToolButton#help {{ color: {t['muted']}; border: 1px solid {t['input_border']}; }}
 
 /* панель документа */
-QToolBar {{ background: {t['panel']}; border: none; border-bottom: 1px solid {t['border']}; padding: 6px 8px; spacing: 1px; }}
+QToolBar {{ background: {t['panel']}; border: none; border-bottom: 1px solid {t['border']}; padding: 6px 10px; spacing: 2px; }}
 QToolBar::separator {{ width: 1px; background: {t['border']}; margin: 8px 8px; }}
-QToolBar QToolButton {{ padding: 6px 10px; border-radius: 7px; color: {t['text']}; }}
-QToolBar QToolButton:hover {{ background: {t['hover']}; }}
-QToolBar QToolButton:pressed {{ background: {t['pressed']}; }}
+QToolBar QToolButton {{ padding: 6px 11px; border-radius: 8px; color: {A}; }}
+QToolBar QToolButton:hover {{ background: {t['fill']}; }}
+QToolBar QToolButton:pressed {{ background: {t['fill_hover']}; }}
 QToolBar QToolButton:disabled {{ color: {t['disabled']}; }}
-QToolBar QToolButton#tbprimary {{ background: {A}; color: white; font-weight: 600; padding: 6px 14px; }}
+QToolBar QToolButton#tbprimary {{ background: {A}; color: white; font-weight: 600; padding: 6px 16px; border-radius: 9px; }}
 QToolBar QLabel {{ color: {t['muted']}; }}
-QToolBar QLabel#doctitle {{ color: {t['text']}; font-family: "{S}"; font-size: 13.5pt; padding-right: 14px; }}
-QPushButton#banner {{ background: {t['banner']}; color: {t['banner_text']}; border: none; border-left: 3px solid {t['wax']};
-    border-radius: 0; padding: 9px 16px; text-align: left; font-weight: 600; }}
+QToolBar QLabel#doctitle {{ color: {t['text']}; font-family: "{S}"; font-size: 13pt; font-weight: 600; padding-right: 14px; }}
+
+/* уведомления сверху — скруглённые плашки */
+QPushButton#banner {{ background: {t['banner']}; color: {t['banner_text']}; border: none; border-radius: 12px;
+    margin: 10px 18px 0 18px; padding: 10px 16px; text-align: left; font-weight: 600; }}
 QPushButton#banner:hover {{ background: {t['banner']}; text-decoration: underline; }}
-QFrame#updatebar {{ background: {t['accent_soft']}; border: none; border-left: 3px solid {A}; }}
+QFrame#updatebar {{ background: {t['accent_soft']}; border: none; border-radius: 12px; margin: 10px 18px 0 18px; }}
 QFrame#updatebar QLabel#updatetext {{ color: {t['text']}; font-weight: 600; background: transparent; }}
-QFrame#updatebar QPushButton#updateinstall {{ background: {A}; color: white; font-weight: 600; border: none; }}
+QFrame#updatebar QPushButton {{ background: {t['panel']}; }}
+QFrame#updatebar QPushButton#updateinstall {{ background: {A}; color: white; font-weight: 600; }}
 QListWidget#pages {{ background: {t['pages']}; color: {t['text']}; border: none; padding: 18px; }}
 QListWidget#pages::item, QListWidget#pages::item:selected, QListWidget#pages::item:hover {{ background: transparent; border: none; }}
 
 /* дела в боковой панели */
 QWidget#sidebar QWidget#sidepanel {{ background: transparent; border: none; }}
-QWidget#sidebar QLabel {{ color: {t['side_text']}; }}
-QWidget#sidebar QLabel#title {{ font-size: 15pt; }}
-QWidget#sidebar QLineEdit {{ background: rgba(255,255,255,0.08); border: 1px solid {t['side_line']}; color: {t['side_text']}; }}
+QWidget#sidebar QLabel {{ color: {t['text']}; }}
+QWidget#sidebar QLabel#title {{ font-size: 15pt; font-weight: 700; }}
+QWidget#sidebar QLineEdit {{ background: {t['fill']}; border: none; border-radius: 10px; padding: 7px 10px; color: {t['text']}; }}
+QWidget#sidebar QLineEdit:focus {{ border: none; padding: 7px 10px; background: {t['fill_hover']}; }}
 QWidget#sidebar QListWidget#caselist {{ background: transparent; border: none; }}
-QWidget#sidebar QListWidget#caselist::item {{ color: {t['side_text']}; padding: 9px 10px; border-radius: 8px; border: none; }}
+QWidget#sidebar QListWidget#caselist::item {{ color: {t['text']}; padding: 9px 10px; border-radius: 10px; border: none; margin: 1px 0; }}
 QWidget#sidebar QListWidget#caselist::item:hover {{ background: {t['side_hover']}; }}
-QWidget#sidebar QListWidget#caselist::item:selected {{ background: {t['side_active']}; color: {t['text']}; }}
+QWidget#sidebar QListWidget#caselist::item:selected {{ background: {A}; color: white; }}
 QWidget#sidebar QListWidget#upcoming {{ background: transparent; border: none; }}
-QWidget#sidebar QListWidget#upcoming::item {{ color: {t['side_muted']}; border-bottom: 1px solid {t['side_line']}; padding: 6px 4px; }}
-QWidget#sidebar QCheckBox {{ color: {t['side_muted']}; }}
-QPushButton#loosebtn {{ text-align: left; background: transparent; color: {t['side_text']}; border: 1px solid {t['side_line']};
-    border-radius: 9px; padding: 9px 12px; }}
-QPushButton#loosebtn:hover {{ background: {t['side_hover']}; }}
-QPushButton#loosebtn:checked {{ background: {t['side_active']}; color: {t['text']}; border-color: {t['side_active']}; font-weight: 600; }}
-QPushButton#sidelink {{ text-align: left; border: none; background: transparent; color: {t['side_muted']}; padding: 8px 4px; }}
-QPushButton#sidelink:hover {{ color: {t['side_text']}; }}
+QWidget#sidebar QListWidget#upcoming::item {{ color: {t['muted']}; border-bottom: 1px solid {t['border']}; padding: 7px 4px; }}
+QWidget#sidebar QCheckBox {{ color: {t['muted']}; }}
+QPushButton#loosebtn {{ text-align: left; background: {t['panel']}; color: {t['text']}; border: none;
+    border-radius: 10px; padding: 10px 12px; }}
+QPushButton#loosebtn:hover {{ background: {t['hover']}; }}
+QPushButton#loosebtn:checked {{ background: {A}; color: white; font-weight: 600; }}
+QPushButton#sidelink {{ text-align: left; border: none; background: transparent; color: {A}; padding: 8px 4px; }}
+QPushButton#sidelink:hover {{ text-decoration: underline; }}
+
 /* карточки действий и обзор */
-QPushButton#actioncard {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 12px; text-align: left; padding: 0; }}
-QPushButton#actioncard:hover {{ border: 1px solid {A}; background: {t['accent_soft']}; }}
+QPushButton#actioncard {{ background: {t['panel']}; border: none; border-radius: 14px; text-align: left; padding: 0; }}
+QPushButton#actioncard:hover {{ background: {t['hover']}; }}
+QPushButton#actioncard:pressed {{ background: {t['pressed']}; }}
+QLabel#cardicon {{ background: {t['accent_soft']}; border-radius: 10px; }}
 QLabel#cardtitle {{ font-weight: 600; font-size: 10.5pt; }}
 QLabel#carddesc {{ color: {t['muted']}; font-size: 9pt; }}
-QLabel#facts {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 12px; padding: 12px 16px; }}
+QLabel#facts {{ background: {t['panel']}; border: none; border-radius: 14px; padding: 14px 18px; }}
 QListWidget#overlist {{ background: transparent; border: none; }}
-QListWidget#overlist::item {{ padding: 7px 4px; border-bottom: 1px solid {t['border']}; }}
+QListWidget#overlist::item {{ padding: 8px 4px; border-bottom: 1px solid {t['border']}; }}
+QListWidget#overlist::item:hover {{ background: {t['item_hover']}; }}
 QListWidget#overlist::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; }}
-QToolButton#primarytool {{ background: {A}; color: white; border: none; border-radius: 7px; padding: 6px 14px; font-weight: 600; }}
+QToolButton#primarytool {{ background: {A}; color: white; border: none; border-radius: 9px; padding: 6px 14px; font-weight: 600; }}
 QToolButton#primarytool::menu-indicator, QToolButton#moretabs::menu-indicator, QToolButton#toolsbtn::menu-indicator {{ image: none; width: 0; }}
-QToolButton#moretabs {{ border: none; color: {t['muted']}; padding: 6px 10px; background: transparent; }}
-QToolButton#moretabs:hover {{ color: {t['text']}; }}
-QToolButton#toolsbtn {{ padding: 6px 10px; border-radius: 7px; }}
+QToolButton#moretabs {{ border: none; border-radius: 8px; color: {A}; padding: 6px 12px; background: transparent; }}
+QToolButton#moretabs:hover {{ background: {t['fill']}; }}
+QToolButton#toolsbtn {{ padding: 6px 11px; border-radius: 8px; }}
 
 /* навигатор дел */
 QWidget#navigator {{ background: {t['panel']}; border-right: 1px solid {t['border']}; }}
-QLabel#navtitle {{ font-family: "{S}"; font-size: 14pt; }}
+QLabel#navtitle {{ font-family: "{S}"; font-size: 14pt; font-weight: 700; }}
 QToolButton#link {{ border: none; color: {A}; background: transparent; padding: 2px 4px; }}
 QToolButton#link:hover {{ text-decoration: underline; }}
 QTreeWidget#navtree {{ background: transparent; border: none; }}
-QTreeWidget#navtree::item {{ padding: 5px 4px; border-radius: 6px; }}
+QTreeWidget#navtree::item {{ padding: 6px 4px; border-radius: 8px; }}
 QTreeWidget#navtree::item:hover {{ background: {t['hover']}; }}
 QTreeWidget#navtree::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; }}
-QToolButton#casebtn {{ border: 1px dashed {t['input_border']}; border-radius: 13px; padding: 4px 12px; color: {t['muted']}; }}
-QToolButton#casebtn[linked="true"] {{ border: 1px solid {A}; color: {A}; background: {t['accent_soft']}; }}
+QToolButton#casebtn {{ border: none; border-radius: 13px; padding: 5px 12px; color: {t['muted']}; background: {t['fill']}; }}
+QToolButton#casebtn:hover {{ background: {t['fill_hover']}; }}
+QToolButton#casebtn[linked="true"] {{ color: {A}; background: {t['accent_soft']}; font-weight: 600; }}
 QToolButton#casebtn::menu-indicator {{ image: none; width: 0; }}
-
-QTableWidget#docs {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 10px;
+QTableWidget#docs {{ background: {t['panel']}; border: none; border-radius: 12px;
     selection-background-color: {t['accent_soft']}; selection-color: {t['text']}; }}
 QTableWidget#docs::item {{ border-bottom: 1px solid {t['border']}; padding: 0 6px; }}
 QTableWidget#docs::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; }}
 QToolButton#iconpick {{ border: none; border-radius: 8px; }}
 QToolButton#iconpick:hover {{ background: {t['accent_soft']}; }}
-
 QTextBrowser#helptext {{ background: {t['panel']}; border: none; }}
 QListWidget#helptoc {{ background: transparent; border: none; }}
-QListWidget#helptoc::item {{ padding: 8px 10px; border-radius: 7px; margin: 1px 0; }}
+QListWidget#helptoc::item {{ padding: 8px 10px; border-radius: 8px; margin: 1px 0; }}
 QListWidget#helptoc::item:hover {{ background: {t['hover']}; }}
-QListWidget#helptoc::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; border-left: 3px solid {t['accent']}; }}
+QListWidget#helptoc::item:selected {{ background: {A}; color: white; }}
 
-/* элементы управления */
-QPushButton {{ padding: 7px 16px; border: 1px solid {t['input_border']}; border-radius: 7px; background: {t['panel']}; color: {t['text']}; }}
-QPushButton:hover {{ border-color: {A}; }}
-QPushButton:pressed {{ background: {t['pressed']}; }}
-QPushButton:disabled {{ color: {t['disabled']}; border-color: {t['border']}; }}
-QPushButton#primary, QDialogButtonBox QPushButton:default {{ background: {A}; color: white; border: 1px solid {A}; font-weight: 600; }}
-QPushButton#primary:disabled {{ background: {t['input_border']}; border-color: {t['input_border']}; color: {t['panel']}; }}
-QToolButton#mode {{ text-align: left; padding: 7px 10px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: {t['text']}; }}
-QToolButton#mode:hover {{ background: {t['hover']}; }}
+/* кнопки: основная — залитая синяя, остальные — серые с синим текстом, как в iOS */
+QPushButton {{ padding: 7px 13px; border: none; border-radius: 9px; background: {t['fill']}; color: {A}; font-weight: 500; }}
+QPushButton:hover {{ background: {t['fill_hover']}; }}
+QPushButton:pressed {{ background: {t['fill_hover']}; color: {t['text']}; }}
+QPushButton:disabled {{ color: {t['disabled']}; background: {t['fill']}; }}
+QPushButton:checked {{ background: {A}; color: white; }}
+QPushButton[danger="true"] {{ color: {t['danger']}; }}
+QPushButton#primary, QDialogButtonBox QPushButton:default {{ background: {A}; color: white; font-weight: 600; }}
+QPushButton#primary:hover, QDialogButtonBox QPushButton:default:hover {{ background: {A}; }}
+QPushButton#primary:disabled {{ background: {t['fill']}; color: {t['disabled']}; }}
+QToolButton {{ color: {t['text']}; }}
+QToolButton#mode {{ text-align: left; padding: 7px 10px; border-radius: 8px; border: none; background: transparent; color: {t['text']}; }}
+QToolButton#mode:hover {{ background: {t['fill']}; }}
 QToolButton#mode:checked {{ background: {A}; color: white; }}
-QFrame#card {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 10px; }}
+QFrame#card {{ background: {t['panel']}; border: none; border-radius: 14px; }}
 QWidget#sidepanel {{ background: {t['win']}; border-right: 1px solid {t['border']}; }}
-QLabel#title {{ font-family: "{S}"; font-size: 22pt; }}
-QLabel#subtitle {{ font-family: "{S}"; font-size: 14pt; }}
-QLabel#bigresult {{ font-family: "{S}"; font-size: 20pt; color: {A}; }}
-QLabel#note {{ background: {t['note_bg']}; border: none; border-left: 3px solid {A}; border-radius: 0; padding: 10px 12px; color: {t['note_text']}; }}
+QLabel#title {{ font-family: "{S}"; font-size: 22pt; font-weight: 700; }}
+QLabel#subtitle {{ font-family: "{S}"; font-size: 13.5pt; font-weight: 700; }}
+QLabel#bigresult {{ font-family: "{S}"; font-size: 22pt; font-weight: 700; color: {A}; }}
+QLabel#note {{ background: {t['note_bg']}; border: none; border-radius: 12px; padding: 11px 14px; color: {t['note_text']}; }}
 QLabel#hint {{ color: {t['muted']}; }}
-QTextBrowser#result {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 10px; padding: 10px; }}
+QTextBrowser#result {{ background: {t['panel']}; border: none; border-radius: 14px; padding: 12px; }}
 QListWidget#caselist, QListWidget#upcoming {{ background: transparent; border: none; padding: 0; }}
-QListWidget#caselist::item {{ padding: 10px 10px; border-radius: 8px; margin: 1px 0; }}
+QListWidget#caselist::item {{ padding: 10px 10px; border-radius: 10px; margin: 1px 0; }}
 QListWidget#caselist::item:hover {{ background: {t['hover']}; }}
-QListWidget#caselist::item:selected {{ background: {t['panel']}; color: {t['text']}; border-left: 3px solid {A}; }}
-QListWidget#upcoming::item {{ padding: 7px 6px; border-bottom: 1px solid {t['border']}; }}
+QListWidget#caselist::item:selected {{ background: {A}; color: white; }}
+QListWidget#upcoming::item {{ padding: 8px 6px; border-bottom: 1px solid {t['border']}; }}
 QListWidget#upcoming::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; }}
 QScrollArea#canvasArea {{ background: {t['canvas']}; border: none; }}
-QScrollArea {{ background: transparent; }}
+QScrollArea {{ background: transparent; border: none; }}
 QStatusBar {{ background: {t['panel']}; color: {t['muted']}; border-top: 1px solid {t['border']}; }}
 QStatusBar QLabel {{ color: {t['muted']}; }}
-QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit, QDateEdit {{ padding: 6px 8px; border: 1px solid {t['input_border']};
-    border-radius: 7px; background: {t['base']}; color: {t['text']}; selection-background-color: {A}; selection-color: white; }}
+
+/* поля ввода */
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit, QDateEdit, QTimeEdit {{ padding: 6px 10px;
+    border: 1px solid {t['input_border']}; border-radius: 9px; background: {t['base']}; color: {t['text']};
+    selection-background-color: {A}; selection-color: white; }}
 QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled, QDateEdit:disabled {{ color: {t['disabled']}; background: {t['alt']}; }}
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus, QDateEdit:focus {{ border: 2px solid {A}; padding: 5px 7px; }}
-QComboBox::drop-down, QDateEdit::drop-down {{ border: none; width: 22px; }}
-QComboBox QAbstractItemView {{ background: {t['panel']}; color: {t['text']}; border: 1px solid {t['border']};
-    selection-background-color: {A}; selection-color: white; padding: 4px; }}
-QTableWidget, QTreeWidget, QListWidget {{ background: {t['base']}; color: {t['text']}; alternate-background-color: {t['alt']};
-    gridline-color: {t['border']}; border: 1px solid {t['border']}; border-radius: 8px; }}
-QTableWidget::item:selected, QListWidget::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; }}
-QHeaderView::section {{ background: {t['alt']}; color: {t['muted']}; border: none; border-bottom: 1px solid {t['border']}; padding: 6px; }}
-QTabWidget::pane {{ border: none; border-top: 1px solid {t['border']}; }}
-QTabBar::tab {{ background: transparent; color: {t['muted']}; padding: 8px 2px; margin-right: 22px; border: none;
-    border-bottom: 2px solid transparent; }}
-QTabBar::tab:hover {{ color: {t['text']}; }}
-QTabBar::tab:selected {{ color: {t['text']}; border-bottom: 2px solid {A}; font-weight: 600; }}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus, QTextEdit:focus, QDateEdit:focus, QTimeEdit:focus {{
+    border: 2px solid {A}; padding: 5px 9px; }}
+QAbstractItemView QSpinBox, QAbstractItemView QDoubleSpinBox, QAbstractItemView QLineEdit, QAbstractItemView QComboBox,
+QAbstractItemView QDateEdit, QAbstractItemView QTimeEdit {{ padding: 0 4px; border-radius: 6px; }}
+QComboBox::drop-down, QDateEdit::drop-down {{ border: none; width: 24px; }}
+QComboBox::down-arrow, QDateEdit::down-arrow {{ image: url("{arrow}"); width: 12px; height: 12px; }}
+QComboBox QAbstractItemView {{ background: {t['panel']}; color: {t['text']}; border: 1px solid {t['border']}; border-radius: 10px;
+    selection-background-color: {A}; selection-color: white; padding: 4px; outline: 0; }}
+
+/* таблицы и списки — белые скруглённые группы */
+QTableWidget, QTableView, QTreeWidget, QTreeView, QListWidget {{ background: {t['base']}; color: {t['text']}; alternate-background-color: {t['alt']};
+    gridline-color: {t['border']}; border: none; border-radius: 12px; }}
+QTableWidget, QTableView {{ gridline-color: transparent; selection-background-color: {t['accent_soft']}; selection-color: {t['text']}; }}
+QTableWidget::item, QTableView::item {{ border-bottom: 1px solid {t['border']}; padding: 0 4px; }}
+QTreeWidget::item, QTreeView::item {{ padding: 3px 2px; }}
+QTableWidget::item:selected, QTreeWidget::item:selected, QListWidget::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; }}
+QTreeView::branch {{ background: transparent; }}
+QTreeView::branch:selected {{ background: {t['accent_soft']}; }}
+QHeaderView {{ background: transparent; border: none; }}
+QHeaderView::section {{ background: {t['panel']}; color: {t['muted']}; border: none; border-bottom: 1px solid {t['border']};
+    padding: 7px 6px; font-size: 9pt; font-weight: 600; }}
+QTableCornerButton::section {{ background: {t['panel']}; border: none; }}
+
+/* вкладки — сегментированный переключатель */
+QTabWidget::pane {{ border: none; }}
+QTabWidget::tab-bar {{ left: 0; }}
+QTabBar {{ background: transparent; }}
+QTabBar::tab {{ background: {t['fill']}; color: {t['text']}; padding: 6px 16px; margin: 0; border: none; border-radius: 0; }}
+QTabBar::tab:first {{ border-top-left-radius: 9px; border-bottom-left-radius: 9px; }}
+QTabBar::tab:last {{ border-top-right-radius: 9px; border-bottom-right-radius: 9px; }}
+QTabBar::tab:only-one {{ border-radius: 9px; }}
+QTabBar::tab:hover {{ background: {t['fill_hover']}; }}
+QTabBar::tab:selected {{ background: {A}; color: white; font-weight: 600; }}
+
 QCheckBox, QRadioButton, QLabel {{ color: {t['text']}; }}
 QCheckBox:disabled, QRadioButton:disabled, QLabel:disabled {{ color: {t['disabled']}; }}
-QCheckBox::indicator, QRadioButton::indicator {{ width: 17px; height: 17px; }}
-QToolTip {{ background: {t['tooltip']}; color: {t['tooltip_text']}; border: none; border-radius: 5px; padding: 5px 8px; }}
+QCheckBox {{ spacing: 8px; }}
+QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid {t['input_border']}; background: {t['base']}; }}
+QCheckBox::indicator:hover {{ border-color: {A}; }}
+QCheckBox::indicator:checked {{ background: {A}; border-color: {A}; image: url("{tick}"); }}
+QCheckBox::indicator:disabled {{ background: {t['alt']}; border-color: {t['border']}; }}
+QRadioButton::indicator {{ width: 16px; height: 16px; border-radius: 9px; border: 1.5px solid {t['input_border']}; background: {t['base']}; }}
+QRadioButton::indicator:checked {{ border: 5px solid {A}; background: white; }}
+QToolTip {{ background: {t['tooltip']}; color: {t['tooltip_text']}; border: none; border-radius: 8px; padding: 6px 9px; }}
 QSplitter::handle {{ background: {t['border']}; }}
-QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: {t['input_border']}; border-radius: 4px; min-height: 30px; }}
-QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
-QScrollBar::handle:horizontal {{ background: {t['input_border']}; border-radius: 4px; min-width: 30px; }}
+QSplitter::handle:horizontal {{ width: 1px; }}
+QSplitter::handle:vertical {{ height: 1px; }}
+QScrollBar:vertical {{ background: transparent; width: 9px; margin: 3px 2px; }}
+QScrollBar::handle:vertical {{ background: {t['fill_hover']}; border-radius: 3px; min-height: 30px; }}
+QScrollBar::handle:vertical:hover {{ background: {t['muted']}; }}
+QScrollBar:horizontal {{ background: transparent; height: 9px; margin: 2px 3px; }}
+QScrollBar::handle:horizontal {{ background: {t['fill_hover']}; border-radius: 3px; min-width: 30px; }}
+QScrollBar::handle:horizontal:hover {{ background: {t['muted']}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 0; border: none; }}
 QSpinBox::up-button, QSpinBox::down-button, QDateEdit::up-button, QDateEdit::down-button {{ width: 16px; border: none; background: transparent; }}
-QSlider::groove:horizontal {{ height: 3px; background: {t['input_border']}; border-radius: 1px; }}
-QSlider::sub-page:horizontal {{ background: {A}; border-radius: 1px; }}
-QSlider::handle:horizontal {{ background: {t['panel']}; border: 2px solid {A}; width: 12px; margin: -6px 0; border-radius: 7px; }}
+QSlider::groove:horizontal {{ height: 4px; background: {t['fill_hover']}; border-radius: 2px; }}
+QSlider::sub-page:horizontal {{ background: {A}; border-radius: 2px; }}
+QSlider::handle:horizontal {{ background: white; border: 1px solid {t['input_border']}; width: 18px; height: 18px; margin: -8px 0; border-radius: 10px; }}
+QProgressBar {{ background: {t['fill']}; border: none; border-radius: 4px; height: 8px; text-align: center; color: transparent; }}
+QProgressBar::chunk {{ background: {A}; border-radius: 4px; }}
 QProgressDialog {{ background: {t['win']}; }}
 """
 
 
-STYLE = make_style(THEMES["light"])
 
 
 def system_is_dark():
@@ -3952,6 +4031,20 @@ def apply_theme(app, choice=None):
     app.setPalette(pal)
     app.setStyleSheet(make_style(t))
     return name
+
+
+def polish_ui(root):
+    """Мелочи оформления, которые не задаются стилями: красные кнопки «Удалить» (как деструктивные
+    действия в iOS), таблицы без вертикальной сетки, вкладки без линии под ними."""
+    for b in root.findChildren(QPushButton):
+        if b.text().startswith(("Удалить", "Убрать")) and not b.property("danger"):
+            b.setProperty("danger", True)
+            b.style().unpolish(b)
+            b.style().polish(b)
+    for t in root.findChildren(QTableWidget):
+        t.setShowGrid(False)
+    for bar in root.findChildren(QTabBar):
+        bar.setDrawBase(False)
 
 
 def main():
