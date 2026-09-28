@@ -79,7 +79,7 @@ rem ---------- 4. Сборка ----------
 echo [3/5] Собираю программу...
 pushd "%BSRC%"
 "%VPY%" -m PyInstaller --noconfirm --clean --windowed --log-level WARN --name LegalHelper --icon app.ico ^
-  --add-data "app.ico;." --add-data "tessdata;tessdata" --add-data "excalidraw;excalidraw" --add-data "help;help" ^
+  --add-data "app.ico;." --add-data "tessdata;tessdata" --add-data "excalidraw;excalidraw" --add-data "help;help" --add-data "forms;forms" ^
   --collect-data pptx --collect-data docx --collect-all pymupdf4llm --collect-all pdf2docx --hidden-import case_tabs --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore --hidden-import legal_ui --hidden-import legal_core --hidden-import cases --hidden-import legal_data --hidden-import templates_lib --hidden-import help_ui --hidden-import updater --hidden-import timecheck ^
   pdf_master.py >>"%LOG%" 2>&1
 set "BERR=%errorlevel%"

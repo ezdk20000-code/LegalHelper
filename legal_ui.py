@@ -114,9 +114,10 @@ HELP = {
         "Можно добавить картинку подписи (PNG с прозрачным фоном) и надпись «Прошито, пронумеровано N листов» "
         "на последней странице. Наборы строк сохраняются как шаблоны."),
     "f107": ("Опись вложения ф. 107",
-        "Форма Почты России для ценного письма (бандероли, посылки) с описью. Заполняется в двух экземплярах: "
-        "один вкладывается в отправление, второй с отметкой почты остаётся у вас. Короткая опись печатается "
-        "двумя экземплярами на одном листе A4 (разрезать по линии), длинная — по листу на экземпляр. "
+        "Официальный бланк Почты России — точно такой же, как на pochta.ru: альбомный лист A4, два одинаковых "
+        "экземпляра рядом (разрезать по середине). Один вкладывается в отправление, второй с оттиском штемпеля "
+        "остаётся у вас. На листе до 14 предметов; если больше — несколько листов со сквозной нумерацией, общий "
+        "итог на последнем. Почтовый идентификатор можно вписать позже от руки. "
         "Если ценность не объявляется — оставьте графу пустой (будет прочерк)."),
     "preflight": ("Проверка перед подачей",
         "Находит то, из-за чего документы возвращают: превышение размера, пустые и перевёрнутые страницы, "
@@ -2421,24 +2422,26 @@ class F107Dialog(QDialog):
         v = QVBoxLayout(self)
         v.addLayout(title_row("Опись вложения ф. 107", "f107", big=True))
         s = M.settings()
+        note = QLabel("Официальный бланк Почты России (как на pochta.ru): альбомный лист, два экземпляра рядом, "
+                      "до 14 предметов на листе. Получатель и адрес в описи ф. 107 не указываются — они на конверте.")
+        note.setObjectName("note")
+        note.setWordWrap(True)
+        v.addWidget(note)
         f = QFormLayout()
-        self.kind = QComboBox()
-        self.kind.setEditable(True)
-        self.kind.addItems(L.F107_KINDS)
-        self.to = QLineEdit(s.value("f107_to", ""))
-        self.to.setPlaceholderText("Индекс, город, улица, дом, офис")
-        self.rcpt = QLineEdit(s.value("f107_rcpt", ""))
-        self.rcpt.setPlaceholderText("Арбитражный суд … / ООО «…»")
-        self.sender = QLineEdit(s.value("f107_sender", ""))
-        self.sender.setPlaceholderText("ФИО или организация отправителя")
-        f.addRow("Вложения в", self.kind)
-        f.addRow("Куда", self.to)
-        f.addRow("На имя", self.rcpt)
+        self.sender = QLineEdit(s.value("f107_sender", "") or s.value("profile/Представитель", ""))
+        self.sender.setPlaceholderText("ФИО или наименование юридического лица")
+        self.spi = QLineEdit()
+        self.spi.setPlaceholderText("необязательно — 14 цифр с чека или наклейки")
+        self.spi.setMaxLength(20)
         f.addRow("Отправитель", self.sender)
+        f.addRow("Почтовый идентификатор", self.spi)
         v.addLayout(f)
         self.t = QTableWidget(0, 3)
         self.t.setHorizontalHeaderLabels(["Наименование предметов", "Кол-во", "Ценность, руб."])
         self.t.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.t.setColumnWidth(1, 80)
+        self.t.setColumnWidth(2, 130)
+        self.t.setShowGrid(False)
         self.t.verticalHeader().setVisible(True)
         v.addWidget(self.t, 1)
         r = QHBoxLayout()
@@ -2488,9 +2491,12 @@ class F107Dialog(QDialog):
                 return
         if not items:
             return
+        spi = "".join(ch for ch in self.spi.text() if not ch.isspace())
+        if spi and (len(spi) != 14 or not spi.isdigit()):
+            if QMessageBox.question(self, M.APP_NAME, f"Почтовый идентификатор обычно состоит из 14 цифр, а указано: "
+                                    f"«{spi}». Всё равно продолжить?") != QMessageBox.Yes:
+                return
         s = M.settings()
-        s.setValue("f107_to", self.to.text())
-        s.setValue("f107_rcpt", self.rcpt.text())
         s.setValue("f107_sender", self.sender.text())
         p, _ = QFileDialog.getSaveFileName(self, "Опись ф. 107", os.path.join(str(Path.home() / "Documents"),
                                            "Опись вложения ф107.pdf"), "PDF (*.pdf)")
@@ -2499,7 +2505,7 @@ class F107Dialog(QDialog):
         if not p.lower().endswith(".pdf"):
             p += ".pdf"
         try:
-            L.f107_pdf(items, self.kind.currentText(), self.to.text(), self.rcpt.text(), self.sender.text(), out=p)
+            L.f107_pdf(items, sender=self.sender.text().strip(), spi=spi, out=p)
         except Exception as e:
             QMessageBox.warning(self, M.APP_NAME, str(e))
             return

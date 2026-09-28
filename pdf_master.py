@@ -31,7 +31,7 @@ import updater as UPD
 import timecheck as TC
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "1.8"
+APP_VERSION = "1.8.1"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
 ACCENT = "#007aff"
 FAILED = object()

@@ -760,164 +760,141 @@ F107_KINDS = ["ценное письмо", "ценную бандероль", "�
               "ценную бандероль 1 класса"]
 
 
-class _F107:
-    def __init__(self, page, x0, x1, font):
-        self.p, self.x0, self.x1, self.f = page, x0, x1, font
-        self.fk = C._font_kwargs("Times New Roman")
-
-    def text(self, x, y, s, size=10, align=0, width=None):
-        width = width or (self.x1 - x)
-        r = fitz.Rect(x, y, x + width, y + size * 1.35 * (s.count("\n") + 1) + size * 0.6)
-        self.p.insert_textbox(r, s, fontsize=size, align=align, **self.fk)
-
-    def line(self, x0, y, x1, w=0.6, dash=None):
-        self.p.draw_line((x0, y), (x1, y), color=(0, 0, 0), width=w, dashes=dash)
-
-    def wrap(self, s, width, size):
-        words, lines, cur = s.split(), [], ""
-        for wd in words:
-            t = (cur + " " + wd).strip()
-            if self.f.text_length(t, size) <= width or not cur:
-                cur = t
-            else:
-                lines.append(cur)
-                cur = wd
-        if cur:
-            lines.append(cur)
-        return lines or [""]
+# Бланк ф. 107 — официальный бланк Почты России (pochta.ru): альбомный A4, два одинаковых экземпляра
+# рядом, 14 строк. Пустой бланк лежит в forms/f107_blank.pdf, данные впечатываются в те же места
+# тем же шрифтом (Arial Bold 9 пт), что и на бланках с pochta.ru.
+F107_ROWS = 14
+F107_COPY_DX = 417.8                       # сдвиг второго экземпляра вправо
+F107_ROW_Y = (136.1, 150.9, 165.7, 180.5, 195.3, 210.1, 224.8, 239.6, 254.4, 268.6, 282.7, 296.9, 311.1,
+              325.2, 339.4)                # границы 14 строк таблицы
+F107_COLS = (50.5, 77.4, 258.0, 299.6, 376.4)   # № | наименование | кол-во | ценность
+F107_TEXT_TOP = 138.4                     # верх текста 1-й строки; дальше — ровный шаг, как у генератора pochta.ru
+F107_PITCH = 14.5
+F107_TOTAL = (344.6, 279.2, 338.7)         # верх текста итога, центры «кол-во» и «ценность»
+F107_SENDER = (51.0, 281.1, 389.3, 401.8)  # x начала, x конца линий, линии 1-й и 2-й строки
+F107_SPI = (52.6, 14.3, 13.0, 88.6, 101.6)  # x первой клетки, шаг, ширина, верх, низ (14 клеток)
+F107_SIZE = 9
 
 
-def _f107_row_h(font, name, width, size):
-    words, n, cur = name.split(), 1, ""
+def _forms_dir():
+    return os.path.join(C._app_dir(), "forms")
+
+
+def _f107_font():
+    """Arial Bold, как на бланках Почты; без него — метрически совместимый Liberation Sans Bold."""
+    for p in (os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", "arialbd.ttf"),
+              os.path.join(_forms_dir(), "LiberationSans-Bold.ttf")):
+        if os.path.exists(p):
+            return p
+    raise FileNotFoundError("Не найден шрифт для описи (forms/LiberationSans-Bold.ttf).")
+
+
+class _F107Writer:
+    def __init__(self, page, fontfile):
+        self.p = page
+        self.ff = fontfile
+        self.font = fitz.Font(fontfile=fontfile)
+
+    def width(self, s, size=F107_SIZE):
+        return self.font.text_length(s, size)
+
+    def text(self, x, baseline, s, size=F107_SIZE):
+        if s:
+            self.p.insert_text((x, baseline), s, fontsize=size, fontname="F107", fontfile=self.ff,
+                               color=(0, 0, 0))
+
+    def centered(self, x0, x1, top, bottom, s, size=F107_SIZE):
+        """По центру ячейки — как на бланке pochta.ru."""
+        base = (top + bottom) / 2 + (self.font.ascender + self.font.descender) * size / 2
+        self.text((x0 + x1) / 2 - self.width(s, size) / 2, base, s, size)
+
+    def at(self, cx, text_top, s, size=F107_SIZE):
+        """Центр по x, верх текста по y (координаты сняты с бланка pochta.ru)."""
+        self.text(cx - self.width(s, size) / 2, text_top + self.font.ascender * size, s, size)
+
+    def left(self, x0, x1, top, bottom, s, size=F107_SIZE):
+        """Слева в ячейке; длинный текст — мельче или в две строки, но не за границу."""
+        room = x1 - x0 - 3
+        for sz in (size, 8.5, 8, 7.5, 7):
+            if self.width(s, sz) <= room:
+                base = (top + bottom) / 2 + (self.font.ascender + self.font.descender) * sz / 2
+                return self.text(x0, base, s, sz)
+        sz, lh = 6.0, 6.6                     # две строки мелким шрифтом внутри строки таблицы
+        lines = _wrap_to(self, s, room, sz, 2)
+        first = top + 0.6 + self.font.ascender * sz
+        if len(lines) == 1:
+            first += lh / 2
+        for i, line in enumerate(lines):
+            self.text(x0, first + i * lh, line, sz)
+
+
+def _wrap_to(w, s, room, size, max_lines):
+    words, lines, cur = s.split(), [], ""
     for wd in words:
         t = (cur + " " + wd).strip()
-        if font.text_length(t, size) <= width or not cur:
+        if w.width(t, size) <= room or not cur:
             cur = t
         else:
-            n += 1
+            lines.append(cur)
             cur = wd
-    return n * size * 1.25 + 5
+    if cur:
+        lines.append(cur)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        while lines[-1] and w.width(lines[-1] + "…", size) > room:
+            lines[-1] = lines[-1][:-1]
+        lines[-1] += "…"
+    return lines
 
 
-def f107_pdf(items, kind, to_addr, recipient, sender, out=None, show_value_sum=True):
-    """items — [(наименование, количество, ценность руб. или None)]. Два экземпляра.
-    Если опись короткая — оба экземпляра на одном листе A4 (линия отреза), иначе по листу на экземпляр."""
-    font = C._font_obj("Times New Roman")
-    size = 10
-    X0, X1 = 42, A4.width - 42
-    cols = [X0, X0 + 30, X1 - 170, X1 - 90, X1]   # № | наименование | кол-во | ценность
-    name_w = cols[2] - cols[1] - 6
-    heights = [_f107_row_h(font, it[0], name_w, size) for it in items]
-    head_h, foot_h = 150, 118
-    half = A4.height / 2
-    one_sheet = head_h + sum(heights) + 22 + foot_h <= half - 24
+def _f107_value(v):
+    if v in (None, ""):
+        return "—"
+    v = float(v)
+    return money(v, cents=abs(v - round(v)) > 0.004)
+
+
+def f107_pdf(items, sender="", spi="", out=None, **_old):
+    """Опись вложения ф. 107 на официальном бланке Почты России.
+    items — [(наименование, количество, ценность руб. или None)]; sender — отправитель (ФИО или организация);
+    spi — номер почтового идентификатора (14 цифр, необязательно). Больше 14 предметов — несколько листов,
+    нумерация сквозная, общий итог — на последнем листе."""
+    blank = os.path.join(_forms_dir(), "f107_blank.pdf")
+    if not os.path.exists(blank):
+        raise FileNotFoundError("Не найден бланк описи (forms/f107_blank.pdf).")
+    ff = _f107_font()
+    items = [(str(n).strip(), int(q or 0), v) for n, q, v in items if str(n).strip()]
+    tot_q = sum(q for _n, q, _v in items)
+    vals = [float(v) for _n, _q, v in items if v not in (None, "")]
+    tot_v = _f107_value(sum(vals)) if vals else "0"
+    chunks = [items[i:i + F107_ROWS] for i in range(0, len(items), F107_ROWS)] or [[]]
+    spi = "".join(ch for ch in str(spi or "") if not ch.isspace())[:14]
     doc = fitz.open()
-    tot_q = sum(int(it[1] or 0) for it in items)
-    vals = [it[2] for it in items if it[2] not in (None, "")]
-    tot_v = sum(float(v) for v in vals) if vals else None
-
-    def block(page, y_top, y_bot, rows_idx, first, last):
-        b = _F107(page, X0, X1, font)
-        y = y_top
-        if first:
-            b.text(X1 - 60, y, "ф. 107", 9, align=2, width=60)
-            b.text(X0, y + 10, "ОПИСЬ", 15, align=1, width=X1 - X0)
-            y += 38
-            b.text(X0, y, "вложения в", size)
-            b.text(X0 + 62, y, kind, size + 1)
-            b.line(X0 + 60, y + 14, X1)
-            y += 22
-            b.text(X0, y, "Куда:", size)
-            addr = b.wrap(to_addr or "", X1 - X0 - 50, size + 1)[:2]
-            for i, l in enumerate(addr or [""]):
-                b.text(X0 + 40, y + i * 16, l, size + 1)
-                b.line(X0 + 38, y + 14 + i * 16, X1)
-            y += 16 * max(1, len(addr)) + 6
-            b.text(X0, y, "На имя:", size)
-            b.text(X0 + 48, y, recipient or "", size + 1)
-            b.line(X0 + 46, y + 14, X1)
-            y += 26
-        else:
-            b.text(X0, y, "Опись вложения ф. 107 (продолжение)", size)
-            y += 20
-        # шапка таблицы
-        hh = 30
-        page.draw_rect(fitz.Rect(X0, y, X1, y + hh), color=(0, 0, 0), width=0.7)
-        for x in cols[1:-1]:
-            page.draw_line((x, y), (x, y + hh), color=(0, 0, 0), width=0.7)
-        b.text(cols[0] + 2, y + 3, "№\nп/п", 8, align=1, width=cols[1] - cols[0] - 4)
-        b.text(cols[1] + 3, y + 8, "Наименование предметов", 9, align=1, width=cols[2] - cols[1] - 6)
-        b.text(cols[2] + 2, y + 3, "Количество\nпредметов", 8, align=1, width=cols[3] - cols[2] - 4)
-        b.text(cols[3] + 2, y + 3, "Объявленная\nценность, руб.", 8, align=1, width=cols[4] - cols[3] - 4)
-        y += hh
-        for i in rows_idx:
-            name, q, v = items[i]
-            rh = heights[i]
-            page.draw_rect(fitz.Rect(X0, y, X1, y + rh), color=(0, 0, 0), width=0.5)
-            for x in cols[1:-1]:
-                page.draw_line((x, y), (x, y + rh), color=(0, 0, 0), width=0.5)
-            b.text(cols[0], y + 2, str(i + 1), size, align=1, width=cols[1] - cols[0])
-            for j, l in enumerate(b.wrap(name, name_w, size)):
-                b.text(cols[1] + 3, y + 2 + j * size * 1.25, l, size)
-            b.text(cols[2], y + 2, str(q or ""), size, align=1, width=cols[3] - cols[2])
-            vs = "—" if v in (None, "") else money(float(v), cents=False)
-            b.text(cols[3], y + 2, vs, size, align=1, width=cols[4] - cols[3])
-            y += rh
-        if last:
-            rh = 18
-            page.draw_rect(fitz.Rect(X0, y, X1, y + rh), color=(0, 0, 0), width=0.7)
-            for x in cols[2:-1]:
-                page.draw_line((x, y), (x, y + rh), color=(0, 0, 0), width=0.7)
-            b.text(cols[1] + 3, y + 3, "Итого:", size)
-            b.text(cols[2], y + 3, str(tot_q), size, align=1, width=cols[3] - cols[2])
-            b.text(cols[3], y + 3, "—" if tot_v is None else money(tot_v, cents=False), size, align=1,
-                   width=cols[4] - cols[3])
-            y += rh + 6
-            if show_value_sum and tot_v:
-                rub = int(tot_v)
-                b.text(X0, y, f"Общая сумма объявленной ценности: {money(rub, False)} "
-                              f"({num_words(rub)}) {plural(rub, 'рубль', 'рубля', 'рублей')}", 9)
-                y += 16
-            y += 8
-            b.text(X0, y, "Отправитель", size)
-            b.line(X0 + 70, y + 13, X0 + 200)
-            b.text(X0 + 70, y + 14, "(подпись)", 7, align=1, width=130)
-            b.text(X0 + 210, y, sender or "", size, width=X1 - X0 - 210 - 110)
-            b.line(X0 + 208, y + 13, X1 - 110)
-            y += 32
-            b.text(X0, y, "Проверил", size)
-            b.line(X0 + 70, y + 13, X0 + 200)
-            b.text(X0 + 70, y + 14, "(подпись работника связи)", 7, align=1, width=130)
-            # место для оттиска календарного штемпеля
-            c = fitz.Point(X1 - 50, y - 10)
-            page.draw_circle(c, 38, color=(0.55, 0.55, 0.55), width=0.6, dashes="[3 3] 0")
-            b.text(c.x - 38, c.y - 8, "Оттиск КПШ\nОПС места\nприёма", 7, align=1, width=76)
-        return y
-
-    # разбиваем строки по страницам
-    avail_first = (half - 24 if one_sheet else A4.height - 40) - head_h - 30
-    avail_next = A4.height - 80 - 60
-    pages_rows, cur, used, avail = [], [], 0, avail_first
-    for i, h in enumerate(heights):
-        if cur and used + h > avail:
-            pages_rows.append(cur)
-            cur, used, avail = [], 0, avail_next
-        cur.append(i)
-        used += h
-    pages_rows.append(cur)
-    if not one_sheet and used + foot_h + 30 > avail:
-        pages_rows.append([])
-    if one_sheet:
-        page = doc.new_page(width=A4.width, height=A4.height)
-        block(page, 26, half - 10, pages_rows[0], True, True)
-        page.draw_line((20, half), (A4.width - 20, half), color=(0.5, 0.5, 0.5), width=0.5, dashes="[4 3] 0")
-        _F107(page, X0, X1, font).text(X0, half - 12, "линия отреза", 7, align=1, width=X1 - X0)
-        block(page, half + 16, A4.height - 10, pages_rows[0], True, True)
-    else:
-        for _copy in range(2):
-            for j, rows in enumerate(pages_rows):
-                page = doc.new_page(width=A4.width, height=A4.height)
-                block(page, 30, A4.height - 30, rows, j == 0, j == len(pages_rows) - 1)
+    tpl = fitz.open(blank)
+    for n, chunk in enumerate(chunks):
+        doc.insert_pdf(tpl)
+        w = _F107Writer(doc[-1], ff)
+        last = n == len(chunks) - 1
+        for dx in (0, F107_COPY_DX):
+            c = [x + dx for x in F107_COLS]
+            for i, (name, q, v) in enumerate(chunk):
+                ty = F107_TEXT_TOP + i * F107_PITCH
+                top, bot = ty - 2.3, ty + 12.1                   # «ячейка» строки для длинных названий
+                w.at((c[0] + c[1]) / 2, ty, str(n * F107_ROWS + i + 1))
+                w.left(c[1] + 2.8, c[2], top, bot, name)
+                w.at((c[2] + c[3]) / 2, ty, str(q))
+                w.at((c[3] + c[4]) / 2, ty, _f107_value(v))
+            if last:
+                ty, cq, cv = F107_TOTAL
+                w.at(cq + dx, ty, str(tot_q))
+                w.at(cv + dx, ty, tot_v)
+            x0, x1, l1, l2 = F107_SENDER
+            lines = _wrap_to(w, sender or "", x1 - x0 - 4, F107_SIZE, 2) if sender else []
+            for j, line in enumerate(lines):
+                w.text(x0 + dx, (l1, l2)[j] - 1.2, line)
+            sx, step, cw, top, bot = F107_SPI
+            for k, ch in enumerate(spi):
+                w.centered(sx + dx + k * step, sx + dx + k * step + cw, top, bot, ch)
     doc.set_metadata({"title": "Опись вложения ф. 107", "creator": "LegalHelper"})
     if out:
         C.save_pdf(doc, out)
