@@ -951,7 +951,9 @@ class DocsTable(QTableWidget):
             return
         did, path, title = self.row_doc(r)
         m = QMenu(self)
-        m.addAction("Открыть", lambda: self.page.openFile.emit(path, 0))
+        m.addAction("Открыть здесь, справа", lambda: self.page.main.open_paths([path], replace=True)
+                    if os.path.exists(path) else self.page.openFile.emit(path, 0))
+        m.addAction("Открыть в своей программе (Word, Acrobat…)", lambda: self.page.main.open_in_app(path))
         m.addAction("Переименовать", lambda: self.editItem(self.item(r, 1)))
         m.addAction("Выбрать значок…", lambda: self.on_click(r, 0))
         m.addAction("Отметить отправку…", lambda: self.edit_sent(r))
@@ -4189,6 +4191,17 @@ class StatTile(QPushButton):
         self.value.setStyleSheet(f"color: {color};" if color else "")
 
 
+def greeting(h):
+    """Приветствие по времени суток: утро 5–11, день 12–17, вечер 18–22, ночь 23–4."""
+    if 5 <= h < 12:
+        return "Доброе утро"
+    if 12 <= h < 18:
+        return "Добрый день"
+    if 18 <= h < 23:
+        return "Добрый вечер"
+    return "Доброй ночи"
+
+
 class HomePage(QWidget):
     """Главная: что сегодня и на неделе, горящие сроки, напоминания, недавние дела, быстрые действия."""
 
@@ -4209,6 +4222,10 @@ class HomePage(QWidget):
         self.hello = QLabel()
         self.hello.setObjectName("title")
         v.addWidget(self.hello)
+        self._clock = QTimer(self)                  # приветствие и «Сегодня …» меняются, пока окно открыто
+        self._clock.setInterval(60 * 1000)
+        self._clock.timeout.connect(lambda: self.isVisible() and self.refresh())
+        self._clock.start()
         self.today_lbl = QLabel()
         self.today_lbl.setObjectName("hint")
         v.addWidget(self.today_lbl)
@@ -4286,9 +4303,7 @@ class HomePage(QWidget):
         today = now().date()
         name = (profile_values().get("Представитель") or "").split()
         first = name[1] if len(name) > 1 else ""
-        h = now().hour
-        greet = "Доброе утро" if 5 <= h < 12 else "Добрый день" if h < 18 else "Добрый вечер" if h < 23 else "Доброй ночи"
-        self.hello.setText(f"{greet}{', ' + first if first else ''}!")
+        self.hello.setText(f"{greeting(now().hour)}{', ' + first if first else ''}!")
         self.today_lbl.setText(f"Сегодня {WEEKDAYS[today.weekday()]}, {today.day} {MONTHS_G[today.month - 1]} "
                                f"{today.year} г.")
         cases = db().cases()

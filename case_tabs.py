@@ -636,6 +636,7 @@ def assemble_pdf(items, out, progress=None):
         for i in range(start, doc.page_count):       # страницы документа сворачиваются в рабочей области
             doc.xref_set_key(doc[i].xref, "LHGroup", gid)
             doc.xref_set_key(doc[i].xref, "LHName", nm)
+            doc.xref_set_key(doc[i].xref, "LHSrc", fitz.get_pdf_str(os.path.abspath(path)))
         ranges[iid] = (start, doc.page_count - 1)
         toc.append([1, title, start + 1])
     if not doc.page_count:

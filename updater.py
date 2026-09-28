@@ -149,3 +149,38 @@ def download(url, dest, progress=None, cancelled=None, timeout=60):
     except Exception as e:
         errors.append(f"по файлам: {e}")
     raise ConnectionError("Не удалось скачать обновление ни одним способом:\n" + "\n".join(errors[-4:]))
+
+
+CHANGELOG_URL = f"https://raw.githubusercontent.com/{REPO}/main/CHANGELOG.md"
+
+
+def parse_changelog(text, since=None):
+    """CHANGELOG.md -> [(версия, заголовок, [пункты])], только версии новее since (если указана).
+    Пункт — строка «- …»; строки с отступом продолжают предыдущий пункт."""
+    out, cur = [], None
+    for line in text.splitlines():
+        if line.startswith("## "):
+            head = line[3:].strip()
+            ver, _, title = head.partition("—")
+            ver = ver.strip()
+            cur = (ver, title.strip(), [])
+            if since is None or is_newer(ver, since):
+                out.append(cur)
+            else:
+                cur = None
+        elif cur is not None:
+            st = line.strip()
+            if line.lstrip().startswith("- ") and not line.startswith("  "):
+                cur[2].append(st[2:])
+            elif st and cur[2]:
+                cur[2][-1] += (" " + st[2:]) if st.startswith("- ") else (" " + st)
+    return out
+
+
+def fetch_changelog(since, timeout=15):
+    """Подробные описания всех версий новее установленной (пусто, если не удалось скачать)."""
+    try:
+        with _open(CHANGELOG_URL, timeout) as r:
+            return parse_changelog(r.read().decode("utf-8-sig"), since)
+    except Exception:
+        return []

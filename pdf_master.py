@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QLineEdit, QDialog, QDialogButtonBox, QSpinBox, QDoubleSpinBox, QComboBox,
     QCheckBox, QPlainTextEdit, QColorDialog, QProgressDialog, QTreeWidget, QTreeWidgetItem, QSplitter,
     QScrollArea, QMenu, QSlider, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QToolButton,
-    QSizePolicy, QStyle, QFrame, QRadioButton, QButtonGroup, QStackedWidget, QTabBar)
+    QSizePolicy, QStyle, QFrame, QRadioButton, QButtonGroup, QStackedWidget, QTabBar, QTextBrowser)
 
 import pdf_core as C
 import legal_core as L
@@ -32,9 +32,11 @@ import timecheck as TC
 import backup as BK
 import casefile as CF
 import anim
+import timer_widget as TW
+import extwatch
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "2.4"
+APP_VERSION = "2.5"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -130,6 +132,103 @@ def reveal_in_folder(path):
         subprocess.Popen(["explorer", "/select,", path])
     else:
         QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path) if os.path.isfile(path) else path))
+
+
+def tag_pages(doc, start, n, name, src=None, gid=None):
+    """Пометить страницы: из какого файла они пришли (имя, полный путь, общий код группы).
+    Пометки хранятся в самих страницах PDF и сохраняются вместе с файлом."""
+    import uuid
+    g = fitz.get_pdf_str(gid or uuid.uuid4().hex[:10])
+    nm = fitz.get_pdf_str(name)
+    sp = fitz.get_pdf_str(os.path.abspath(src)) if src else None
+    for i in range(start, start + n):
+        x = doc[i].xref
+        doc.xref_set_key(x, "LHGroup", g)
+        doc.xref_set_key(x, "LHName", nm)
+        if sp:
+            doc.xref_set_key(x, "LHSrc", sp)
+
+
+def _pdf_key(doc, i, key):
+    t, v = doc.xref_get_key(doc[i].xref, key)
+    return v if t == "string" else None
+
+
+def replace_source_pages(doc, path, new):
+    """Страницы, пришедшие из файла path, заменить свежей версией new (файл поправили в Word и т. п.).
+    Каждый непрерывный кусок заменяется на месте, с тем же кодом группы (свёрнутое остаётся свёрнутым).
+    Возвращает число заменённых кусков."""
+    key = os.path.normcase(os.path.abspath(path))
+    runs, i, n = [], 0, doc.page_count
+    while i < n:
+        src = _pdf_key(doc, i, "LHSrc")
+        if src and os.path.normcase(src) == key:
+            g = _pdf_key(doc, i, "LHGroup")
+            j = i
+            while j + 1 < n and _pdf_key(doc, j + 1, "LHGroup") == g:
+                j += 1
+            runs.append((i, j, g, _pdf_key(doc, i, "LHName") or Path(path).name))
+            i = j + 1
+        else:
+            i += 1
+    for a, b, g, name in reversed(runs):
+        doc.delete_pages(a, b)
+        doc.insert_pdf(new, start_at=a)
+        tag_pages(doc, a, new.page_count, name, path, g)
+    return len(runs)
+
+
+def changes_html(changes, notes=()):
+    """Подробное «Что нового»: по версиям, с пунктами; если подробностей нет — краткие заметки."""
+    import html as _h
+    parts = []
+    for ver, title, items in changes:
+        parts.append(f"<h3 style='margin:14px 0 4px 0'>Версия {_h.escape(ver)}"
+                     + (f" — {_h.escape(title)}" if title else "") + "</h3>")
+        lis = []
+        for it in items:
+            t = _h.escape(it)
+            if ":" in t[:80]:                                       # «Главное: пояснение» — главное жирным
+                a, b = t.split(":", 1)
+                t = f"<b>{a}:</b>{b}"
+            lis.append(f"<li style='margin-bottom:6px'>{t}</li>")
+        parts.append("<ul style='margin-top:2px'>" + "".join(lis) + "</ul>")
+    if not parts:
+        parts.append("<ul>" + "".join(f"<li style='margin-bottom:6px'>{_h.escape(n)}</li>" for n in notes)
+                     + "</ul>" if notes else "<p>Исправления и улучшения.</p>")
+    return "".join(parts)
+
+
+class WhatsNewDialog(QDialog):
+    """«Что нового» перед установкой: все версии, которые пользователь пропустил, подробно."""
+
+    def __init__(self, parent, info):
+        super().__init__(parent)
+        self.setWindowTitle(f"Что нового — {APP_NAME} {info['version']}")
+        self.resize(640, 560)
+        v = QVBoxLayout(self)
+        t = QLabel(f"<b style='font-size:15pt'>Новая версия {info['version']}</b>&nbsp;&nbsp;(у вас {APP_VERSION})")
+        v.addWidget(t)
+        sub = QLabel("Ниже — что изменилось, по версиям. Дела, документы, шаблоны и настройки при обновлении "
+                     "сохраняются.")
+        sub.setObjectName("hint")
+        sub.setWordWrap(True)
+        v.addWidget(sub)
+        br = QTextBrowser()
+        br.setOpenExternalLinks(True)
+        br.setHtml(changes_html(info.get("changes") or [], info.get("notes") or []))
+        v.addWidget(br, 1)
+        h = QHBoxLayout()
+        h.addStretch(1)
+        later = QPushButton("Позже")
+        later.clicked.connect(self.reject)
+        now = QPushButton("Установить сейчас")
+        now.setObjectName("primary")
+        now.setDefault(True)
+        now.clicked.connect(self.accept)
+        h.addWidget(later)
+        h.addWidget(now)
+        v.addLayout(h)
 
 
 def send_to_trash(path):
@@ -1669,6 +1768,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(3000, lambda: self.check_updates(silent=True))
         QTimer.singleShot(8000, self.daily_backup)
         QTimer.singleShot(12000, self.cleanup_in_background)
+        self.extwatch = extwatch.ExtWatch(self)
+        self.extwatch.changed.connect(self.on_external_changed)
         self.case_sync_timer = QTimer(self)
         self.case_sync_timer.setInterval(3 * 60 * 1000)      # сведения о деле — в его папку
         self.case_sync_timer.timeout.connect(self.sync_current_case)
@@ -2081,6 +2182,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(60, self._initial_mode)
         self.status_lbl = QLabel()
         self.statusBar().addPermanentWidget(self.status_lbl)
+        self.timer_btn = TW.TimerButton()
+        self.statusBar().addPermanentWidget(self.timer_btn)
         self.apply_thumb_geometry()
 
     # ------------------------------------------------------------- helpers
@@ -2280,7 +2383,10 @@ class MainWindow(QMainWindow):
 
         def work():
             try:
-                self.updateChecked.emit(UPD.fetch_info(), "", silent)
+                info = UPD.fetch_info()
+                if UPD.is_newer(info["version"], APP_VERSION):
+                    info["changes"] = UPD.fetch_changelog(APP_VERSION)
+                self.updateChecked.emit(info, "", silent)
             except Exception as e:
                 self.updateChecked.emit(None, str(e), silent)
         if not silent:
@@ -2307,15 +2413,8 @@ class MainWindow(QMainWindow):
         info = self._update_info
         if not info:
             return
-        items = "".join(f"<li>{n}</li>" for n in info["notes"]) or "<li>Исправления и улучшения.</li>"
-        box = QMessageBox(self)
-        box.setWindowTitle(APP_NAME)
-        box.setIcon(QMessageBox.Information)
-        box.setText(f"<b>Новая версия {info['version']}</b> (у вас {APP_VERSION})<ul>{items}</ul>")
-        now = box.addButton("Установить сейчас", QMessageBox.AcceptRole)
-        box.addButton("Позже", QMessageBox.RejectRole)
-        box.exec()
-        if box.clickedButton() is now:
+        dlg = WhatsNewDialog(self, info)
+        if dlg.exec() == QDialog.Accepted:
             self.download_update()
 
     def download_update(self, ask=True):
@@ -2808,7 +2907,7 @@ class MainWindow(QMainWindow):
             self.ws[self.cur_ws]["src"] = first_path
             self.modified = len(loaded) > 1 or not first_path.lower().endswith(".pdf")
             if first.page_count and self._page_group(0)[0] is None:
-                self._tag_pages(0, first.page_count, Path(first_path).name)
+                self._tag_pages(0, first.page_count, Path(first_path).name, first_path)
             rest = loaded[1:]
         else:
             self.push_undo()
@@ -2822,7 +2921,7 @@ class MainWindow(QMainWindow):
             else:
                 self.doc.insert_pdf(d, start_at=pos)
                 pos += d.page_count
-            self._tag_pages(start, d.page_count, Path(p).name)
+            self._tag_pages(start, d.page_count, Path(p).name, p)
             new_sel += list(range(start, start + d.page_count))
             self.modified = True
         cid = self.ws[self.cur_ws].get("case_id")
@@ -2857,6 +2956,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.error("Не удалось сохранить файл (возможно, он открыт в другой программе)", e)
             return False
+        self.extwatch.refresh(p)
         self.path = p
         self.modified = False
         cid = self.ws[self.cur_ws].get("case_id")
@@ -3275,7 +3375,7 @@ class MainWindow(QMainWindow):
 
     def _mount_parts(self):
         """Редактор PDF и калькуляторы — там, где сейчас пользователь (в деле или «Без дела»)."""
-        QTimer.singleShot(0, lambda: self.statusBar().setVisible(self.docarea.isVisible()))
+        QTimer.singleShot(0, lambda: self.status_lbl.setVisible(self.docarea.isVisible()))
         if self.mode_cid:
             self._mount(self.docarea, self.case_doc_slot)
             self._mount(self.calc_page, self.case_calc_slot)
@@ -3342,14 +3442,8 @@ class MainWindow(QMainWindow):
         self.preview.show_page(cur if cur in sel else (sel[0] if sel else (0 if self.doc.page_count else None)))
 
     # --- файлы в рабочей области: страницы помнят, из какого файла пришли (пометка в самой странице PDF)
-    def _tag_pages(self, start, n, name):
-        import uuid
-        gid = fitz.get_pdf_str(uuid.uuid4().hex[:10])
-        nm = fitz.get_pdf_str(name)
-        for i in range(start, start + n):
-            x = self.doc[i].xref
-            self.doc.xref_set_key(x, "LHGroup", gid)
-            self.doc.xref_set_key(x, "LHName", nm)
+    def _tag_pages(self, start, n, name, src=None):
+        tag_pages(self.doc, start, n, name, src)
 
     def _page_group(self, i):
         x = self.doc[i].xref
@@ -3458,9 +3552,10 @@ class MainWindow(QMainWindow):
         # слева: «Документы» дела или «Комплект для подачи»; справа — рабочая область
         left = QWidget()
         lv = QVBoxLayout(left)
-        lv.setContentsMargins(0, 8, 0, 0)
+        lv.setContentsMargins(0, 8, 14, 0)            # отступ от рабочей области справа
         lv.setSpacing(6)
         seg = QTabBar()
+        seg.setObjectName("docseg")
         seg.setDrawBase(False)
         seg.setExpanding(True)
         seg.addTab("📄  Документы")
@@ -3475,12 +3570,12 @@ class MainWindow(QMainWindow):
         self.docs_seg = seg
         lv.addWidget(self.docs_mode, 1)
         dl = left
-        dl.setMinimumWidth(360)
+        dl.setMinimumWidth(395)
         docs.addWidget(dl)
         self.case_doc_slot = self._slot()
         docs.addWidget(self.case_doc_slot)
         docs.setStretchFactor(1, 1)
-        docs.setSizes([380, 900])
+        docs.setSizes([410, 870])
         cp.l_docs.setColumnHidden(3, True)
         cp.l_docs.setColumnWidth(2, 128)
         prepare = U.PrepareTab(self, None)
@@ -3738,7 +3833,7 @@ class MainWindow(QMainWindow):
         if not os.path.exists(path):
             return QMessageBox.warning(self, APP_NAME, f"Файл не найден:\n{path}")
         if os.path.splitext(path)[1].lower() in EXTERNAL_EXT:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+            self.open_in_app(path)
             return
         target = cid if cid is not None else self.mode_cid
         if target:
@@ -3761,6 +3856,50 @@ class MainWindow(QMainWindow):
             it = self.pages.item(page)
             it.setSelected(True)
             self.pages.scrollToItem(it)
+
+    # --- файлы, открытые в своих программах (Word, Acrobat…): правки подтягиваются сами
+    def open_in_app(self, path):
+        if not os.path.exists(path):
+            return QMessageBox.warning(self, APP_NAME, f"Файл не найден:\n{path}")
+        self.extwatch.watch(path)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        self.msg(f"«{Path(path).name}» открыт в своей программе. Сохраните его там — изменения появятся "
+                 "и здесь.", 8000)
+
+    def on_external_changed(self, path):
+        """Файл поправили и сохранили в другой программе — обновить его страницы во всех открытых документах."""
+        self._store_ws()
+        key = os.path.normcase(os.path.abspath(path))
+        direct = [i for i, w in enumerate(self.ws) if w["path"] and os.path.normcase(os.path.abspath(w["path"])) == key]
+        uses = [i for i, w in enumerate(self.ws) if i not in direct and w["doc"].page_count and
+                any((_pdf_key(w["doc"], k, "LHSrc") or "").lower() == key.lower() for k in range(w["doc"].page_count))]
+        if not direct and not uses:
+            return
+        new = self.load_file(path)
+        if new is None or not new.page_count:
+            return
+        name = Path(path).name
+        for i in direct:
+            w = self.ws[i]
+            if w["modified"]:
+                self._load_ws(i)
+                if QMessageBox.question(self, APP_NAME, f"Файл «{name}» изменён в другой программе.\n\nЗагрузить "
+                                        "новую версию? Несохранённые правки в LegalHelper в этом документе пропадут.") \
+                        != QMessageBox.Yes:
+                    continue
+                self._store_ws()
+            d = fitz.open("pdf", new.tobytes())
+            tag_pages(d, 0, d.page_count, name, path)
+            w.update(doc=d, modified=False, undo=[], redo=[], sel=[])
+        for i in uses:
+            w = self.ws[i]
+            w["undo"].append(w["doc"].tobytes())
+            del w["undo"][:-25]
+            w["redo"].clear()
+            if replace_source_pages(w["doc"], path, new):
+                w["modified"] = True
+        self._load_ws(self.cur_ws)
+        self.toast(f"↻  Обновлено: {name}")
 
     # ------------------------------------------------------------- открытые документы
     def _blank_ws(self):
@@ -4855,6 +4994,10 @@ QScrollArea#canvasArea {{ background: {t['canvas']}; border: none; }}
 QScrollArea {{ background: transparent; border: none; }}
 QStatusBar {{ background: {t['panel']}; color: {t['muted']}; border-top: 1px solid {t['border']}; }}
 QStatusBar QLabel {{ color: {t['muted']}; }}
+QToolButton#timerbtn {{ color: {A}; border: none; border-radius: 8px; padding: 1px 8px; margin: 1px 4px; font-weight: 600; }}
+QToolButton#timerbtn:hover {{ background: {t['fill']}; }}
+QFrame#timerpanel {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 12px; }}
+QLabel#timerbig {{ color: {t['text']}; font-size: 22pt; font-weight: 600; padding: 2px; }}
 
 /* поля ввода */
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit, QDateEdit, QTimeEdit {{ padding: 6px 10px;
@@ -4895,6 +5038,7 @@ QTabBar::tab:last {{ border-top-right-radius: 9px; border-bottom-right-radius: 9
 QTabBar::tab:only-one {{ border-radius: 9px; }}
 QTabBar::tab:hover {{ background: {t['fill_hover']}; }}
 QTabBar::tab:selected {{ background: {A}; color: white; font-weight: 600; }}
+QTabBar#docseg::tab {{ border-radius: 12px; margin: 0 3px; padding: 7px 14px; }}
 
 QCheckBox, QRadioButton, QLabel {{ color: {t['text']}; }}
 QCheckBox:disabled, QRadioButton:disabled, QLabel:disabled {{ color: {t['disabled']}; }}
