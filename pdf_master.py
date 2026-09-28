@@ -36,7 +36,7 @@ import timer_widget as TW
 import extwatch
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "2.5"
+APP_VERSION = "2.6"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -702,6 +702,7 @@ class PageList(QListWidget):
             f.setPointSize(13)
             p.setFont(f)
             p.drawText(self.viewport().rect().adjusted(20, 0, -20, 0), Qt.AlignCenter | Qt.TextWordWrap,
+                       getattr(self, "empty_text", "") or
                        "Перетащите сюда PDF, картинки или документы Word/Excel\n"
                        "или нажмите «Открыть» (Ctrl+O)\n\n"
                        "Страницы можно менять местами мышью")
@@ -2188,11 +2189,20 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- helpers
     def update_title(self):
-        name = Path(self.path).name if self.path else ("Новый документ" if self.doc.page_count else "")
+        w = self.ws[self.cur_ws] if getattr(self, "ws", None) else {}
+        special = w.get("main") or w.get("name")
+        name = Path(self.path).name if self.path else (
+            (self.base_name() + ".pdf") if special else ("Новый документ" if self.doc.page_count else ""))
         star = " *" if self.modified else ""
         self.setWindowTitle(f"{name}{star} — {APP_NAME}" if name else APP_NAME)
         if hasattr(self, "doc_title"):
-            t = (Path(self.path).stem if self.path else "Новый документ") + ("  •" if self.modified else "")
+            if w.get("main"):
+                t = "📚 PDF дела"
+            elif w.get("kit"):
+                t = "📦 " + (w.get("name") or "Комплект")
+            else:
+                t = Path(self.path).stem if self.path else "Новый документ"
+            t += "  •" if self.modified else ""
             self.doc_title.setText(t if len(t) < 26 else t[:23] + "…")
             self.doc_title.setToolTip(self.path or "")
             cid = self.ws_case()
@@ -2203,7 +2213,9 @@ class MainWindow(QMainWindow):
             self.case_btn.setProperty("linked", bool(c))
             in_case = bool(getattr(self, "mode_cid", None))
             self.case_btn_act.setVisible(not in_case)      # в деле документ и так в деле
-            self.doc_title_act.setVisible(not in_case)     # в деле название видно в списке слева
+            self.doc_title_act.setVisible(True)
+            self.doc_title.setToolTip(self.path or ("Будет сохранён в папку дела: " + self.case_pdf(w["case_id"])
+                                                    if w.get("main") and w.get("case_id") else "ещё не сохранён"))
             self.case_btn.style().unpolish(self.case_btn)
             self.case_btn.style().polish(self.case_btn)
             self.ws[self.cur_ws]["modified"] = self.modified
@@ -2530,6 +2542,11 @@ class MainWindow(QMainWindow):
             return None
 
     def base_name(self):
+        w = self.ws[self.cur_ws] if self.ws else {}
+        if w.get("main") and w.get("case_id") and not self.path:
+            return Path(self.case_pdf(w["case_id"])).stem
+        if w.get("name") and not self.path:
+            return w["name"]
         src = self._src()
         return Path(self.path).stem if self.path else (Path(src).stem if src else "документ")
 
@@ -2550,11 +2567,14 @@ class MainWindow(QMainWindow):
 
     def toast(self, text, ms=2600):
         """Заметное короткое сообщение поверх рабочей области («✓ Сохранено»)."""
-        host = self.pages.viewport() if self.pages.isVisible() else self
+        host = self.docarea if self.docarea.isVisible() else self
         lab = QLabel(text, host)
         lab.setObjectName("toast")
+        lab.setWordWrap(True)
+        lab.setAlignment(Qt.AlignCenter)
         lab.setStyleSheet(f"background: {T['text']}; color: {T['panel']}; border-radius: 12px; padding: 10px 18px;"
                           "font-weight: 600;")
+        lab.setMaximumWidth(max(200, host.width() - 40))
         lab.adjustSize()
         lab.move(max(10, (host.width() - lab.width()) // 2), max(10, host.height() - lab.height() - 28))
         lab.show()
@@ -2858,7 +2878,15 @@ class MainWindow(QMainWindow):
     def maybe_save(self):
         if not self.modified or self.doc.page_count == 0:
             return True
-        r = QMessageBox.question(self, APP_NAME, "Сохранить изменения в текущем документе?",
+        w = self.ws[self.cur_ws]
+        if w.get("main") and w.get("case_id"):
+            c = U.db().case(w["case_id"]) or {}
+            q = f"Сохранить изменения в PDF дела «{c.get('title', '')}»?\n\nФайл: {self.case_pdf(w['case_id'])}"
+        elif w.get("kit"):
+            q = "Сохранить собранный комплект в файл? (Его можно в любой момент собрать заново.)"
+        else:
+            q = "Сохранить изменения в текущем документе?"
+        r = QMessageBox.question(self, APP_NAME, q,
                                  QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
         if r == QMessageBox.Save:
             return self.save()
@@ -2878,10 +2906,21 @@ class MainWindow(QMainWindow):
         if paths:
             self.open_paths(paths)
 
-    def open_paths(self, paths, replace=False, insert_at=None):
+    def open_paths(self, paths, replace=False, insert_at=None, separate=False):
+        """Открыть файлы. В деле (если не separate) всё добавляется в «PDF дела» — один файл на дело."""
         paths = [p for p in paths if p and os.path.isfile(p)]
         if not paths:
             return
+        case_cid = getattr(self, "mode_cid", None) if not separate else None
+        if case_cid and (replace or not self.ws[self.cur_ws].get("case_id") == case_cid):
+            i = self._main_ws(case_cid)
+            if i != self.cur_ws:
+                self._store_ws()
+                self._load_ws(i)
+            if len(paths) == 1 and self._same(paths[0], self.case_pdf(case_cid)):
+                return
+            replace = False
+        in_main = bool(self.ws[self.cur_ws].get("main"))
         if replace:
             if len(paths) == 1:
                 j = self.find_ws(paths[0])
@@ -2897,7 +2936,7 @@ class MainWindow(QMainWindow):
                 loaded.append((p, d))
         if not loaded:
             return
-        if replace or self.doc.page_count == 0:
+        if replace or (self.doc.page_count == 0 and not in_main):
             if replace:
                 self.undo_stack.clear()
                 self.redo_stack.clear()
@@ -2932,14 +2971,150 @@ class MainWindow(QMainWindow):
                 self.cases_page.refresh_docs_if(cid)
             except Exception:
                 pass
+        if in_main and cid:                      # добавленные файлы — в список документов дела (сами файлы на месте)
+            tmp = os.path.normcase(tempfile.gettempdir())
+            try:
+                for p, _d in loaded:
+                    if not os.path.normcase(os.path.abspath(p)).startswith(tmp):
+                        U.db().add_doc(cid, p)
+                U.sync_case_file(cid)
+            except Exception as ex:
+                log_error("Документ в список дела", ex)
         self.refresh_all(new_sel)
+        if new_sel:
+            it = self.pages.item(new_sel[0])
+            if it and not it.isHidden():
+                self.pages.scrollToItem(it, QAbstractItemView.PositionAtTop)
+        if in_main and cid:
+            self.cases_page.refresh_docs_if(cid)
+            self.toast(f"＋  В PDF дела: {', '.join(Path(p).name for p, _ in loaded)[:80]}")
         self.refresh_loose_list()
         self.update_title()
         self.msg(f"Открыто файлов: {len(loaded)}, страниц в документе: {self.doc.page_count}")
 
+    # --- «PDF дела»: все документы дела одним файлом в папке дела
+    @staticmethod
+    def _same(a, b):
+        return bool(a and b) and os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+    def case_pdf(self, cid):
+        """Путь к PDF дела: «<папка дела>/<название дела>.pdf» (имя запоминается при первом сохранении)."""
+        db = U.db()
+        c = db.case(cid) or {}
+        folder = CF.ensure_folder(db, cid)
+        return os.path.join(folder, c.get("pdf") or (CF.clean_name(c.get("title")) + ".pdf"))
+
+    def _main_ws(self, cid):
+        """Номер открытого документа «PDF дела» (открывается с диска или создаётся пустым)."""
+        for i, w in enumerate(self.ws):
+            if w.get("case_id") == cid and w.get("main"):
+                return i
+        b = self._blank_ws()
+        b.update(case_id=cid, main=True)
+        try:
+            p = self.case_pdf(cid)
+            if os.path.exists(p):
+                b["doc"] = fitz.open("pdf", Path(p).read_bytes())      # из памяти — файл не блокируется
+                b["path"] = p
+        except Exception as ex:
+            log_error("Открытие PDF дела", ex)
+        for i, w in enumerate(self.ws):                  # пустой лист этого дела — заменить, а не копить
+            if w.get("case_id") == cid and not w["doc"].page_count and not w["modified"] and not w.get("kit"):
+                self.ws[i] = b
+                if i == self.cur_ws:
+                    self._load_ws(i)
+                return i
+        self.ws.append(b)
+        return len(self.ws) - 1
+
+    def show_main_ws(self, cid):
+        i = self._main_ws(cid)
+        if i != self.cur_ws:
+            self._store_ws()
+            self._load_ws(i)
+        return i
+
+    def case_pdf_sources(self, cid):
+        """Какие файлы (полные пути, normcase) уже вставлены в PDF дела."""
+        w = next((w for w in self.ws if w.get("case_id") == cid and w.get("main")), None)
+        if w is None:
+            return set()
+        d = self.doc if self.ws.index(w) == self.cur_ws else w["doc"]
+        out = set()
+        for k in range(d.page_count):
+            src = _pdf_key(d, k, "LHSrc")
+            if src:
+                out.add(os.path.normcase(src))
+        return out
+
+    def show_in_case(self, cid, path, page=0):
+        """К страницам файла в PDF дела; если его там ещё нет — добавить в конец."""
+        self.show_main_ws(cid)
+        key = os.path.normcase(os.path.abspath(path))
+        for k in range(self.doc.page_count):
+            src = _pdf_key(self.doc, k, "LHSrc")
+            if src and os.path.normcase(src) == key:
+                g = _pdf_key(self.doc, k, "LHGroup")
+                last = k
+                while last + 1 < self.doc.page_count and _pdf_key(self.doc, last + 1, "LHGroup") == g:
+                    last += 1
+                self.goto_page(min(k + max(0, page), last))
+                return
+        start = self.doc.page_count
+        self.open_paths([path])
+        if page and self.doc.page_count > start:
+            self.goto_page(min(start + page, self.doc.page_count - 1))
+
+    def build_case_pdf(self, cid):
+        """Добавить в PDF дела все документы из списка, которых в нём ещё нет."""
+        have = self.case_pdf_sources(cid)
+        paths = [d["path"] for d in U.db().docs(cid) if d["path"] and os.path.exists(d["path"])
+                 and os.path.normcase(os.path.abspath(d["path"])) not in have
+                 and not self._same(d["path"], self.case_pdf(cid))]
+        self.enter_case(cid)
+        self.open_case_tab("docs")
+        self.show_main_ws(cid)
+        if not paths:
+            self.toast("Все документы уже в PDF дела")
+            return
+        self.open_paths(paths)
+
+    def remove_from_case_pdf(self, cid, path):
+        """Убрать страницы файла из PDF дела (с возможностью отменить)."""
+        self.show_main_ws(cid)
+        key = os.path.normcase(os.path.abspath(path))
+        pages = [k for k in range(self.doc.page_count)
+                 if os.path.normcase(_pdf_key(self.doc, k, "LHSrc") or "") == key]
+        if not pages:
+            return 0
+        self.push_undo()
+        self.doc.delete_pages(pages)
+        self.refresh_all()
+        self.update_title()
+        return len(pages)
+
+    def open_kit(self, path, name, cid):
+        """Собранный комплект — отдельным документом (временным: сохраняется только по «Сохранить»)."""
+        for i, w in enumerate(self.ws):
+            if w.get("kit") and w.get("case_id") == cid:
+                self._store_ws()
+                self.ws[i]["modified"] = False
+                if i == self.cur_ws:
+                    self.modified = False
+                self.close_ws(i)
+                break
+        self._store_ws()
+        b = self._blank_ws()
+        b.update(case_id=cid, kit=True, name=name, doc=fitz.open("pdf", Path(path).read_bytes()))
+        self.ws.append(b)
+        self._load_ws(len(self.ws) - 1)
+
     def save(self):
         if not self.need_doc():
             return False
+        w = self.ws[self.cur_ws]
+        if not self.path and w.get("main") and w.get("case_id"):
+            return self.save_to(self.case_pdf(w["case_id"]))     # PDF дела — сразу в папку дела, без вопросов
         if not self.path:
             return self.save_as()
         return self.save_to(self.path)
@@ -2959,8 +3134,17 @@ class MainWindow(QMainWindow):
         self.extwatch.refresh(p)
         self.path = p
         self.modified = False
-        cid = self.ws[self.cur_ws].get("case_id")
-        if cid:
+        w = self.ws[self.cur_ws]
+        cid = w.get("case_id")
+        if w.get("main") and cid:
+            if self._same(p, self.case_pdf(cid)):
+                U.db().update_case(cid, pdf=os.path.basename(p))
+            else:                                          # «Сохранить как» под другим именем — это уже копия
+                w["main"] = False
+            self.cases_page.refresh_docs_if(cid)
+        elif w.get("kit"):
+            w["kit"] = False                               # сохранённый комплект — обычный документ дела
+        if cid and not w.get("main"):
             try:
                 U.db().add_doc(cid, p)
                 self.cases_page.refresh_docs_if(cid)
@@ -3727,8 +3911,11 @@ class MainWindow(QMainWindow):
             self.loose_list.addItem(it)
 
     def _ensure_ws(self, cid):
-        """Показать документ этого дела: открытый ранее или пустой лист."""
+        """Показать документ этого дела (в деле — его «PDF дела») или лист «Без дела»."""
         if self.ws[self.cur_ws].get("case_id") == cid:
+            return
+        if cid:
+            self.show_main_ws(cid)
             return
         cand = [i for i, w in enumerate(self.ws) if w.get("case_id") == cid]
         if cand:
@@ -3829,18 +4016,28 @@ class MainWindow(QMainWindow):
             if self.last_case:
                 self.cases_page.select_case(self.last_case)
 
-    def open_external(self, path, page=0, cid=None):
+    def open_external(self, path, page=0, cid=None, separate=False):
         if not os.path.exists(path):
             return QMessageBox.warning(self, APP_NAME, f"Файл не найден:\n{path}")
-        if os.path.splitext(path)[1].lower() in EXTERNAL_EXT:
+        ext = os.path.splitext(path)[1].lower()
+        target = cid if cid is not None else self.mode_cid
+        if target and not separate and ext != ".excalidraw":
+            self.enter_case(target)
+            self.open_case_tab("docs")
+            if self._same(path, self.case_pdf(target)):
+                self.show_main_ws(target)
+                self.goto_page(page)
+            else:
+                self.show_in_case(target, path, page)
+            return
+        if ext in EXTERNAL_EXT:
             self.open_in_app(path)
             return
-        target = cid if cid is not None else self.mode_cid
         if target:
             self.enter_case(target)
         else:
             self.enter_loose()
-        self.open_paths([path], replace=True)
+        self.open_paths([path], replace=True, separate=separate)
         self.show_section(0)
         if cid and self.path:
             try:
@@ -3913,6 +4110,11 @@ class MainWindow(QMainWindow):
     def _load_ws(self, i):
         self.cur_ws = i
         w = self.ws[i]
+        self.pages.empty_text = ("Это «PDF дела» — все документы дела одним файлом.\n\n"
+                                 "Перетащите сюда документы из списка слева\n"
+                                 "(или двойной щелчок по документу),\n"
+                                 "либо «Ещё ▾ → Собрать PDF дела из всех документов».\n\n"
+                                 "«Сохранить» запишет его в папку дела.") if w.get("main") else ""
         self.doc, self.path, self.modified = w["doc"], w["path"], w["modified"]
         self.undo_stack, self.redo_stack = w["undo"], w["redo"]
         self.refresh_all(w["sel"])

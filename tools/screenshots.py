@@ -121,6 +121,9 @@ def main():
 
     def grab(name, widget=None, rect=None):
         pump()
+        from PySide6.QtWidgets import QLabel
+        for t in w.findChildren(QLabel, "toast"):          # всплывающие «✓ Сохранено» на снимках не нужны
+            t.hide()
         pm = (widget or w).grab(rect) if rect else (widget or w).grab()
         pm.save(os.path.join(OUT, name + ".png"))
         shots.append(name)
@@ -165,9 +168,22 @@ def main():
         pump(1500 if key == "board" else 300)
         grab(name)
     grab("06_package", w.cases_page.sub_tab)
+    # «PDF дела»: все документы дела одним файлом, второй свёрнут, справа — крупный просмотр
     w.open_case_tab("docs")
     pump(300)
+    w.build_case_pdf(cid)
+    pump(400)
+    w.set_thumb_size_saved(100)
+    w.set_preview(True)
+    w._compute_groups()
+    if len(w._runs) > 1:
+        w.toggle_group(w._runs[1][2], collapse=True)
+    w.pages.clearSelection()
+    w.pages.setCurrentRow(1)
+    w.pages.item(1).setSelected(True)
+    pump(700)
     grab("15_docs")
+    grab("24_groups")
     w.enter_loose()
     grab("03_loose")
     w.open_paths([os.path.join(HOME, "Документы", "Исковое заявление.pdf")], replace=True)
@@ -176,20 +192,6 @@ def main():
     if tb and tb.isVisible():
         from PySide6.QtCore import QRect
         grab("04_toolbar", w.docarea, QRect(0, 0, w.docarea.width(), tb.height() + w.toolbar2.height()))
-    # файлы внутри документа: второй файл свёрнут, справа — крупный просмотр
-    w.cases_page.list.setCurrentRow(0)
-    w.open_case_tab("docs")
-    pump(300)
-    w.open_paths([os.path.join(HOME, "Документы", n) for n in ("Исковое заявление.pdf", "Договор поставки № 12.pdf")],
-                 replace=True)
-    pump(300)
-    w.set_thumb_size_saved(100)
-    w.set_preview(True)
-    w.toggle_group(w.doc.page_count - 1, collapse=True)
-    w.pages.setCurrentRow(1)
-    w.pages.item(1).setSelected(True)
-    pump(700)
-    grab("24_groups")
     dialog_shot("05_editor", lambda: w.open_editor(0), (1000, 680))
     for name, opener, size in (
             ("07_f107", lambda: U.tool_f107(w), None),

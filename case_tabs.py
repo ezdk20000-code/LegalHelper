@@ -830,7 +830,7 @@ class KitPanel(SubmissionTab):
         if not it:
             return
         rng = self.ranges.get(it["id"])
-        if rng and self.kit_path and self.main.path == self.kit_path:
+        if rng and self.kit_path and self.main.ws[self.main.cur_ws].get("kit"):
             self.main.goto_page(rng[0])
 
     def on_double(self, r, c):
@@ -889,20 +889,15 @@ class KitPanel(SubmissionTab):
         if not items:
             return QMessageBox.information(self, U.M.APP_NAME, "В комплекте нет документов с файлами. "
                                            "Перетащите документы из списка дела или нажмите «+ Из дела…».")
-        c = db().case(self.cid) or {}
-        folder = c.get("folder") or self.main.default_dir()
-        out = os.path.join(folder, U.L.clean_filename(f"Комплект — {self.packs.currentText()}") + ".pdf")
-        j = self.main.find_ws(out) if hasattr(self.main, "find_ws") else None
-        if j is not None:                               # старая сборка открыта — закрыть перед пересборкой
-            self.main.switch_ws(j)
-            self.main.modified = False
-            self.main.close_ws()
+        import tempfile
+        name = U.L.clean_filename(f"Комплект — {self.packs.currentText()}")
+        out = os.path.join(tempfile.mkdtemp(prefix="lh_kit_"), name + ".pdf")   # не мусорим в папке дела
         res = self.main.run("Собираю комплект в один PDF…", assemble_pdf, items, out)
         if res is U.M.FAILED:
             return
         self.ranges, failed = res
         self.kit_path = out
-        self.main.open_external(out, 0, self.cid)
+        self.main.open_kit(out, name, self.cid)
         self.reload(select=0)
         skipped = [i["title"] for i in rows if not i["path"] or not os.path.exists(i["path"])]
         msg = []
@@ -914,7 +909,7 @@ class KitPanel(SubmissionTab):
             QMessageBox.warning(self, U.M.APP_NAME, "\n\n".join(msg))
         else:
             self.main.msg(f"Комплект собран: {os.path.basename(out)}. Щёлкайте по пунктам слева — "
-                          "откроется начало каждого документа.")
+                          "откроется начало каждого документа. Нужен файл — «Сохранить».", 10000)
 
     def to_f107(self):
         rows = [(f"{i['title']}" + (f" на {_page_count(i['path'])} л." if i["path"] and os.path.exists(i["path"])

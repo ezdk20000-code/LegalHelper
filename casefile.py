@@ -127,8 +127,26 @@ def save_case_file(db, cid):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
+    _set_hidden(path, False)
     os.replace(tmp, path)
+    _set_hidden(path, True)                  # служебный файл — не мешается в папке дела (в Windows скрыт)
     return path
+
+
+def _set_hidden(path, hidden):
+    if os.name != "nt" or not os.path.exists(path):
+        return
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        attrs = k.GetFileAttributesW(path)
+        if attrs == -1 or attrs == 0xFFFFFFFF:
+            return
+        new = (attrs | 2) if hidden else (attrs & ~2)
+        if new != attrs:
+            k.SetFileAttributesW(path, new)
+    except Exception:
+        pass
 
 
 def collect_files(db, cid):

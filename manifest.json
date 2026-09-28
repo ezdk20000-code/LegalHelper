@@ -2,7 +2,7 @@
 "files": [
 {
 "path": "CHANGELOG.md",
-"size": 29902
+"size": 34150
 },
 {
 "path": "README.md",
@@ -26,15 +26,15 @@
 },
 {
 "path": "case_tabs.py",
-"size": 69106
+"size": 68853
 },
 {
 "path": "casefile.py",
-"size": 10531
+"size": 11141
 },
 {
 "path": "cases.py",
-"size": 24789
+"size": 24987
 },
 {
 "path": "excalidraw/Assistant-Bold-ZDZZ6JHA.woff2",
@@ -202,7 +202,7 @@
 },
 {
 "path": "help/img/03_loose.png",
-"size": 143810
+"size": 147633
 },
 {
 "path": "help/img/04_toolbar.png",
@@ -210,7 +210,7 @@
 },
 {
 "path": "help/img/05_editor.png",
-"size": 162493
+"size": 162543
 },
 {
 "path": "help/img/06_package.png",
@@ -250,7 +250,7 @@
 },
 {
 "path": "help/img/15_docs.png",
-"size": 177617
+"size": 254722
 },
 {
 "path": "help/img/16_prepare.png",
@@ -266,19 +266,19 @@
 },
 {
 "path": "help/img/19_board.png",
-"size": 174175
+"size": 173291
 },
 {
 "path": "help/img/20_deadline.png",
-"size": 179476
+"size": 173876
 },
 {
 "path": "help/img/21_duty.png",
-"size": 159451
+"size": 153419
 },
 {
 "path": "help/img/22_interest.png",
-"size": 167774
+"size": 160924
 },
 {
 "path": "help/img/23_dark.png",
@@ -286,11 +286,11 @@
 },
 {
 "path": "help/img/24_groups.png",
-"size": 249285
+"size": 254722
 },
 {
 "path": "help_ui.py",
-"size": 58904
+"size": 61065
 },
 {
 "path": "installer.iss",
@@ -306,7 +306,7 @@
 },
 {
 "path": "legal_ui.py",
-"size": 213421
+"size": 215170
 },
 {
 "path": "pdf_core.py",
@@ -314,7 +314,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 257287
+"size": 267776
 },
 {
 "path": "requirements.txt",
@@ -354,7 +354,7 @@
 },
 {
 "path": "version.json",
-"size": 884
+"size": 845
 }
 ]
 }

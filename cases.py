@@ -128,6 +128,8 @@ class CaseDB:
             self.con.execute("ALTER TABLE cases ADD COLUMN court_url TEXT DEFAULT ''")
         if "uid" not in cols:                   # постоянный номер дела — чтобы узнать его в перенесённой папке
             self.con.execute("ALTER TABLE cases ADD COLUMN uid TEXT DEFAULT ''")
+        if "pdf" not in cols:                   # имя файла «PDF дела» в папке дела
+            self.con.execute("ALTER TABLE cases ADD COLUMN pdf TEXT DEFAULT ''")
         import uuid
         for (cid,) in self.con.execute("SELECT id FROM cases WHERE uid IS NULL OR uid=''").fetchall():
             self.con.execute("UPDATE cases SET uid=? WHERE id=?", (uuid.uuid4().hex, cid))
@@ -221,7 +223,7 @@ class CaseDB:
                           f"({','.join('?' * len(keys))},?,?,?)", [kw[k] for k in keys] + [uuid.uuid4().hex, now, now])
 
     def update_case(self, cid, **kw):
-        keys = [k for k in kw if k in dict(CASE_FIELDS) or k == "archived"]
+        keys = [k for k in kw if k in dict(CASE_FIELDS) or k in ("archived", "pdf")]
         if not keys:
             return
         now = dt.datetime.now().isoformat(timespec="seconds")

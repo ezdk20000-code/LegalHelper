@@ -813,6 +813,11 @@ class DocsTable(QTableWidget):
     def load(self, docs):
         self._loading = True
         self.setRowCount(0)
+        main = self.page.main
+        try:
+            in_pdf = main.case_pdf_sources(self.page.cid) if self.page.cid and hasattr(main, "case_pdf_sources") else set()
+        except Exception:
+            in_pdf = set()
         for d in docs:
             r = self.rowCount()
             self.insertRow(r)
@@ -826,13 +831,15 @@ class DocsTable(QTableWidget):
             ic.setToolTip("Щёлкните, чтобы выбрать значок")
             title = QTableWidgetItem(d["title"])
             title.setToolTip("Двойной щелчок — переименовать")
-            main = self.page.main
-            if hasattr(main, "find_ws") and main.find_ws(d["path"]) is not None:
+            if os.path.normcase(os.path.abspath(d["path"])) in in_pdf:
                 fb = title.font()
                 fb.setBold(True)
                 title.setFont(fb)
                 title.setForeground(QColor(M.T["accent"]))
-                title.setToolTip("Открыт. Двойной щелчок — переименовать")
+                title.setToolTip("Уже в PDF дела (справа). Двойной щелчок — перейти к нему. F2 — переименовать")
+            else:
+                title.setToolTip("Ещё не в PDF дела. Двойной щелчок или перетаскивание вправо — добавить. "
+                                 "F2 — переименовать")
             title.setData(Qt.UserRole, d["path"])
             title.setData(Qt.UserRole + 1, d["id"])
             sent = QTableWidgetItem(fmt_sent_short(d.get("sent")) if d.get("sent") else "нет")
@@ -951,8 +958,7 @@ class DocsTable(QTableWidget):
             return
         did, path, title = self.row_doc(r)
         m = QMenu(self)
-        m.addAction("Открыть здесь, справа", lambda: self.page.main.open_paths([path], replace=True)
-                    if os.path.exists(path) else self.page.openFile.emit(path, 0))
+        m.addAction("Показать в PDF дела (справа)", lambda: self.page.openFile.emit(path, 0))
         m.addAction("Открыть в своей программе (Word, Acrobat…)", lambda: self.page.main.open_in_app(path))
         m.addAction("Переименовать", lambda: self.editItem(self.item(r, 1)))
         m.addAction("Выбрать значок…", lambda: self.on_click(r, 0))
@@ -1961,8 +1967,9 @@ class CasesPage(QWidget):
     def _build_docs(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        hint = QLabel("Двойной щелчок или перетаскивание вправо — открыть документ. Перетащите в уже открытый "
-                      "документ — страницы добавятся. Галочка «Отправлен» ставит текущие дату и время.")
+        hint = QLabel("Справа — «PDF дела»: все документы дела одним файлом. Двойной щелчок или перетаскивание "
+                      "вправо — добавить документ в него (синие — уже там). Правый щелчок → «Открыть в своей "
+                      "программе» — править в Word.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         v.addWidget(hint)
@@ -2012,6 +2019,9 @@ class CasesPage(QWidget):
         b_more.setObjectName("moretabs")
         b_more.setPopupMode(QToolButton.InstantPopup)
         mm = QMenu(b_more)
+        mm.addAction("📚 Собрать PDF дела из всех документов", lambda: self.main.build_case_pdf(self.cid))
+        mm.addAction("📂 Показать PDF дела в папке", lambda: self.main.show_in_folder(self.main.case_pdf(self.cid)))
+        mm.addSeparator()
         mm.addAction("Пакет в суд из выбранных", self.package_from_docs)
         mm.addAction("Поиск по документам", self.search_docs)
         mm.addSeparator()
@@ -2357,10 +2367,16 @@ class CasesPage(QWidget):
         paths, _ = QFileDialog.getOpenFileNames(self, "Документы дела", self.fields["folder"].text() or
                                                 str(Path.home() / "Documents"), M.OPEN_FILTER)
         copy = copy_docs_enabled()
+        added = []
         for p in paths:
-            db().add_doc(self.cid, copy_into_case(self.cid, p) if copy else p)
+            q = copy_into_case(self.cid, p) if copy else p
+            db().add_doc(self.cid, q)
+            added.append(q)
         self.load_docs()
         sync_case_file(self.cid)
+        if added:                                   # и сразу в PDF дела
+            self.main.show_main_ws(self.cid)
+            self.main.open_paths(added)
 
     def add_doc_path(self, cid, path):
         db().add_doc(cid, path)
@@ -2397,6 +2413,13 @@ class CasesPage(QWidget):
         box.setInformativeText("«Удалить файл совсем» — файл уйдёт в Корзину Windows и исчезнет из программы "
                                "(документ закроется, пропадёт из комплектов). Из Корзины его можно вернуть.\n\n"
                                "«Только из дела» — файл останется на диске, программа его забудет.")
+        in_pdf = self.main.case_pdf_sources(self.cid)
+        has_pages = any(p and os.path.normcase(os.path.abspath(p)) in in_pdf for _i, p, _t in docs)
+        cb = None
+        if has_pages:
+            cb = QCheckBox("Убрать и его страницы из PDF дела")
+            cb.setChecked(True)
+            box.setCheckBox(cb)
         b_file = box.addButton("🗑  Удалить файл совсем", QMessageBox.DestructiveRole)
         b_list = box.addButton("Только из дела", QMessageBox.AcceptRole)
         box.addButton("Отмена", QMessageBox.RejectRole)
@@ -2404,6 +2427,10 @@ class CasesPage(QWidget):
         if box.clickedButton() not in (b_file, b_list):
             return
         gone = 0
+        if cb is not None and (cb.isChecked() or box.clickedButton() is b_file):
+            removed = sum(self.main.remove_from_case_pdf(self.cid, p) for _i, p, _t in docs if p)
+            if removed:
+                self.main.toast(f"Из PDF дела убрано страниц: {removed} (вернуть — Ctrl+Z)")
         for did, path, _t in docs:
             if box.clickedButton() is b_file and path and os.path.exists(path):
                 if not self.main.delete_file_completely(path):
@@ -3956,7 +3983,7 @@ def sync_case_file(cid):
 
 
 def copy_docs_enabled():
-    return str(M.settings().value("copy_docs", "1")) != "0"
+    return str(M.settings().value("copy_docs", "0")) == "1"      # по умолчанию файлы не копируются
 
 
 def copy_into_case(cid, path):
