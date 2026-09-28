@@ -62,7 +62,15 @@ class CaseDB:
         self.con = sqlite3.connect(path)
         self.con.row_factory = sqlite3.Row
         self.con.executescript(SCHEMA)
+        self._migrate()
         self.con.commit()
+
+    def _migrate(self):
+        """Добавить новые поля в базы, созданные старыми версиями (данные не теряются)."""
+        cols = {r[1] for r in self.con.execute("PRAGMA table_info(docs)")}
+        for name, ddl in (("icon", "TEXT DEFAULT ''"), ("sent", "TEXT DEFAULT ''"), ("pos", "INTEGER DEFAULT 0")):
+            if name not in cols:
+                self.con.execute(f"ALTER TABLE docs ADD COLUMN {name} {ddl}")
 
     # ---------------------------------------------------------------- общее
     def _all(self, sql, args=()):
@@ -137,7 +145,13 @@ class CaseDB:
 
     # ---------------------------------------------------------------- документы
     def docs(self, cid):
-        return self._all("SELECT * FROM docs WHERE case_id=? ORDER BY added", (cid,))
+        return self._all("SELECT * FROM docs WHERE case_id=? ORDER BY pos, added", (cid,))
+
+    def update_doc(self, did, **kw):
+        keys = [k for k in kw if k in ("title", "icon", "sent", "pos", "path")]
+        if keys:
+            self._exec(f"UPDATE docs SET {','.join(k + '=?' for k in keys)} WHERE id=?",
+                       tuple(kw[k] for k in keys) + (did,))
 
     def add_doc(self, cid, path, title=""):
         if self._one("SELECT id FROM docs WHERE case_id=? AND path=?", (cid, path)):

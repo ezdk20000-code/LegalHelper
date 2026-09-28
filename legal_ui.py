@@ -4,6 +4,7 @@
 import os
 import json
 import datetime as dt
+import html
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -646,6 +647,480 @@ class CalcPage(QWidget):
 # =============================================================================
 #  Дела
 # =============================================================================
+DOC_ICONS = ["📄", "📝", "📑", "⚖️", "🏛️", "📬", "✉️", "📦", "💰", "🧾", "📊", "📷",
+             "📎", "📌", "⭐", "✅", "⏳", "❗", "🔒", "🗂️", "🤝", "🔍", "🖊️", "📅"]
+
+
+def default_icon(path):
+    ext = os.path.splitext(path or "")[1].lower()
+    return {".pdf": "📄", ".doc": "📝", ".docx": "📝", ".rtf": "📝", ".odt": "📝", ".xls": "📊", ".xlsx": "📊",
+            ".jpg": "📷", ".jpeg": "📷", ".png": "📷", ".tif": "📷", ".tiff": "📷"}.get(ext, "📎")
+
+
+def fmt_sent(s):
+    if not s:
+        return ""
+    try:
+        d = dt.datetime.fromisoformat(s)
+        return d.strftime("%d.%m.%Y  %H:%M")
+    except Exception:
+        return s
+
+
+class IconPicker(QMenu):
+    """Сетка значков для документа."""
+
+    def __init__(self, parent, on_pick):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QWidgetAction
+        box = QWidget()
+        g = QGridLayout(box)
+        g.setContentsMargins(8, 8, 8, 8)
+        g.setSpacing(4)
+        for i, ic in enumerate(DOC_ICONS):
+            b = QToolButton()
+            b.setText(ic)
+            b.setObjectName("iconpick")
+            b.setFixedSize(38, 38)
+            b.setAutoRaise(True)
+            f = b.font()
+            f.setPointSize(15)
+            b.setFont(f)
+            b.clicked.connect(lambda _=False, ic=ic: (on_pick(ic), self.close()))
+            g.addWidget(b, i // 6, i % 6)
+        wa = QWidgetAction(self)
+        wa.setDefaultWidget(box)
+        self.addAction(wa)
+        self.addSeparator()
+        self.addAction("Значок по типу файла", lambda: on_pick(""))
+
+
+class SentDialog(QDialog):
+    """Дата и время отправки документа."""
+
+    def __init__(self, parent, title, value):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QDateTimeEdit
+        from PySide6.QtCore import QDateTime
+        self.setWindowTitle("Когда отправлен")
+        self.result_value = None
+        v = QVBoxLayout(self)
+        lab = QLabel(f"«{title}»")
+        lab.setObjectName("subtitle")
+        lab.setWordWrap(True)
+        v.addWidget(lab)
+        self.ed = QDateTimeEdit()
+        self.ed.setCalendarPopup(True)
+        self.ed.setDisplayFormat("dd.MM.yyyy  HH:mm")
+        cur = None
+        try:
+            cur = dt.datetime.fromisoformat(value) if value else None
+        except Exception:
+            cur = None
+        cur = cur or dt.datetime.now().replace(second=0, microsecond=0)
+        self.ed.setDateTime(QDateTime(QDate(cur.year, cur.month, cur.day),
+                                      __import__("PySide6.QtCore", fromlist=["QTime"]).QTime(cur.hour, cur.minute)))
+        row = QHBoxLayout()
+        row.addWidget(self.ed, 1)
+        now = QPushButton("Сейчас")
+        now.clicked.connect(lambda: self.ed.setDateTime(QDateTime.currentDateTime()))
+        row.addWidget(now)
+        v.addLayout(row)
+        bb = QHBoxLayout()
+        clr = QPushButton("Не отправлен")
+        clr.clicked.connect(self.clear)
+        bb.addWidget(clr)
+        bb.addStretch(1)
+        cancel = QPushButton("Отмена")
+        cancel.clicked.connect(self.reject)
+        ok = QPushButton("Сохранить")
+        ok.setObjectName("primary")
+        ok.clicked.connect(self.save)
+        bb.addWidget(cancel)
+        bb.addWidget(ok)
+        v.addLayout(bb)
+
+    def clear(self):
+        self.result_value = ""
+        self.accept()
+
+    def save(self):
+        q = self.ed.dateTime()
+        d, t = q.date(), q.time()
+        self.result_value = dt.datetime(d.year(), d.month(), d.day(), t.hour(), t.minute()).isoformat(timespec="minutes")
+        self.accept()
+
+
+class DocsTable(QTableWidget):
+    """Документы дела: значок, название (редактируется), когда отправлен, файл."""
+    COLS = ["", "Документ", "Отправлен", "Файл"]
+
+    def __init__(self, page):
+        super().__init__(0, 4)
+        self.page = page
+        self._loading = False
+        self.setObjectName("docs")
+        self.setHorizontalHeaderLabels(self.COLS)
+        self.verticalHeader().hide()
+        self.setShowGrid(False)
+        self.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        self.setWordWrap(False)
+        h = self.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.Fixed)
+        self.setColumnWidth(0, 46)
+        h.setSectionResizeMode(1, QHeaderView.Stretch)
+        h.setSectionResizeMode(2, QHeaderView.Fixed)
+        self.setColumnWidth(2, 170)
+        h.setSectionResizeMode(3, QHeaderView.Interactive)
+        self.setColumnWidth(3, 220)
+        self.verticalHeader().setDefaultSectionSize(40)
+        self.cellClicked.connect(self.on_click)
+        self.cellDoubleClicked.connect(self.on_double)
+        self.itemChanged.connect(self.on_changed)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.menu)
+
+    # ---------------------------------------------------------------- данные
+    def load(self, docs):
+        self._loading = True
+        self.setRowCount(0)
+        for d in docs:
+            r = self.rowCount()
+            self.insertRow(r)
+            exists = os.path.exists(d["path"])
+            ic = QTableWidgetItem(d.get("icon") or default_icon(d["path"]))
+            f = ic.font()
+            f.setPointSize(15)
+            ic.setFont(f)
+            ic.setTextAlignment(Qt.AlignCenter)
+            ic.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            ic.setToolTip("Щёлкните, чтобы выбрать значок")
+            title = QTableWidgetItem(d["title"])
+            title.setToolTip("Двойной щелчок — переименовать")
+            main = self.page.main
+            if hasattr(main, "find_ws") and main.find_ws(d["path"]) is not None:
+                fb = title.font()
+                fb.setBold(True)
+                title.setFont(fb)
+                title.setForeground(QColor(M.T["accent"]))
+                title.setToolTip("Открыт. Двойной щелчок — переименовать")
+            title.setData(Qt.UserRole, d["path"])
+            title.setData(Qt.UserRole + 1, d["id"])
+            sent = QTableWidgetItem(fmt_sent(d.get("sent")) or "не отправлен")
+            sent.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            sent.setToolTip("Щёлкните, чтобы указать дату и время отправки")
+            if not d.get("sent"):
+                sent.setForeground(QColor(M.T["muted"]))
+            fn = QTableWidgetItem(("⚠ " if not exists else "") + os.path.basename(d["path"]))
+            fn.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            fn.setToolTip(d["path"] + ("" if exists else "\nФайл не найден — возможно, перемещён или удалён"))
+            fn.setForeground(QColor(M.T["danger"] if not exists else M.T["muted"]))
+            for c, it in enumerate((ic, title, sent, fn)):
+                self.setItem(r, c, it)
+        self._loading = False
+
+    def row_doc(self, r):
+        it = self.item(r, 1)
+        return (it.data(Qt.UserRole + 1), it.data(Qt.UserRole), it.text()) if it else (None, None, "")
+
+    def selected_rows(self):
+        return sorted({i.row() for i in self.selectedIndexes()})
+
+    def paths(self, only_selected=False):
+        rows = self.selected_rows() if only_selected else range(self.rowCount())
+        return [self.row_doc(r)[1] for r in rows]
+
+    # ---------------------------------------------------------------- правка
+    def on_changed(self, item):
+        if self._loading or item.column() != 1:
+            return
+        did = item.data(Qt.UserRole + 1)
+        text = item.text().strip()
+        if not text:
+            self.page.load_docs()
+            return
+        db().update_doc(did, title=text)
+        self.page.main.navigator.refresh() if hasattr(self.page.main, "navigator") else None
+
+    def on_click(self, r, c):
+        did, path, title = self.row_doc(r)
+        if c == 0:
+            rect = self.visualItemRect(self.item(r, 0))
+            IconPicker(self, lambda ic: self.set_icon(did, ic)).exec(self.viewport().mapToGlobal(rect.bottomLeft()))
+        elif c == 2:
+            self.edit_sent(r)
+        elif c in (1, 3) and path:
+            self.page.openFile.emit(path, 0)
+
+    def on_double(self, r, c):
+        if c == 3:
+            self.page.openFile.emit(self.row_doc(r)[1], 0)
+
+    def set_icon(self, did, ic):
+        db().update_doc(did, icon=ic)
+        self.page.load_docs()
+
+    def edit_sent(self, r):
+        did, path, title = self.row_doc(r)
+        cur = next((d.get("sent") for d in db().docs(self.page.cid) if d["id"] == did), "")
+        dlg = SentDialog(self, title, cur)
+        if dlg.exec() and dlg.result_value is not None:
+            db().update_doc(did, sent=dlg.result_value)
+            self.page.load_docs()
+
+    def move(self, step):
+        rows = self.selected_rows()
+        if len(rows) != 1:
+            return
+        r = rows[0]
+        n = r + step
+        if not 0 <= n < self.rowCount():
+            return
+        ids = [self.row_doc(i)[0] for i in range(self.rowCount())]
+        ids[r], ids[n] = ids[n], ids[r]
+        for pos, did in enumerate(ids):
+            db().update_doc(did, pos=pos)
+        self.page.load_docs()
+        self.selectRow(n)
+
+    def menu(self, pos):
+        r = self.rowAt(pos.y())
+        if r < 0:
+            return
+        did, path, title = self.row_doc(r)
+        m = QMenu(self)
+        m.addAction("Открыть", lambda: self.page.openFile.emit(path, 0))
+        m.addAction("Переименовать", lambda: self.editItem(self.item(r, 1)))
+        m.addAction("Выбрать значок…", lambda: self.on_click(r, 0))
+        m.addAction("Отметить отправку…", lambda: self.edit_sent(r))
+        m.addAction("Отправлен сейчас", lambda: (db().update_doc(did, sent=dt.datetime.now().isoformat(timespec="minutes")),
+                                                self.page.load_docs()))
+        m.addSeparator()
+        m.addAction("Выше", lambda: (self.selectRow(r), self.move(-1)))
+        m.addAction("Ниже", lambda: (self.selectRow(r), self.move(1)))
+        m.addAction("Показать в папке", lambda: self.page.main.show_in_folder(path))
+        m.addSeparator()
+        m.addAction("Убрать из дела (файл останется)", lambda: (db().delete_doc(did), self.page.load_docs()))
+        m.exec(self.viewport().mapToGlobal(pos))
+
+
+class ActionCard(QPushButton):
+    """Крупная кнопка-действие: значок, название, пояснение."""
+
+    def __init__(self, icon, title, desc, slot, help_key=None):
+        super().__init__()
+        self.setObjectName("actioncard")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(74)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(14, 10, 10, 10)
+        ic = QLabel(icon)
+        ic.setObjectName("cardicon")
+        f = ic.font()
+        f.setPointSize(19)
+        ic.setFont(f)
+        ic.setFixedWidth(38)
+        ic.setAttribute(Qt.WA_TransparentForMouseEvents)
+        h.addWidget(ic)
+        tv = QVBoxLayout()
+        tv.setSpacing(1)
+        t = QLabel(title)
+        t.setObjectName("cardtitle")
+        t.setAttribute(Qt.WA_TransparentForMouseEvents)
+        d = QLabel(desc)
+        d.setObjectName("carddesc")
+        d.setWordWrap(True)
+        d.setAttribute(Qt.WA_TransparentForMouseEvents)
+        tv.addWidget(t)
+        tv.addWidget(d)
+        h.addLayout(tv, 1)
+        if help_key:
+            h.addWidget(HelpButton(help_key), 0, Qt.AlignTop)
+        self.clicked.connect(slot)
+
+
+def card_grid(cards, cols=3):
+    g = QGridLayout()
+    g.setSpacing(10)
+    for i, c in enumerate(cards):
+        g.addWidget(c, i // cols, i % cols)
+    return g
+
+
+class OverviewTab(QWidget):
+    """Обзор дела: главное о деле, ближайшие сроки, последние документы, быстрые действия."""
+
+    def __init__(self, main):
+        super().__init__()
+        self.main = main
+        self.cid = None
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setFrameShape(QFrame.NoFrame)
+        outer.addWidget(sc)
+        body = QWidget()
+        sc.setWidget(body)
+        v = QVBoxLayout(body)
+        v.setContentsMargins(2, 14, 8, 14)
+        v.setSpacing(12)
+        # сводка
+        self.facts = QLabel()
+        self.facts.setObjectName("facts")
+        self.facts.setWordWrap(True)
+        self.facts.setTextFormat(Qt.RichText)
+        self.facts.setOpenExternalLinks(False)
+        self.facts.linkActivated.connect(lambda _l: self.main.open_case_tab("info"))
+        v.addWidget(self.facts)
+        # две колонки
+        cols = QHBoxLayout()
+        cols.setSpacing(14)
+        for attr, title, btn_text, slot in (
+                ("l_events", "Ближайшие сроки и заседания", "+ Срок или заседание", lambda: self.main.open_case_tab("events")),
+                ("l_docs", "Последние документы", "Все документы", lambda: self.main.open_case_tab("docs"))):
+            box = QFrame()
+            box.setObjectName("card")
+            bv = QVBoxLayout(box)
+            bv.setContentsMargins(14, 12, 14, 10)
+            lab = QLabel(title)
+            lab.setObjectName("subtitle")
+            bv.addWidget(lab)
+            lst = QListWidget()
+            lst.setObjectName("overlist")
+            lst.setMinimumHeight(170)
+            lst.setWordWrap(True)
+            bv.addWidget(lst, 1)
+            b = QPushButton(btn_text)
+            b.clicked.connect(slot)
+            bv.addWidget(b, 0, Qt.AlignLeft)
+            setattr(self, attr, lst)
+            cols.addWidget(box, 1)
+        self.l_docs.itemClicked.connect(lambda it: it.data(Qt.UserRole) and self.main.open_external(
+            it.data(Qt.UserRole), 0, self.cid))
+        self.l_events.itemClicked.connect(lambda _it: self.main.open_case_tab("events"))
+        v.addLayout(cols)
+        # быстрые действия
+        lab = QLabel("Что сделать")
+        lab.setObjectName("subtitle")
+        v.addWidget(lab)
+        m = self.main
+        v.addLayout(card_grid([
+            ActionCard("📨", "Подать в суд или отправить", "Собрать иск и приложения под «Мой арбитр», ГАС или Почту",
+                       lambda: m.open_case_tab("prepare")),
+            ActionCard("📝", "Документ по шаблону", "Ходатайство, заявление, запрос — с данными дела",
+                       lambda: tool_template(m, self.cid)),
+            ActionCard("📂", "Открыть документы", "Посмотреть и отредактировать PDF дела",
+                       lambda: m.open_case_tab("docs")),
+            ActionCard("⏱️", "Посчитать срок", "Апелляция, кассация, частная жалоба…", lambda: m.show_calc(0)),
+            ActionCard("💰", "Проценты и пошлина", "Ст. 395 ГК, неустойка, госпошлина", lambda: m.show_calc(2)),
+            ActionCard("🗺️", "Карта дела", "Схема: факты, позиции, доказательства, риски",
+                       lambda: m.open_case_tab("board")),
+        ]))
+        v.addStretch(1)
+
+    def set_case(self, cid):
+        self.cid = cid
+        if not cid:
+            return
+        c = db().case(cid) or {}
+
+        def fact(label, value):
+            value = html.escape(value or "") or f'<span style="color:{M.T["muted"]}">не указано</span>'
+            return f'<td style="padding:4px 22px 4px 0"><span style="color:{M.T["muted"]}">{label}</span><br>{value}</td>'
+        rows = [[("Номер дела", c.get("number")), ("Суд", c.get("court")), ("Судья", c.get("judge"))],
+                [("Доверитель", c.get("client")), ("Оппонент", c.get("opponent")), ("Стадия", c.get("stage"))]]
+        t = "".join("<tr>" + "".join(fact(a, b) for a, b in r) + "</tr>" for r in rows)
+        claim = html.escape(c.get("claim") or "")
+        self.facts.setText(f'<table>{t}</table>' + (f'<p style="margin-top:6px">{claim}</p>' if claim else "") +
+                           f'<p><a href="info" style="color:{M.T["accent"]}">Изменить сведения о деле</a></p>')
+        # сроки
+        self.l_events.clear()
+        today = dt.date.today()
+        evs = [e for e in db().events(cid, include_done=False)]
+        evs.sort(key=lambda e: (e["date"], e["time"] or ""))
+        for e in evs[:7]:
+            d = dt.date.fromisoformat(e["date"])
+            left = (d - today).days
+            when = "сегодня" if left == 0 else "завтра" if left == 1 else (
+                f"просрочено {CS.ru(e['date'])}" if left < 0 else f"{CS.ru(e['date'])}, через {left} дн.")
+            it = QListWidgetItem(f"{e['kind']}: {e['title']}\n{when}{(' в ' + e['time']) if e['time'] else ''}")
+            if left <= 1:
+                it.setForeground(QColor(M.T["danger"]))
+            self.l_events.addItem(it)
+        if not evs:
+            it = QListWidgetItem("Сроков и заседаний пока нет")
+            it.setFlags(Qt.NoItemFlags)
+            self.l_events.addItem(it)
+        # документы
+        self.l_docs.clear()
+        docs = db().docs(cid)
+        docs_sorted = sorted(docs, key=lambda d: d.get("added") or "", reverse=True)
+        for d in docs_sorted[:7]:
+            sent = fmt_sent(d.get("sent"))
+            it = QListWidgetItem(f"{d.get('icon') or default_icon(d['path'])}  {d['title']}" +
+                                 (f"\n     отправлен {sent}" if sent else ""))
+            it.setData(Qt.UserRole, d["path"])
+            it.setToolTip(d["path"])
+            self.l_docs.addItem(it)
+        if not docs:
+            it = QListWidgetItem("Документов пока нет — откройте вкладку «Документы» и добавьте файлы")
+            it.setFlags(Qt.NoItemFlags)
+            self.l_docs.addItem(it)
+
+
+class PrepareTab(QWidget):
+    """Подготовить: всё для суда и почты по этому делу + комплект документов для подачи."""
+
+    def __init__(self, main, submission):
+        super().__init__()
+        self.main = main
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        split = QSplitter(Qt.Vertical)
+        outer.addWidget(split)
+        top = QWidget()
+        v = QVBoxLayout(top)
+        v.setContentsMargins(2, 14, 8, 8)
+        v.setSpacing(10)
+        m = main
+        hint = QLabel("Инструменты для документа, открытого во вкладке «Документы», и для комплекта ниже.")
+        hint.setObjectName("hint")
+        v.addWidget(hint)
+        v.addLayout(card_grid([
+            ActionCard("📝", "Документ по шаблону", "Ходатайства и заявления по АПК и ГПК, запрос, претензия",
+                       lambda: tool_template(m, m.cases_page.cid), "template"),
+            ActionCard("📨", "Пакет в суд / на почту", "Файлы под «Мой арбитр», ГАС «Правосудие», Почту России",
+                       lambda: m.tool_package(), "package"),
+            ActionCard("📮", "Опись вложения ф. 107", "Бланк описи для ценного письма", lambda: m.tool_f107(), "f107"),
+            ActionCard("🔢", "Нумерация листов", "Номера листов дела, тома по 250 листов", lambda: m.run_doc_tool("sheetnum"),
+                       "sheetnum"),
+            ActionCard("🖊️", "«Копия верна»", "Заверительная надпись на страницах", lambda: m.run_doc_tool("certify"),
+                       "certify"),
+            ActionCard("✅", "Проверка перед подачей", "Размер, формат, пустые и перевёрнутые страницы",
+                       lambda: m.run_doc_tool("preflight"), "preflight"),
+            ActionCard("🕶️", "Обезличить", "Скрыть персональные данные по 152-ФЗ", lambda: m.run_doc_tool("anonymize"),
+                       "anonymize"),
+            ActionCard("🔀", "Сравнить редакции", "Было / стало между двумя версиями", lambda: m.tool_compare_ed(),
+                       "compare_ed"),
+            ActionCard("🔍", "Поиск по документам", "Найти слово во всех файлах дела", lambda: m.tool_case_search(),
+                       "case_search"),
+        ]))
+        split.addWidget(top)
+        bottom = QWidget()
+        bv = QVBoxLayout(bottom)
+        bv.setContentsMargins(2, 6, 8, 0)
+        lab = QLabel("Комплект документов для подачи")
+        lab.setObjectName("subtitle")
+        bv.addWidget(lab)
+        bv.addWidget(submission, 1)
+        split.addWidget(bottom)
+        split.setSizes([330, 420])
+
+
 class CasesPage(QWidget):
     openFile = Signal(str, int)          # путь, страница
     buildPackage = Signal(list)          # пути
@@ -694,6 +1169,7 @@ class CasesPage(QWidget):
         self.upcoming.itemDoubleClicked.connect(self.goto_event_case)
         lv.addWidget(self.upcoming)
         left.setMinimumWidth(300)
+        self.left = left
         split.addWidget(left)
         # ---- карточка
         self.stack = QStackedWidget()
@@ -710,7 +1186,7 @@ class CasesPage(QWidget):
         head.addWidget(self.h_title, 1)
         self.b_arch = QPushButton("В архив")
         self.b_arch.clicked.connect(self.toggle_archive)
-        b_del = QPushButton("Удалить")
+        self.b_del = b_del = QPushButton("Удалить")
         b_del.clicked.connect(self.delete_case)
         head.addWidget(self.b_arch)
         head.addWidget(b_del)
@@ -818,21 +1294,42 @@ class CasesPage(QWidget):
     def _build_docs(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        self.l_docs = QListWidget()
-        self.l_docs.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.l_docs.itemDoubleClicked.connect(lambda it: self.openFile.emit(it.data(Qt.UserRole), 0))
+        hint = QLabel("Щелчок по документу — открыть справа. Значок и дату отправки можно изменить щелчком, "
+                      "название — двойным щелчком.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+        self.l_docs = DocsTable(self)
         v.addWidget(self.l_docs, 1)
         r = QHBoxLayout()
-        for text, fn in (("+ Добавить файлы", self.add_docs),
-                         ("+ Открытый документ", lambda: self.main.link_current_to_case(self.cid)),
-                         ("Открыть", self.open_doc),
-                         ("Пакет в суд из выбранных", self.package_from_docs), ("Поиск по документам", self.search_docs),
-                         ("Документ по шаблону", lambda: tool_template(self.main, self.cid)), ("Убрать", self.del_doc)):
-            b = QPushButton(text)
+        b_add = QToolButton()
+        b_add.setText("+ Добавить")
+        b_add.setObjectName("primarytool")
+        b_add.setPopupMode(QToolButton.InstantPopup)
+        ma = QMenu(b_add)
+        ma.addAction("Файлы с компьютера…", self.add_docs)
+        ma.addAction("Документ по шаблону…", lambda: tool_template(self.main, self.cid))
+        ma.addAction("Новый пустой PDF", lambda: self.main.new_doc())
+        b_add.setMenu(ma)
+        r.addWidget(b_add)
+        for text, fn, tip in (("▲", lambda: self.l_docs.move(-1), "Выше"), ("▼", lambda: self.l_docs.move(1), "Ниже")):
+            b = _small_btn(text)
+            b.setToolTip(tip)
             b.clicked.connect(fn)
             r.addWidget(b)
         r.addStretch(1)
+        b_more = QToolButton()
+        b_more.setText("Ещё ▾")
+        b_more.setPopupMode(QToolButton.InstantPopup)
+        mm = QMenu(b_more)
+        mm.addAction("Пакет в суд из выбранных", self.package_from_docs)
+        mm.addAction("Поиск по документам", self.search_docs)
+        mm.addSeparator()
+        mm.addAction("Убрать выбранные из дела", self.del_doc)
+        b_more.setMenu(mm)
+        r.addWidget(b_more)
         v.addLayout(r)
+        self.docs_widget = w
         self.tabs.addTab(w, "Документы")
 
     def _build_money(self):
@@ -1144,13 +1641,7 @@ class CasesPage(QWidget):
             self.load_docs()
 
     def load_docs(self):
-        self.l_docs.clear()
-        for d in db().docs(self.cid):
-            it = QListWidgetItem(("" if os.path.exists(d["path"]) else "⚠ ") + d["title"])
-            it.setToolTip(d["path"])
-            it.setData(Qt.UserRole, d["path"])
-            it.setData(Qt.UserRole + 1, d["id"])
-            self.l_docs.addItem(it)
+        self.l_docs.load(db().docs(self.cid) if self.cid else [])
 
     def add_docs(self):
         paths, _ = QFileDialog.getOpenFileNames(self, "Документы дела", self.fields["folder"].text() or
@@ -1165,24 +1656,24 @@ class CasesPage(QWidget):
             self.load_docs()
 
     def sel_doc_paths(self):
-        return [it.data(Qt.UserRole) for it in self.l_docs.selectedItems()]
+        return self.l_docs.paths(only_selected=True)
 
     def open_doc(self):
         for p in self.sel_doc_paths()[:1]:
             self.openFile.emit(p, 0)
 
     def package_from_docs(self):
-        paths = self.sel_doc_paths() or [self.l_docs.item(i).data(Qt.UserRole) for i in range(self.l_docs.count())]
+        paths = self.sel_doc_paths() or self.l_docs.paths()
         if paths:
             PackageDialog(self.main, paths).exec()
 
     def search_docs(self):
-        paths = [self.l_docs.item(i).data(Qt.UserRole) for i in range(self.l_docs.count())]
+        paths = self.l_docs.paths()
         SearchDialog(self.main, paths).exec()
 
     def del_doc(self):
-        for it in self.l_docs.selectedItems():
-            db().delete_doc(it.data(Qt.UserRole + 1))
+        for r in self.l_docs.selected_rows():
+            db().delete_doc(self.l_docs.row_doc(r)[0])
         self.load_docs()
 
     # ------------------------------------------------------------ время и деньги

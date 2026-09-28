@@ -25,9 +25,10 @@ from PySide6.QtWidgets import (
 import pdf_core as C
 import legal_core as L
 import legal_ui as U
+import help_ui as H
 
 APP_NAME = "PDF Мастер"
-APP_VERSION = "1.4"
+APP_VERSION = "1.5"
 ACCENT = "#007aff"
 FAILED = object()
 PDF_FILTER = "PDF (*.pdf)"
@@ -1139,6 +1140,7 @@ TOOLS = [
     ("Материалы дела", [
         ("anonymize", "Обезличить (152-ФЗ)", "Скрыть ФИО, паспорта, СНИЛС, ИНН, адреса, телефоны, счета"),
         ("compare_ed", "Сравнить редакции", "Было / стало: удалённое и добавленное цветом"),
+        ("board", "Карта дела (схема)", "Интеллект-карта дела в редакторе Excalidraw: факты, позиции, доказательства"),
         ("case_search", "Поиск по документам дела", "Найти слово во всех файлах сразу, с номером страницы"),
         ("quote", "Выписка с номером листа", "Выделите фрагмент — он попадёт в заметки дела"),
         ("template", "Документ по шаблону", "Заполнить шаблон Word данными дела"),
@@ -1201,7 +1203,7 @@ EXPANDED = {"Для суда и почты", "Материалы дела", "С�
 LEGAL_TOOLS = ["package", "f107", "sheetnum", "certify", "preflight", "anonymize", "compare_ed",
                "case_search", "quote", "template"]
 # инструменты со справкой «?»
-HELP_KEYS = set(LEGAL_TOOLS) | {"calc_deadline", "calc_duty", "calc_interest", "ocr", "compress", "pdfa",
+HELP_KEYS = set(LEGAL_TOOLS) | {"board", "calc_deadline", "calc_duty", "calc_interest", "ocr", "compress", "pdfa",
                                 "redact", "split", "protect", "compare", "pagesize", "forms"}
 
 
@@ -1382,6 +1384,7 @@ class CaseNavigator(QWidget):
             m.addAction("Открыть карточку дела", lambda: self.on_double(it))
             m.addAction("Добавить файлы в дело…", lambda: self.main.add_files_to_case(cid))
             m.addAction("Документ по шаблону…", lambda: U.tool_template(self.main, cid))
+            m.addAction("Карта дела", lambda: self.main.tool_board(cid))
             m.addAction("Привязать открытый документ", lambda: self.main.link_current_to_case(cid))
         elif d[0] == "doc":
             _k, path, ws_index = d
@@ -1458,8 +1461,8 @@ class MainWindow(QMainWindow):
         self.a_undo = act("Отменить", self.undo, QKeySequence.Undo, QStyle.SP_ArrowBack)
         self.a_redo = act("Повторить", self.redo, QKeySequence.Redo, QStyle.SP_ArrowForward)
         self.theme_icons()
-        self.a_rl = act("↺ Влево", lambda: self.rotate_selected(-90), "Ctrl+L", tip="Повернуть влево")
-        self.a_rr = act("↻ Вправо", lambda: self.rotate_selected(90), "Ctrl+R", tip="Повернуть вправо")
+        self.a_rl = act("↺", lambda: self.rotate_selected(-90), "Ctrl+L", tip="Повернуть выбранные страницы влево")
+        self.a_rr = act("↻", lambda: self.rotate_selected(90), "Ctrl+R", tip="Повернуть выбранные страницы вправо")
         self.a_del = act("Удалить", self.delete_selected, QKeySequence.Delete, QStyle.SP_TrashIcon,
                          "Удалить выбранные страницы")
         self.a_dup = act("Дублировать", self.duplicate_selected, "Ctrl+D")
@@ -1474,7 +1477,7 @@ class MainWindow(QMainWindow):
         tb.addAction(self.a_nav)
         self.doc_title = QLabel("Новый документ")
         self.doc_title.setObjectName("doctitle")
-        tb.addWidget(self.doc_title)
+        self.doc_title_act = tb.addWidget(self.doc_title)
         self.case_btn = QToolButton()
         self.case_btn.setObjectName("casebtn")
         self.case_btn.setPopupMode(QToolButton.InstantPopup)
@@ -1482,7 +1485,7 @@ class MainWindow(QMainWindow):
         self.case_menu = QMenu(self)
         self.case_menu.aboutToShow.connect(self.fill_case_menu)
         self.case_btn.setMenu(self.case_menu)
-        tb.addWidget(self.case_btn)
+        self.case_btn_act = tb.addWidget(self.case_btn)
         sep_w = QWidget()
         sep_w.setFixedWidth(10)
         tb.addWidget(sep_w)
@@ -1515,9 +1518,13 @@ class MainWindow(QMainWindow):
             grp.addAction(a)
             a.triggered.connect(lambda _=False, k=key: self.set_theme(k))
         mv.addSeparator()
-        for i, name in enumerate(("Документ", "Дела", "Калькуляторы")):
-            a = mv.addAction(name, lambda i=i: self.show_section(i))
+        for i, (name, key) in enumerate((("Обзор дела", "overview"), ("Документы", "docs"),
+                                         ("Подготовить", "prepare"), ("Сроки и заседания", "events"),
+                                         ("Расчёты", "calc"), ("Карта дела", "board"))):
+            a = mv.addAction(name, lambda key=key: self.open_case_tab(key))
             a.setShortcut(f"Ctrl+{i + 1}")
+        a0 = mv.addAction("Без дела — просто PDF", lambda: self.enter_loose())
+        a0.setShortcut("Ctrl+0")
         mt = mb.addMenu("Инструменты")
         for cat, items in TOOLS[3:]:
             sub = mt.addMenu(cat)
@@ -1526,6 +1533,7 @@ class MainWindow(QMainWindow):
         ml = mb.addMenu("Юристу")
         ml.addAction("Дела и сроки", self.show_cases)
         ml.addAction("Шаблоны документов…", lambda: U.tool_template(self))
+        ml.addAction("Карта дела (Excalidraw)", self.tool_board)
         ml.addAction("Мои реквизиты…", lambda: U.tool_profile(self))
         ml.addSeparator()
         for cat, items in TOOLS[:3]:
@@ -1533,6 +1541,10 @@ class MainWindow(QMainWindow):
                 ml.addAction(label, getattr(self, "tool_" + key))
             ml.addSeparator()
         mh = mb.addMenu("Справка")
+        a_help = mh.addAction("Руководство пользователя", lambda: self.show_section(3))
+        a_help.setShortcut("F1")
+        self.addAction(a_help)
+        mh.addSeparator()
         mh.addAction("Как пользоваться", self.tool_organize)
         mh.addAction("Установить обновление из архива…", self.install_update)
         mh.addAction("Журнал ошибок", self.show_error_log)
@@ -1558,7 +1570,7 @@ class MainWindow(QMainWindow):
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(80, 320)
         self.slider.setValue(self.thumb_w)
-        self.slider.setFixedWidth(96)
+        self.slider.setFixedWidth(70)
         self.slider.setToolTip("Размер миниатюр")
         self.slider.valueChanged.connect(self.set_thumb_size)
         tb.addWidget(self.slider)
@@ -1611,12 +1623,15 @@ class MainWindow(QMainWindow):
         self.pages.customContextMenuRequested.connect(self.context_menu)
         self.pages.itemSelectionChanged.connect(self.update_status)
 
-        # боковая панель: название, переключатель разделов, инструменты
+        # ================= «Всё вокруг дела» =================
+        self.mode_cid = None           # дело, открытое сейчас (None — «Без дела»)
+        self._entering = False
+        # боковая панель: название, «Без дела», список дел, справка
         side = QWidget()
         side.setObjectName("sidebar")
-        side.setFixedWidth(292)
+        side.setFixedWidth(300)
         sv = QVBoxLayout(side)
-        sv.setContentsMargins(14, 18, 8, 8)
+        sv.setContentsMargins(12, 16, 12, 10)
         sv.setSpacing(0)
         brand = QLabel(APP_NAME)
         brand.setObjectName("brand")
@@ -1624,47 +1639,97 @@ class MainWindow(QMainWindow):
         sub.setObjectName("brandsub")
         sv.addWidget(brand)
         sv.addWidget(sub)
-        sv.addSpacing(16)
-        track = QFrame()
-        track.setObjectName("segtrack")
-        tl = QHBoxLayout(track)
-        tl.setContentsMargins(3, 3, 3, 3)
-        tl.setSpacing(2)
-        self.seg_btns = []
-        for i, (name, tip) in enumerate((("Документ", "Работа с PDF (Ctrl+1)"),
-                                          ("Дела", "Карточки дел, сроки и заседания (Ctrl+2)"),
-                                          ("Расчёты", "Сроки, госпошлина, проценты (Ctrl+3)"))):
-            b = QToolButton()
-            b.setObjectName("seg")
-            b.setText(name)
-            b.setToolTip(tip)
-            b.setCheckable(True)
-            b.setAutoExclusive(True)
-            b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            b.setCursor(Qt.PointingHandCursor)
-            b.clicked.connect(lambda _=False, i=i: self.show_section(i))
-            tl.addWidget(b)
-            self.seg_btns.append(b)
-        self.seg_btns[0].setChecked(True)
-        sv.addWidget(track)
-        sv.addSpacing(10)
-        sv.addWidget(self.tree, 1)
+        sv.addSpacing(14)
 
         self.cases_page = U.CasesPage(self)
         self.cases_page.openFile.connect(lambda p, pg: self.open_external(p, pg, self.cases_page.cid))
         self.calc_page = U.CalcPage()
+        self.help_page = H.HelpPage(sys.modules[__name__])
         for w in (self.cases_page, self.calc_page):
             w.setObjectName("page")
+        self.navigator = CaseNavigator(self)          # старая панель: не показывается
+        self.navigator.hide()
+
+        self.b_loose = QPushButton("📂   Без дела — просто PDF")
+        self.b_loose.setObjectName("loosebtn")
+        self.b_loose.setCheckable(True)
+        self.b_loose.setCursor(Qt.PointingHandCursor)
+        self.b_loose.setToolTip("Открыть и отредактировать PDF, не связанный с делом (Ctrl+0)")
+        self.b_loose.clicked.connect(self.enter_loose)
+        sv.addWidget(self.b_loose)
+        sv.addSpacing(6)
+        left = self.cases_page.left
+        left.setParent(None)
+        left.setMinimumWidth(0)
+        left.layout().setContentsMargins(0, 6, 0, 6)
+        for lst in (self.cases_page.list, self.cases_page.upcoming):
+            lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            lst.setWordWrap(True)
+            lst.setTextElideMode(Qt.ElideRight)
+        sv.addWidget(left, 1)
+        self.cases_page.list.currentItemChanged.connect(self._on_case_selected)
+        b_help = QPushButton("?   Справка — как пользоваться")
+        b_help.setObjectName("sidelink")
+        b_help.setCursor(Qt.PointingHandCursor)
+        b_help.clicked.connect(lambda: self.show_section(3))
+        sv.addWidget(b_help)
+
+        # область документа: панель инструментов + страницы
+        self.removeToolBar(self.toolbar)
+        self.toolbar.removeAction(self.a_nav)
+        self.docarea = QWidget()
+        dv = QVBoxLayout(self.docarea)
+        dv.setContentsMargins(0, 0, 0, 0)
+        dv.setSpacing(0)
+        dv.addWidget(self.toolbar)
+        dv.addWidget(self.pages, 1)
+        self.toolbar.show()
+        self._add_tools_button()
+
+        self._restructure_case_tabs()
+
+        # «Без дела»: открытые документы + расчёты
+        self.loose_page = QWidget()
+        self.loose_page.setObjectName("page")
+        lv = QVBoxLayout(self.loose_page)
+        lv.setContentsMargins(22, 16, 22, 10)
+        lt = QLabel("Без дела")
+        lt.setObjectName("title")
+        lv.addWidget(lt)
+        lh = QLabel("Разовая работа с PDF и расчёты. Чтобы документ попал в дело — кнопка «Привязать к делу» "
+                    "над страницами.")
+        lh.setObjectName("hint")
+        lv.addWidget(lh)
+        self.loose_tabs = QTabWidget()
+        self.loose_tabs.setObjectName("segmented")
+        self.loose_tabs.setDocumentMode(True)
+        ld = QWidget()
+        ldh = QHBoxLayout(ld)
+        ldh.setContentsMargins(0, 8, 0, 0)
+        lleft = QWidget()
+        lleft.setFixedWidth(260)
+        llv = QVBoxLayout(lleft)
+        llv.setContentsMargins(0, 0, 10, 0)
+        llv.addWidget(QLabel("Открытые документы"))
+        self.loose_list = QListWidget()
+        self.loose_list.setObjectName("overlist")
+        self.loose_list.itemClicked.connect(lambda it: self.switch_ws(it.data(Qt.UserRole)))
+        llv.addWidget(self.loose_list, 1)
+        bo = QPushButton("Открыть файл…")
+        bo.setObjectName("primary")
+        bo.clicked.connect(self.open_dialog)
+        llv.addWidget(bo)
+        ldh.addWidget(lleft)
+        self.loose_doc_slot = self._slot()
+        ldh.addWidget(self.loose_doc_slot, 1)
+        self.loose_calc_slot = self._slot()
+        self.loose_tabs.addTab(ld, "Документы")
+        self.loose_tabs.addTab(self.loose_calc_slot, "Расчёты")
+        self.loose_tabs.currentChanged.connect(lambda i: self._mount_parts())
+        lv.addWidget(self.loose_tabs, 1)
+
         self.stack = QStackedWidget()
-        self.navigator = CaseNavigator(self)
-        docpage = QWidget()
-        dh = QHBoxLayout(docpage)
-        dh.setContentsMargins(0, 0, 0, 0)
-        dh.setSpacing(0)
-        dh.addWidget(self.navigator)
-        dh.addWidget(self.pages, 1)
-        self.navigator.setVisible(settings().value("nav_visible", "true") == "true")
-        for w in (docpage, self.cases_page, self.calc_page):
+        for w in (self.cases_page, self.loose_page, self.help_page):
             self.stack.addWidget(w)
 
         self.banner = QPushButton()
@@ -1686,10 +1751,7 @@ class MainWindow(QMainWindow):
         ch.addWidget(side)
         ch.addWidget(right, 1)
         self.setCentralWidget(central)
-        # панель документа — внутри правой части, над страницами
-        self.removeToolBar(self.toolbar)
-        rv.insertWidget(1, self.toolbar)
-        self.toolbar.show()
+        QTimer.singleShot(60, self._initial_mode)
         self.status_lbl = QLabel()
         self.statusBar().addPermanentWidget(self.status_lbl)
         self.apply_thumb_geometry()
@@ -1701,13 +1763,17 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{name}{star} — {APP_NAME}" if name else APP_NAME)
         if hasattr(self, "doc_title"):
             t = (Path(self.path).stem if self.path else "Новый документ") + ("  •" if self.modified else "")
-            self.doc_title.setText(t if len(t) < 40 else t[:37] + "…")
+            self.doc_title.setText(t if len(t) < 26 else t[:23] + "…")
+            self.doc_title.setToolTip(self.path or "")
             cid = self.ws_case()
             c = U.db().case(cid) if cid else None
             title = c["title"] if c else ""
             self.case_btn.setText(("Дело: " + (title if len(title) < 32 else title[:29] + "…")) if c
                                   else "Привязать к делу")
             self.case_btn.setProperty("linked", bool(c))
+            in_case = bool(getattr(self, "mode_cid", None))
+            self.case_btn_act.setVisible(not in_case)      # в деле документ и так в деле
+            self.doc_title_act.setVisible(not in_case)     # в деле название видно в списке слева
             self.case_btn.style().unpolish(self.case_btn)
             self.case_btn.style().polish(self.case_btn)
             self.ws[self.cur_ws]["modified"] = self.modified
@@ -1753,6 +1819,8 @@ class MainWindow(QMainWindow):
     def refresh_theme(self):
         """Перерисовать миниатюры (подписи номеров рисуются цветом темы)."""
         self.theme_icons()
+        if hasattr(self, "help_page"):
+            self.help_page.refresh_theme()
         for i in range(self.tree.topLevelItemCount()):
             self.tree.topLevelItem(i).setForeground(0, QColor(T["side_muted"]))
         try:
@@ -2143,7 +2211,7 @@ class MainWindow(QMainWindow):
                     self.switch_ws(j)
                     return
             if self.doc.page_count or self.modified:
-                self.new_ws()
+                self.new_ws(case_id=getattr(self, "mode_cid", None))
         loaded = []
         for p in paths:
             d = self.load_file(p)
@@ -2174,12 +2242,16 @@ class MainWindow(QMainWindow):
                 pos += d.page_count
             new_sel += list(range(start, start + d.page_count))
             self.modified = True
-        if replace and self.path and not self.ws[self.cur_ws].get("case_id"):
+        cid = self.ws[self.cur_ws].get("case_id")
+        if replace and self.path and cid:
             try:
-                self.ws[self.cur_ws]["case_id"] = U.db().case_of_path(self.path)
+                if U.db().add_doc(cid, self.path):
+                    self.msg("Документ добавлен в дело")
+                self.cases_page.refresh_docs_if(cid)
             except Exception:
                 pass
         self.refresh_all(new_sel)
+        self.refresh_loose_list()
         self.update_title()
         self.msg(f"Открыто файлов: {len(loaded)}, страниц в документе: {self.doc.page_count}")
 
@@ -2391,20 +2463,266 @@ class MainWindow(QMainWindow):
         item.setText(0, name + ("" if item.isExpanded() else "  ›"))
 
     # ------------------------------------------------------------- разделы и юр. функции
+    # ------------------------------------------------------------- раскладка «всё вокруг дела»
+    def _slot(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        return w
+
+    def _mount(self, widget, slot):
+        if widget.parentWidget() is not slot:
+            slot.layout().addWidget(widget)
+            widget.show()
+
+    def _mount_parts(self):
+        """Редактор PDF и калькуляторы — там, где сейчас пользователь (в деле или «Без дела»)."""
+        QTimer.singleShot(0, lambda: self.statusBar().setVisible(self.docarea.isVisible()))
+        if self.mode_cid:
+            self._mount(self.docarea, self.case_doc_slot)
+            self._mount(self.calc_page, self.case_calc_slot)
+        else:
+            self._mount(self.docarea, self.loose_doc_slot)
+            self._mount(self.calc_page, self.loose_calc_slot)
+
+    def _add_tools_button(self):
+        b = QToolButton()
+        b.setText("Инструменты ▾")
+        b.setObjectName("toolsbtn")
+        b.setPopupMode(QToolButton.InstantPopup)
+        b.setToolTip("Все инструменты PDF: страницы, правка, сжатие, распознавание, конвертация, защита")
+        m = QMenu(b)
+        for cat, items in TOOLS:
+            if cat in ("Для суда и почты", "Материалы дела", "Калькуляторы"):
+                continue
+            sub = m.addMenu(cat)
+            for key, label, tip in items:
+                a = sub.addAction(label, lambda k=key: self.run_tool(k))
+                a.setToolTip(tip)
+        b.setMenu(m)
+        self.toolbar.insertWidget(self.a_rl, b)
+        self.toolbar.insertSeparator(self.a_rl)
+
+    def run_tool(self, key):
+        fn = getattr(self, "tool_" + key, None)
+        if fn:
+            fn()
+
+    def run_doc_tool(self, key):
+        if not self.doc.page_count:
+            self.open_case_tab("docs")
+            QMessageBox.information(self, APP_NAME, "Сначала откройте документ: щёлкните его в списке слева "
+                                                    "или добавьте файл кнопкой «+ Добавить».")
+            return
+        self.open_case_tab("docs")
+        self.run_tool(key)
+
+    def _restructure_case_tabs(self):
+        cp = self.cases_page
+        tabs = cp.tabs
+        by_name = {tabs.tabText(i): tabs.widget(i) for i in range(tabs.count())}
+        while tabs.count():
+            tabs.removeTab(0)
+        self.overview = U.OverviewTab(self)
+        docs = QSplitter()
+        docs.setChildrenCollapsible(False)
+        dl = cp.docs_widget
+        dl.setMinimumWidth(330)
+        docs.addWidget(dl)
+        dl.show()
+        self.case_doc_slot = self._slot()
+        docs.addWidget(self.case_doc_slot)
+        docs.setStretchFactor(1, 1)
+        docs.setSizes([380, 900])
+        cp.l_docs.setColumnHidden(3, True)
+        cp.l_docs.setColumnWidth(2, 128)
+        prepare = U.PrepareTab(self, cp.sub_tab)
+        cp.sub_tab.show()
+        self.case_calc_slot = self._slot()
+        order = [("overview", "Обзор", self.overview), ("docs", "Документы", docs), ("prepare", "Подготовить", prepare),
+                 ("events", "Сроки и заседания", cp.events_tab), ("calc", "Расчёты", self.case_calc_slot),
+                 ("board", "Карта дела", cp.board_tab), ("info", "Сведения о деле", by_name.get("Сведения")),
+                 ("laws", "Нормы права", cp.laws_tab), ("money", "Время и оплата", by_name.get("Время и оплата")),
+                 ("quotes", "Выписки", by_name.get("Выписки"))]
+        self.case_tab_keys = {}
+        for key, title, w in order:
+            self.case_tab_keys[key] = tabs.addTab(w, title)
+        self.hidden_tabs = [self.case_tab_keys[k] for k in ("info", "laws", "money", "quotes")]
+        for i in self.hidden_tabs:
+            tabs.setTabVisible(i, False)
+        more = QToolButton()
+        more.setObjectName("moretabs")
+        more.setText("Ещё ▾")
+        more.setPopupMode(QToolButton.InstantPopup)
+        mm = QMenu(more)
+        for key, title in (("info", "Сведения о деле"), ("laws", "Нормы права"), ("money", "Время и оплата"),
+                           ("quotes", "Выписки")):
+            mm.addAction(title, lambda k=key: self.open_case_tab(k))
+        more.setMenu(mm)
+        tabs.setCornerWidget(more, Qt.TopRightCorner)
+        tabs.currentChanged.connect(self._on_case_tab)
+
+    def _on_case_tab(self, i):
+        tabs = self.cases_page.tabs
+        for j in self.hidden_tabs:
+            tabs.setTabVisible(j, j == i)
+        if i == self.case_tab_keys["overview"] and self.mode_cid:
+            self.overview.set_case(self.mode_cid)
+        self._mount_parts()
+
+    def open_case_tab(self, key):
+        if not self.mode_cid:
+            cid = self.cases_page.cid or self.last_case or self._first_case()
+            if not cid:
+                if key in ("docs", "calc"):
+                    self.enter_loose()
+                    self.loose_tabs.setCurrentIndex(0 if key == "docs" else 1)
+                else:
+                    QMessageBox.information(self, APP_NAME, "Сначала создайте дело: кнопка «+ Новое дело» слева.")
+                return
+            self.enter_case(cid)
+        self.stack.setCurrentWidget(self.cases_page)
+        self.cases_page.tabs.setCurrentIndex(self.case_tab_keys[key])
+
+    def _first_case(self):
+        try:
+            cs = U.db().cases()
+            return cs[0]["id"] if cs else None
+        except Exception:
+            return None
+
+    def _initial_mode(self):
+        cid = self.cases_page.cid
+        cur = self.ws[self.cur_ws]
+        if cur["doc"].page_count:
+            self.show_section(0)
+        elif cid:
+            self.enter_case(cid)
+        else:
+            self.enter_loose()
+
+    def _on_case_selected(self, it, _prev=None):
+        if self._entering:
+            return
+        cid = it.data(Qt.UserRole) if it else None
+        if cid:
+            self.enter_case(cid)
+
+    def enter_case(self, cid):
+        if self._entering:
+            return
+        self._entering = True
+        try:
+            self.mode_cid = cid
+            self.last_case = cid
+            self.b_loose.setChecked(False)
+            if self.cases_page.cid != cid:
+                self.cases_page.select_case(cid)
+            self.stack.setCurrentWidget(self.cases_page)
+            self._ensure_ws(cid)
+            self._mount_parts()
+            self.overview.set_case(cid)
+        finally:
+            self._entering = False
+
+    def enter_loose(self):
+        if self._entering:
+            return
+        self._entering = True
+        try:
+            self.mode_cid = None
+            self.b_loose.setChecked(True)
+            self.cases_page.list.setCurrentItem(None)
+            self.cases_page.list.clearSelection()
+            self.stack.setCurrentWidget(self.loose_page)
+            self._ensure_ws(None)
+            self._mount_parts()
+            self.refresh_loose_list()
+        finally:
+            self._entering = False
+
+    def refresh_loose_list(self):
+        if not hasattr(self, "loose_list"):
+            return
+        self.loose_list.clear()
+        self._store_ws()
+        for i, w in enumerate(self.ws):
+            if w.get("case_id") or not (w["doc"].page_count or w["modified"]):
+                continue
+            name = Path(w["path"]).name if w["path"] else "Новый документ"
+            it = QListWidgetItem(("📄  " + name) + ("  •" if w["modified"] else ""))
+            it.setData(Qt.UserRole, i)
+            it.setToolTip(w["path"] or "ещё не сохранён")
+            if i == self.cur_ws:
+                f = it.font()
+                f.setBold(True)
+                it.setFont(f)
+            self.loose_list.addItem(it)
+        if not self.loose_list.count():
+            it = QListWidgetItem("Пока ничего не открыто")
+            it.setFlags(Qt.NoItemFlags)
+            self.loose_list.addItem(it)
+
+    def _ensure_ws(self, cid):
+        """Показать документ этого дела: открытый ранее или пустой лист."""
+        if self.ws[self.cur_ws].get("case_id") == cid:
+            return
+        cand = [i for i, w in enumerate(self.ws) if w.get("case_id") == cid]
+        if cand:
+            best = next((i for i in cand if self.ws[i]["doc"].page_count), cand[0])
+            self._store_ws()
+            self._load_ws(best)
+            return
+        cur = self.ws[self.cur_ws]
+        if not cur["doc"].page_count and not cur["modified"]:
+            cur["case_id"] = cid
+            self.update_title()
+        else:
+            self.new_ws(case_id=cid)
+
     def show_section(self, i):
-        self.stack.setCurrentIndex(i)
-        self.seg_btns[i].setChecked(True)
-        self.toolbar.setVisible(i == 0)
-        self.statusBar().setVisible(i == 0)
-        if i == 1:
-            self.cases_page.reload()
+        """Совместимость со старыми вызовами: 0 — документ, 1 — дела, 2 — расчёты, 3 — справка."""
+        if i == 0:
+            cid = self.ws_case()
+            if cid:
+                self.enter_case(cid)
+                self.cases_page.tabs.setCurrentIndex(self.case_tab_keys["docs"])
+            else:
+                self.enter_loose()
+                self.loose_tabs.setCurrentIndex(0)
+        elif i == 1:
+            self.show_cases()
+        elif i == 2:
+            self.show_calc(0)
+        else:
+            self.b_loose.setChecked(False)
+            self.stack.setCurrentWidget(self.help_page)
 
     def show_cases(self):
-        self.show_section(1)
+        cid = self.mode_cid or self.cases_page.cid or self.last_case or self._first_case()
+        if cid:
+            self.enter_case(cid)
+        else:
+            self.stack.setCurrentWidget(self.cases_page)
 
     def show_calc(self, tab=0):
-        self.show_section(2)
+        if self.mode_cid:
+            self.open_case_tab("calc")
+        else:
+            self.enter_loose()
+            self.loose_tabs.setCurrentIndex(1)
         self.calc_page.tabs.setCurrentIndex(tab)
+
+    def tool_board(self, cid=None):
+        """Открыть карту дела (Excalidraw) для текущего/выбранного дела."""
+        cid = cid or self.ws_case() or (self.cases_page.cid if self.cases_page else None) or self.last_case
+        if not cid:
+            cid = U.pick_case(self, "Карта какого дела?")
+        if not cid:
+            return
+        self.show_cases()
+        self.cases_page.select_case(cid)
+        self.cases_page.tabs.setCurrentWidget(self.cases_page.board_tab)
 
     def tool_calc_deadline(self):
         self.show_calc(0)
@@ -2435,8 +2753,13 @@ class MainWindow(QMainWindow):
         if os.path.splitext(path)[1].lower() in EXTERNAL_EXT:
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
             return
-        self.show_section(0)
+        target = cid if cid is not None else self.mode_cid
+        if target:
+            self.enter_case(target)
+        else:
+            self.enter_loose()
         self.open_paths([path], replace=True)
+        self.show_section(0)
         if cid and self.path:
             try:
                 U.db().add_doc(cid, self.path)
@@ -2468,6 +2791,9 @@ class MainWindow(QMainWindow):
         self.undo_stack, self.redo_stack = w["undo"], w["redo"]
         self.refresh_all(w["sel"])
         self.update_title()
+        if w.get("case_id") and hasattr(self, "cases_page"):
+            self.cases_page.refresh_docs_if(w["case_id"])
+        self.refresh_loose_list()
 
     def all_ws(self):
         self._store_ws()
@@ -2502,10 +2828,15 @@ class MainWindow(QMainWindow):
             self.switch_ws(i)
         if not self.maybe_save():
             return False
+        cid = self.ws[i].get("case_id")
         self.ws.pop(i)
-        if not self.ws:
-            self.ws.append(self._blank_ws())
-        self._load_ws(min(i, len(self.ws) - 1))
+        same = [k for k, w in enumerate(self.ws) if w.get("case_id") == cid]
+        if not same:
+            b = self._blank_ws()
+            b["case_id"] = cid
+            self.ws.append(b)
+            same = [len(self.ws) - 1]
+        self._load_ws(same[0])
         return True
 
     def save_all_ws(self):
@@ -2556,7 +2887,7 @@ class MainWindow(QMainWindow):
 
     def link_current_to_case(self, cid):
         if not self.doc.page_count:
-            return QMessageBox.information(self, APP_NAME, "Сначала откройте документ в разделе «Документ».")
+            return QMessageBox.information(self, APP_NAME, "Сначала откройте документ: вкладка дела «Документы» или «Без дела — просто PDF».")
         if not self.path or self.modified:
             QMessageBox.information(self, APP_NAME, "Чтобы привязать документ к делу, его нужно сохранить в файл.")
             if not self.save():
@@ -2566,7 +2897,7 @@ class MainWindow(QMainWindow):
         self.last_case = cid
         self.cases_page.refresh_docs_if(cid)
         self.update_title()
-        self.navigator.refresh()
+        self.show_section(0)
         c = U.db().case(cid)
         self.msg(f"Документ привязан к делу «{c['title'] if c else cid}»")
 
@@ -3247,7 +3578,7 @@ QWidget#sidebar {{ background: {t['side']}; }}
 QLabel#brand {{ color: {t['side_text']}; font-family: "{S}"; font-size: 17pt; }}
 QLabel#brandsub {{ color: {t['side_muted']}; font-size: 9pt; }}
 QToolButton#seg {{ background: transparent; color: {t['side_muted']}; border: none; border-radius: 7px;
-    padding: 7px 4px; font-size: 9.5pt; }}
+    padding: 7px 2px; font-size: 9pt; }}
 QToolButton#seg:hover {{ color: {t['side_text']}; background: {t['side_hover']}; }}
 QToolButton#seg:checked {{ background: {t['side_active']}; color: {t['text']}; font-weight: 600; }}
 QFrame#segtrack {{ background: rgba(0,0,0,0.22); border-radius: 9px; }}
@@ -3262,7 +3593,7 @@ QToolButton#help:hover {{ background: {A}; color: white; }}
 QDialog QToolButton#help, QWidget#page QToolButton#help {{ color: {t['muted']}; border: 1px solid {t['input_border']}; }}
 
 /* панель документа */
-QToolBar {{ background: {t['panel']}; border: none; border-bottom: 1px solid {t['border']}; padding: 8px 14px; spacing: 2px; }}
+QToolBar {{ background: {t['panel']}; border: none; border-bottom: 1px solid {t['border']}; padding: 6px 8px; spacing: 1px; }}
 QToolBar::separator {{ width: 1px; background: {t['border']}; margin: 8px 8px; }}
 QToolBar QToolButton {{ padding: 6px 10px; border-radius: 7px; color: {t['text']}; }}
 QToolBar QToolButton:hover {{ background: {t['hover']}; }}
@@ -3277,6 +3608,39 @@ QPushButton#banner:hover {{ background: {t['banner']}; text-decoration: underlin
 QListWidget#pages {{ background: {t['pages']}; color: {t['text']}; border: none; padding: 18px; }}
 QListWidget#pages::item, QListWidget#pages::item:selected, QListWidget#pages::item:hover {{ background: transparent; border: none; }}
 
+/* дела в боковой панели */
+QWidget#sidebar QWidget#sidepanel {{ background: transparent; border: none; }}
+QWidget#sidebar QLabel {{ color: {t['side_text']}; }}
+QWidget#sidebar QLabel#title {{ font-size: 15pt; }}
+QWidget#sidebar QLineEdit {{ background: rgba(255,255,255,0.08); border: 1px solid {t['side_line']}; color: {t['side_text']}; }}
+QWidget#sidebar QListWidget#caselist {{ background: transparent; border: none; }}
+QWidget#sidebar QListWidget#caselist::item {{ color: {t['side_text']}; padding: 9px 10px; border-radius: 8px; border: none; }}
+QWidget#sidebar QListWidget#caselist::item:hover {{ background: {t['side_hover']}; }}
+QWidget#sidebar QListWidget#caselist::item:selected {{ background: {t['side_active']}; color: {t['text']}; }}
+QWidget#sidebar QListWidget#upcoming {{ background: transparent; border: none; }}
+QWidget#sidebar QListWidget#upcoming::item {{ color: {t['side_muted']}; border-bottom: 1px solid {t['side_line']}; padding: 6px 4px; }}
+QWidget#sidebar QCheckBox {{ color: {t['side_muted']}; }}
+QPushButton#loosebtn {{ text-align: left; background: transparent; color: {t['side_text']}; border: 1px solid {t['side_line']};
+    border-radius: 9px; padding: 9px 12px; }}
+QPushButton#loosebtn:hover {{ background: {t['side_hover']}; }}
+QPushButton#loosebtn:checked {{ background: {t['side_active']}; color: {t['text']}; border-color: {t['side_active']}; font-weight: 600; }}
+QPushButton#sidelink {{ text-align: left; border: none; background: transparent; color: {t['side_muted']}; padding: 8px 4px; }}
+QPushButton#sidelink:hover {{ color: {t['side_text']}; }}
+/* карточки действий и обзор */
+QPushButton#actioncard {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 12px; text-align: left; padding: 0; }}
+QPushButton#actioncard:hover {{ border: 1px solid {A}; background: {t['accent_soft']}; }}
+QLabel#cardtitle {{ font-weight: 600; font-size: 10.5pt; }}
+QLabel#carddesc {{ color: {t['muted']}; font-size: 9pt; }}
+QLabel#facts {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 12px; padding: 12px 16px; }}
+QListWidget#overlist {{ background: transparent; border: none; }}
+QListWidget#overlist::item {{ padding: 7px 4px; border-bottom: 1px solid {t['border']}; }}
+QListWidget#overlist::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; }}
+QToolButton#primarytool {{ background: {A}; color: white; border: none; border-radius: 7px; padding: 6px 14px; font-weight: 600; }}
+QToolButton#primarytool::menu-indicator, QToolButton#moretabs::menu-indicator, QToolButton#toolsbtn::menu-indicator {{ image: none; width: 0; }}
+QToolButton#moretabs {{ border: none; color: {t['muted']}; padding: 6px 10px; background: transparent; }}
+QToolButton#moretabs:hover {{ color: {t['text']}; }}
+QToolButton#toolsbtn {{ padding: 6px 10px; border-radius: 7px; }}
+
 /* навигатор дел */
 QWidget#navigator {{ background: {t['panel']}; border-right: 1px solid {t['border']}; }}
 QLabel#navtitle {{ font-family: "{S}"; font-size: 14pt; }}
@@ -3289,6 +3653,19 @@ QTreeWidget#navtree::item:selected {{ background: {t['accent_soft']}; color: {t[
 QToolButton#casebtn {{ border: 1px dashed {t['input_border']}; border-radius: 13px; padding: 4px 12px; color: {t['muted']}; }}
 QToolButton#casebtn[linked="true"] {{ border: 1px solid {A}; color: {A}; background: {t['accent_soft']}; }}
 QToolButton#casebtn::menu-indicator {{ image: none; width: 0; }}
+
+QTableWidget#docs {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 10px;
+    selection-background-color: {t['accent_soft']}; selection-color: {t['text']}; }}
+QTableWidget#docs::item {{ border-bottom: 1px solid {t['border']}; padding: 0 6px; }}
+QTableWidget#docs::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; }}
+QToolButton#iconpick {{ border: none; border-radius: 8px; }}
+QToolButton#iconpick:hover {{ background: {t['accent_soft']}; }}
+
+QTextBrowser#helptext {{ background: {t['panel']}; border: none; }}
+QListWidget#helptoc {{ background: transparent; border: none; }}
+QListWidget#helptoc::item {{ padding: 8px 10px; border-radius: 7px; margin: 1px 0; }}
+QListWidget#helptoc::item:hover {{ background: {t['hover']}; }}
+QListWidget#helptoc::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; border-left: 3px solid {t['accent']}; }}
 
 /* элементы управления */
 QPushButton {{ padding: 7px 16px; border: 1px solid {t['input_border']}; border-radius: 7px; background: {t['panel']}; color: {t['text']}; }}

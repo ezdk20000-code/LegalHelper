@@ -157,6 +157,8 @@ class PdfPreview(QScrollArea):
         while self.lay.count():
             w = self.lay.takeAt(0).widget()
             if w:
+                w.hide()
+                w.setParent(None)
                 w.deleteLater()
         self.labels = []
 
@@ -167,7 +169,7 @@ class PdfPreview(QScrollArea):
             self.doc = None
         lab = QLabel(text)
         lab.setObjectName("hint")
-        lab.setStyleSheet("color: white; font-size: 12pt;")
+        lab.setStyleSheet(f"color: {U.M.T['muted']}; font-size: 11pt;")
         lab.setAlignment(Qt.AlignCenter)
         lab.setWordWrap(True)
         self.lay.addWidget(lab)
@@ -636,7 +638,9 @@ class BoardTab(QWidget):
         self.state.setObjectName("hint")
         top.addWidget(self.state)
         top.addWidget(_btn("Новая карта из шаблона", self.new_map))
-        top.addWidget(_btn("На весь экран", self.fullscreen))
+        self.b_win = _btn("В отдельном окне", self.fullscreen, tip="Открыть карту в большом отдельном окне. "
+                                                               "Закройте окно — карта вернётся во вкладку.")
+        top.addWidget(self.b_win)
         v.addLayout(top)
         self.host = QVBoxLayout()
         v.addLayout(self.host, 1)
@@ -752,22 +756,44 @@ class BoardTab(QWidget):
             self.view.page().runJavaScript(f"PM.setTheme({_js(name)})")
 
     def fullscreen(self):
-        if not self.view:
+        """Вынести карту в отдельное окно; при закрытии окна она возвращается во вкладку."""
+        if not self._ensure_view():
             return
-        w = self.view
-        if w.parent() is None or w.isWindow():
-            w.setWindowFlags(Qt.Widget)
-            self.host.addWidget(w, 1)
-            w.show()
-        else:
-            self.host.removeWidget(w)
-            w.setParent(None)
-            w.setWindowTitle(f"Карта дела — {U.M.APP_NAME}")
-            w.showMaximized()
+        if getattr(self, "win", None) is not None:
+            self.win.raise_()
+            self.win.activateWindow()
+            return
+        tab = self
+
+        class BoardWindow(QWidget):
+            def closeEvent(self, e):
+                tab.autosave()
+                lay = self.layout()
+                lay.removeWidget(tab.view)
+                tab.host.addWidget(tab.view, 1)
+                tab.view.show()
+                tab.b_win.setEnabled(True)
+                tab.win = None
+                e.accept()
+
+        self.win = BoardWindow()
+        self.win.setAttribute(Qt.WA_DeleteOnClose)
+        title = (db().case(self.cid) or {}).get("title", "Дело") if self.cid else "Дело"
+        self.win.setWindowTitle(f"Карта дела — {title}")
+        self.win.setWindowIcon(self.main.windowIcon())
+        lay = QVBoxLayout(self.win)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.host.removeWidget(self.view)
+        lay.addWidget(self.view)
+        self.b_win.setEnabled(False)
+        self.win.resize(1400, 900)
+        self.win.showMaximized()
 
     def shutdown(self):
         """Перед выходом: остановить автосохранение (сама карта уже сохранена в flush)."""
         self.timer.stop()
+        if getattr(self, "win", None) is not None:
+            self.win.close()
 
     def on_download(self, item):
         name = item.downloadFileName() if hasattr(item, "downloadFileName") else "карта"
