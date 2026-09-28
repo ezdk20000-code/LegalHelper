@@ -2,7 +2,7 @@
 "files": [
 {
 "path": "CHANGELOG.md",
-"size": 22308
+"size": 22539
 },
 {
 "path": "README.md",
@@ -286,7 +286,7 @@
 },
 {
 "path": "installer.iss",
-"size": 3333
+"size": 3335
 },
 {
 "path": "legal_core.py",
@@ -306,7 +306,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 222851
+"size": 222968
 },
 {
 "path": "requirements.txt",
@@ -342,7 +342,7 @@
 },
 {
 "path": "version.json",
-"size": 764
+"size": 936
 }
 ]
 }

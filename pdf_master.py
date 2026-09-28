@@ -34,7 +34,7 @@ import casefile as CF
 import anim
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "2.3"
+APP_VERSION = "2.3.1"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
 ACCENT = "#007aff"
 FAILED = object()
@@ -2982,8 +2982,7 @@ class MainWindow(QMainWindow):
         self.docs_mode = QStackedWidget()
         self.docs_mode.addWidget(cp.docs_widget)
         self.docs_mode.addWidget(cp.sub_tab)
-        cp.docs_widget.show()
-        cp.sub_tab.show()
+        self.docs_mode.setCurrentIndex(0)          # видна только одна панель — переключатель сам показывает нужную
         seg.currentChanged.connect(self.docs_mode.setCurrentIndex)
         seg.currentChanged.connect(lambda *_: anim.fade_in(self.docs_mode.currentWidget()))
         self.docs_seg = seg
