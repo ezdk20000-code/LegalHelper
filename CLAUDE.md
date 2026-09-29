@@ -25,3 +25,10 @@
 - Инстанции: таблица `instances`, последняя — текущая; `CaseDB.sync_instance` копирует её суд/номер/судью/ссылку
   и стадию в карточку дела (весь остальной код читает cases.court и т. п.).
 - Главная — `legal_ui.HomePage`; комплект — `case_tabs.KitPanel` (во вкладке «Документы»), `assemble_pdf`.
+
+## Сайт
+
+Сайт программы — https://legalhelper.github.io, отдельный репозиторий `LegalHelper/legalhelper.github.io`
+(index.html + img/). Кнопки «Скачать» ведут на архив ветки main этого репозитория, номер версии сайт читает из
+version.json — после выпуска версии сайт менять не нужно. `docs/index.html` и корневой `index.html` здесь только
+переадресуют на новый адрес (старая ссылка ezdk20000-code.github.io/LegalHelper продолжает работать).

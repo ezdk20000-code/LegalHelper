@@ -11,7 +11,7 @@
 
 <p align="center"><b>Нажмите на синюю кнопку — скачается архив с программой. Дальше — 4 простых шага ниже.</b></p>
 
-<p align="center">Сайт программы с инструкцией: <a href="https://ezdk20000-code.github.io/LegalHelper/"><b>ezdk20000-code.github.io/LegalHelper</b></a></p>
+<p align="center">Сайт программы: <a href="https://legalhelper.github.io"><b>legalhelper.github.io</b></a></p>
 
 ## Как установить (впервые) — 4 шага
 
