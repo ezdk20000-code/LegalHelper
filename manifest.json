@@ -1,6 +1,10 @@
 {
 "files": [
 {
+"path": ".github/workflows/release.yml",
+"size": 4366
+},
+{
 "path": "CHANGELOG.md",
 "size": 48300
 },
@@ -314,7 +318,7 @@
 },
 {
 "path": "installer.iss",
-"size": 3333
+"size": 3552
 },
 {
 "path": "legal_core.py",

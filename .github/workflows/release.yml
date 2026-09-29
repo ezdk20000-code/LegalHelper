@@ -1,0 +1,90 @@
+# Собирает готовый установщик LegalHelper-Setup.exe на серверах GitHub и выкладывает его в «Releases».
+# Запускается сам, когда в main меняется version.json (то есть выходит новая версия), или вручную
+# (вкладка Actions → «Установщик» → Run workflow). Сайт и программа скачивают установщик по адресу
+# https://github.com/ezdk20000-code/LegalHelper/releases/latest/download/LegalHelper-Setup.exe
+name: Установщик
+
+on:
+  push:
+    branches: [main]
+    paths: [version.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Версия
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Get-Content version.json -Raw | ConvertFrom-Json).version
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Версия $v"
+
+      - name: Библиотеки
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Сборка программы
+        run: >
+          python -m PyInstaller --noconfirm --clean --windowed --log-level WARN --name LegalHelper --icon app.ico
+          --add-data "app.ico;." --add-data "tessdata;tessdata" --add-data "excalidraw;excalidraw" --add-data "help;help" --add-data "forms;forms"
+          --collect-data pptx --collect-data docx --collect-all pymupdf4llm --collect-all pdf2docx
+          --hidden-import case_tabs --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore
+          --hidden-import legal_ui --hidden-import legal_core --hidden-import cases --hidden-import legal_data
+          --hidden-import templates_lib --hidden-import help_ui --hidden-import updater --hidden-import timecheck
+          --hidden-import backup --hidden-import casefile --hidden-import anim --hidden-import timer_widget
+          --hidden-import extwatch --hidden-import tutorial --hidden-import help_content --hidden-import phone_export
+          pdf_master.py
+
+      - name: Проверка сборки
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist\LegalHelper\LegalHelper.exe)) { throw "Нет dist\LegalHelper\LegalHelper.exe" }
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress | Out-Null
+            $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) { throw "Inno Setup не найден" }
+          & $iscc /Q "/DMyAppVersion=${{ steps.ver.outputs.version }}" installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC завершился с ошибкой $LASTEXITCODE" }
+          Copy-Item installer_output\LegalHelper_Setup.exe installer_output\LegalHelper-Setup.exe
+          Get-Item installer_output\*.exe | Format-Table Name, Length
+
+      - name: Выпуск на GitHub
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $tag = "v$v"
+          $notes = "Установщик LegalHelper $v для Windows 10 и 11. Скачайте LegalHelper-Setup.exe, откройте его и нажимайте «Далее»."
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag installer_output\LegalHelper-Setup.exe --clobber
+          } else {
+            gh release create $tag installer_output\LegalHelper-Setup.exe --title "LegalHelper $v" --notes $notes --target $env:GITHUB_SHA --latest
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Не удалось выложить установщик" }

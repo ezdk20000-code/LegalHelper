@@ -20,7 +20,11 @@ UninstallDisplayIcon={app}\{#MyAppExe}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-PrivilegesRequiredOverridesAllowed=dialog
+; ставится в папку пользователя: без прав администратора и без лишних вопросов
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=commandline
+DisableDirPage=yes
+DisableReadyPage=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=force
 UsePreviousAppDir=yes
