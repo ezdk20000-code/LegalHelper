@@ -313,6 +313,10 @@
 "size": 83040
 },
 {
+"path": "index.html",
+"size": 613
+},
+{
 "path": "installer.iss",
 "size": 3333
 },
