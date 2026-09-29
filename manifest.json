@@ -2,7 +2,7 @@
 "files": [
 {
 "path": "CHANGELOG.md",
-"size": 40168
+"size": 41330
 },
 {
 "path": "README.md",
@@ -34,7 +34,7 @@
 },
 {
 "path": "cases.py",
-"size": 24987
+"size": 27094
 },
 {
 "path": "excalidraw/Assistant-Bold-ZDZZ6JHA.woff2",
@@ -362,7 +362,7 @@
 },
 {
 "path": "version.json",
-"size": 938
+"size": 1121
 }
 ]
 }

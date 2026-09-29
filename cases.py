@@ -94,6 +94,11 @@ CASE_FIELDS = [("title", "Название"), ("number", "Номер дела"),
                ("folder", "Папка с документами"), ("notes", "Заметки")]
 
 
+def norm_path(p):
+    """Путь для сравнения: одинаковые разделители, без «./» и «..», без учёта регистра в Windows."""
+    return os.path.normcase(os.path.normpath(os.path.abspath(p))) if p else ""
+
+
 def iso(d):
     return d.isoformat() if isinstance(d, (dt.date, dt.datetime)) else str(d)
 
@@ -133,6 +138,7 @@ class CaseDB:
         import uuid
         for (cid,) in self.con.execute("SELECT id FROM cases WHERE uid IS NULL OR uid=''").fetchall():
             self.con.execute("UPDATE cases SET uid=? WHERE id=?", (uuid.uuid4().hex, cid))
+        self.dedupe_docs()                      # повторы, накопившиеся до версии 2.7.2
 
     # ---------------------------------------------------------------- инстанции
     def instances(self, cid):
@@ -279,28 +285,62 @@ class CaseDB:
             self._exec(f"UPDATE docs SET {','.join(k + '=?' for k in keys)} WHERE id=?",
                        tuple(kw[k] for k in keys) + (did,))
 
+    def _doc_ids(self, path, cid=None):
+        """Документы с этим файлом. Пути сравниваются «по смыслу»: в Windows один файл пишется и как
+        C:/Папка/Иск.pdf, и как C:\\Папка\\Иск.pdf (так бывает при перетаскивании мышкой) — это не два файла."""
+        key = norm_path(path)
+        sql, args = ("SELECT id, path FROM docs WHERE case_id=?", (cid,)) if cid else ("SELECT id, path FROM docs", ())
+        return [r["id"] for r in self._all(sql, args) if norm_path(r["path"]) == key]
+
     def add_doc(self, cid, path, title=""):
-        if self._one("SELECT id FROM docs WHERE case_id=? AND path=?", (cid, path)):
+        if not path or self._doc_ids(path, cid):
             return None
+        path = os.path.normpath(path)
         return self._exec("INSERT INTO docs(case_id,path,title,added) VALUES (?,?,?,?)",
                           (cid, path, title or os.path.splitext(os.path.basename(path))[0],
                            dt.datetime.now().isoformat(timespec="seconds")))
 
+    def dedupe_docs(self):
+        """Убрать повторы одного файла в деле (оставить запись с отметкой «Отправлен», значком, иначе первую)."""
+        groups = {}
+        for r in self._all("SELECT id, case_id, path, sent, icon FROM docs ORDER BY id"):
+            groups.setdefault((r["case_id"], norm_path(r["path"])), []).append(r)
+        gone = 0
+        for rows in groups.values():
+            if len(rows) < 2:
+                continue
+            keep = max(rows, key=lambda r: (bool(r["sent"]), bool(r["icon"]), -r["id"]))
+            for r in rows:
+                if r["id"] != keep["id"]:
+                    self.con.execute("DELETE FROM docs WHERE id=?", (r["id"],))
+                    gone += 1
+        if gone:
+            self.con.commit()
+        return gone
+
     def case_of_path(self, path):
-        r = self._one("SELECT d.case_id AS cid FROM docs d JOIN cases c ON c.id=d.case_id "
-                      "WHERE d.path=? ORDER BY c.archived, d.id DESC LIMIT 1", (path,))
-        return r["cid"] if r else None
+        key = norm_path(path)
+        for r in self._all("SELECT d.case_id AS cid, d.path FROM docs d JOIN cases c ON c.id=d.case_id "
+                           "ORDER BY c.archived, d.id DESC"):
+            if norm_path(r["path"]) == key:
+                return r["cid"]
+        return None
 
     def unlink_path(self, cid, path):
-        self._exec("DELETE FROM docs WHERE case_id=? AND path=?", (cid, path))
+        for did in self._doc_ids(path, cid):
+            self.delete_doc(did)
 
     def delete_doc(self, did):
         self._exec("DELETE FROM docs WHERE id=?", (did,))
 
     def forget_path(self, path):
         """Файл удалён: убрать его из всех дел и комплектов."""
-        self._exec("DELETE FROM docs WHERE path=?", (path,))
-        self._exec("DELETE FROM pack_items WHERE path=?", (path,))
+        for did in self._doc_ids(path):
+            self.delete_doc(did)
+        key = norm_path(path)
+        for r in self._all("SELECT id, path FROM pack_items"):
+            if r["path"] and norm_path(r["path"]) == key:
+                self._exec("DELETE FROM pack_items WHERE id=?", (r["id"],))
 
     # ---------------------------------------------------------------- время и оплаты
     def time_entries(self, cid):
