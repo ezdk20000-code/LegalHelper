@@ -2,11 +2,11 @@
 "files": [
 {
 "path": "CHANGELOG.md",
-"size": 43655
+"size": 48300
 },
 {
 "path": "README.md",
-"size": 7739
+"size": 11261
 },
 {
 "path": "anim.py",
@@ -34,7 +34,11 @@
 },
 {
 "path": "cases.py",
-"size": 27094
+"size": 27321
+},
+{
+"path": "docs/knopka-skachat.svg",
+"size": 948
 },
 {
 "path": "excalidraw/Assistant-Bold-ZDZZ6JHA.woff2",
@@ -190,19 +194,19 @@
 },
 {
 "path": "help/img/00_home.png",
-"size": 196500
+"size": 195464
 },
 {
 "path": "help/img/01_main.png",
-"size": 198042
+"size": 199575
 },
 {
 "path": "help/img/02_sidebar.png",
-"size": 72491
+"size": 72415
 },
 {
 "path": "help/img/03_loose.png",
-"size": 147633
+"size": 147683
 },
 {
 "path": "help/img/04_toolbar.png",
@@ -230,7 +234,7 @@
 },
 {
 "path": "help/img/10_templates.png",
-"size": 186352
+"size": 192467
 },
 {
 "path": "help/img/11_profile.png",
@@ -238,7 +242,7 @@
 },
 {
 "path": "help/img/12_case.png",
-"size": 193769
+"size": 201164
 },
 {
 "path": "help/img/13_banner.png",
@@ -246,59 +250,59 @@
 },
 {
 "path": "help/img/14_events.png",
-"size": 139281
+"size": 138726
 },
 {
 "path": "help/img/15_docs.png",
-"size": 254722
+"size": 254714
 },
 {
 "path": "help/img/16_prepare.png",
-"size": 213158
+"size": 213177
 },
 {
 "path": "help/img/17_laws.png",
-"size": 153809
+"size": 153838
 },
 {
 "path": "help/img/18_money.png",
-"size": 153732
+"size": 154331
 },
 {
 "path": "help/img/19_board.png",
-"size": 173291
+"size": 166526
 },
 {
 "path": "help/img/20_deadline.png",
-"size": 173876
+"size": 173822
 },
 {
 "path": "help/img/21_duty.png",
-"size": 153419
+"size": 153467
 },
 {
 "path": "help/img/22_interest.png",
-"size": 160924
+"size": 161280
 },
 {
 "path": "help/img/23_dark.png",
-"size": 202072
+"size": 201033
 },
 {
 "path": "help/img/24_groups.png",
-"size": 254722
+"size": 254714
 },
 {
 "path": "help_content.py",
-"size": 30576
+"size": 31620
 },
 {
 "path": "help_ui.py",
-"size": 80535
+"size": 83040
 },
 {
 "path": "installer.iss",
-"size": 3335
+"size": 3333
 },
 {
 "path": "legal_core.py",
@@ -310,7 +314,7 @@
 },
 {
 "path": "legal_ui.py",
-"size": 215686
+"size": 229201
 },
 {
 "path": "pdf_core.py",
@@ -318,7 +322,11 @@
 },
 {
 "path": "pdf_master.py",
-"size": 271255
+"size": 276767
+},
+{
+"path": "phone_export.py",
+"size": 13452
 },
 {
 "path": "requirements.txt",
@@ -354,7 +362,7 @@
 },
 {
 "path": "update.bat",
-"size": 12773
+"size": 13679
 },
 {
 "path": "updater.py",
@@ -362,7 +370,11 @@
 },
 {
 "path": "version.json",
-"size": 1322
+"size": 1153
+},
+{
+"path": "УСТАНОВИТЬ.bat",
+"size": 125
 }
 ]
 }

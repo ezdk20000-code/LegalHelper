@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="96" viewBox="0 0 560 96">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f95ff"/>
+      <stop offset="1" stop-color="#0a6fe0"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="4" width="556" height="88" rx="22" fill="#0a4fa8" opacity="0.25"/>
+  <rect x="0" y="0" width="556" height="88" rx="22" fill="url(#g)"/>
+  <circle cx="58" cy="44" r="26" fill="#ffffff" opacity="0.18"/>
+  <path d="M58 28 v24 M47 42 l11 11 l11 -11 M45 60 h26" stroke="#fff" stroke-width="5" fill="none"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="100" y="42" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#fff">Скачать LegalHelper</text>
+  <text x="100" y="68" font-family="Segoe UI, Arial, sans-serif" font-size="17" fill="#e6f0ff">для Windows 10 и 11 · бесплатно</text>
+</svg>

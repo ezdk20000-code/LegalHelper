@@ -1309,6 +1309,178 @@ class InstancesEditor(QWidget):
             main.overview.set_case(self.cid)
 
 
+class PhoneSetupDialog(QDialog):
+    """Пошаговая настройка «Дела на телефоне» через Яндекс Диск — с объяснением каждого действия."""
+
+    def __init__(self, main):
+        super().__init__(main)
+        import phone_export as PE
+        self.PE = PE
+        self.main = main
+        st = M.settings()
+        self.setWindowTitle("📱 Дела на телефоне — Яндекс Диск")
+        self.resize(640, 560)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(22, 18, 22, 16)
+        self.step_lbl = QLabel()
+        self.step_lbl.setObjectName("hint")
+        v.addWidget(self.step_lbl)
+        self.pages = QStackedWidget()
+        v.addWidget(self.pages, 1)
+
+        def page(title, html_text):
+            w = QWidget()
+            lv = QVBoxLayout(w)
+            lv.setContentsMargins(0, 4, 0, 0)
+            t = QLabel(title)
+            t.setObjectName("title")
+            t.setWordWrap(True)
+            lv.addWidget(t)
+            b = QLabel(html_text)
+            b.setWordWrap(True)
+            b.setTextFormat(Qt.RichText)
+            b.setOpenExternalLinks(True)
+            b.setStyleSheet("font-size: 11.5pt;")
+            lv.addWidget(b)
+            self.pages.addWidget(w)
+            return lv
+
+        # 1 — что это
+        page("Дела на телефоне",
+             "Перед заседанием можно открыть дело на телефоне и спокойно всё прочитать: <b>памятку</b> (когда и где "
+             "заседание, суд, судья, стороны, <b>главное к заседанию</b>), <b>сроки</b>, <b>выписки</b> и все "
+             "<b>документы дела</b> — с оглавлением, по которому документы открываются одним нажатием.<br><br>"
+             "Файлы попадают на телефон через ваш <b>Яндекс Диск</b>. Программа сама обновляет их после каждого "
+             "сохранения дела.<br><br>"
+             "<b>Логин и пароль Яндекса в LegalHelper вводить не нужно.</b> Вы один раз входите в официальную "
+             "программу «Яндекс Диск» — так безопаснее: пароль знает только Яндекс, а документы клиентов лежат "
+             "только в вашем личном облаке.<br><br>Нажмите «Далее» — покажу, что сделать, по шагам.")
+        # 2 — компьютер
+        lv = page("Шаг 1. Яндекс Диск на этом компьютере",
+                  "<ol style='margin-left:-20px'>"
+                  "<li style='margin-bottom:6px'>Нажмите кнопку <b>«Скачать Яндекс Диск»</b> ниже — откроется сайт Яндекса. "
+                  "Нажмите там «Скачать» для Windows.</li>"
+                  "<li style='margin-bottom:6px'>Откройте скачанный файл (обычно он в папке «Загрузки») и установите программу, "
+                  "нажимая «Далее».</li>"
+                  "<li style='margin-bottom:6px'>В окне Яндекс Диска <b>войдите в свой аккаунт Яндекса</b>: логин — это ваша почта "
+                  "вида <i>имя@yandex.ru</i> (или номер телефона), пароль — тот же, что от Яндекс Почты. "
+                  "Нет аккаунта — нажмите там «Создать ID».</li>"
+                  "<li style='margin-bottom:6px'>После входа на компьютере появится папка «Яндекс Диск». Вернитесь сюда и нажмите "
+                  "<b>«Проверить»</b>.</li></ol>")
+        row = QHBoxLayout()
+        b_dl = QPushButton("⬇  Скачать Яндекс Диск")
+        b_dl.setObjectName("primary")
+        b_dl.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(PE.YANDEX_DOWNLOAD)))
+        row.addWidget(b_dl)
+        b_chk = QPushButton("🔄  Проверить")
+        b_chk.clicked.connect(self.check)
+        row.addWidget(b_chk)
+        b_pick = QPushButton("Указать папку вручную…")
+        b_pick.setToolTip("Если вы при установке выбрали для Яндекс Диска другую папку")
+        b_pick.clicked.connect(self.pick)
+        row.addWidget(b_pick)
+        row.addStretch(1)
+        lv.addLayout(row)
+        self.status = QLabel()
+        self.status.setWordWrap(True)
+        self.status.setStyleSheet("font-size: 11.5pt; padding: 8px 0;")
+        lv.addWidget(self.status)
+        lv.addStretch(1)
+        # 3 — телефон
+        page("Шаг 2. Яндекс Диск на телефоне",
+             "<ol style='margin-left:-20px'>"
+             "<li style='margin-bottom:6px'>Установите на телефон приложение <b>«Яндекс Диск»</b>: на iPhone — из App Store, "
+             "на Android — из Google Play или RuStore (в поиске магазина наберите «Яндекс Диск»).</li>"
+             "<li style='margin-bottom:6px'>Откройте его и <b>войдите тем же логином и паролем</b>, что и на компьютере.</li>"
+             "<li style='margin-bottom:6px'>Откройте папку <b>«LegalHelper — дела»</b> — в ней по файлу на каждое дело.</li>"
+             "<li style='margin-bottom:6px'>Чтобы файлы открывались <b>без интернета</b> (в суде он бывает плохой): нажмите "
+             "на три точки <b>⋮</b> рядом с папкой и выберите пункт про офлайн («Офлайн» или «Сделать доступным "
+             "офлайн» — зависит от версии приложения).</li>"
+             "<li style='margin-bottom:6px'>Нажмите на дело — откроется памятка. Листайте вниз; в «Документы дела» нажмите "
+             "на документ — он откроется. Увеличить — двумя пальцами, как фото.</li></ol>")
+        # 4 — какие дела
+        lv = page("Шаг 3. Какие дела отправлять",
+                  "Выберите, какие дела будут на телефоне. Изменить можно в любой момент: «Файл → 📱 Дела на "
+                  "телефоне».")
+        from PySide6.QtWidgets import QRadioButton
+        self.r_all = QRadioButton("Все дела в работе (кроме архива) — обновляются сами")
+        self.r_manual = QRadioButton("Только те, где я нажму «📱 На телефон» в «Обзоре» дела")
+        (self.r_manual if st.value("phone/mode", "all") == "manual" else self.r_all).setChecked(True)
+        for r in (self.r_all, self.r_manual):
+            r.setStyleSheet("font-size: 11.5pt; padding: 4px 0;")
+            lv.addWidget(r)
+        self.c_on = QCheckBox("Отправлять дела на телефон")
+        self.c_on.setChecked(True)
+        self.c_on.setStyleSheet("font-size: 11.5pt; padding: 8px 0;")
+        lv.addWidget(self.c_on)
+        tipl = QLabel("Нажмите «Готово» — дела сразу отправятся. Через минуту-две они появятся на телефоне в "
+                      "папке «LegalHelper — дела».")
+        tipl.setWordWrap(True)
+        tipl.setObjectName("hint")
+        lv.addWidget(tipl)
+        lv.addStretch(1)
+        # кнопки
+        nav = QHBoxLayout()
+        self.b_back = QPushButton("← Назад")
+        self.b_back.clicked.connect(lambda: self.go(-1))
+        nav.addWidget(self.b_back)
+        nav.addStretch(1)
+        self.b_next = QPushButton("Далее →")
+        self.b_next.setObjectName("primary")
+        self.b_next.clicked.connect(lambda: self.go(1))
+        nav.addWidget(self.b_next)
+        v.addLayout(nav)
+        self.base = st.value("phone/base", "") or ""
+        if not (self.base and os.path.isdir(self.base)):
+            self.base = PE.find_yandex_folder() or ""
+        self.check(quiet=True)
+        self.go(0)
+
+    def check(self, quiet=False):
+        if not (self.base and os.path.isdir(self.base)):
+            self.base = self.PE.find_yandex_folder() or ""
+        if self.base:
+            self.status.setText(f"✅  <b>Яндекс Диск найден:</b> {html.escape(self.base)}<br>Можно нажимать «Далее».")
+            self.status.setTextFormat(Qt.RichText)
+        else:
+            self.status.setTextFormat(Qt.RichText)
+            self.status.setText("⏳  Папка Яндекс Диска пока не найдена. Установите программу и войдите в неё "
+                                "(пункты 1–3), затем нажмите «Проверить». Если при установке вы выбрали другую "
+                                "папку — «Указать папку вручную…».")
+        self.update_nav()
+
+    def pick(self):
+        p = QFileDialog.getExistingDirectory(self, "Папка Яндекс Диска на компьютере", str(Path.home()))
+        if p:
+            self.base = p
+            self.check()
+
+    def go(self, step):
+        i = max(0, min(self.pages.count() - 1, self.pages.currentIndex() + step))
+        if step > 0 and self.pages.currentIndex() == 1 and not self.base:
+            self.check()
+            return
+        if step > 0 and self.pages.currentIndex() == self.pages.count() - 1:
+            return self.finish()
+        self.pages.setCurrentIndex(i)
+        self.update_nav()
+
+    def update_nav(self):
+        i = self.pages.currentIndex()
+        n = self.pages.count()
+        self.step_lbl.setText(f"{i + 1} из {n}")
+        self.b_back.setVisible(i > 0)
+        self.b_next.setText("Готово — отправить дела" if i == n - 1 else "Далее →")
+        self.b_next.setEnabled(not (i == 1 and not self.base))
+
+    def finish(self):
+        st = M.settings()
+        st.setValue("phone/base", self.base)
+        st.setValue("phone/on", "1" if self.c_on.isChecked() else "0")
+        st.setValue("phone/mode", "manual" if self.r_manual.isChecked() else "all")
+        self.accept()
+
+
 class OverviewTab(QWidget):
     """Обзор дела: главное о деле, ближайшие сроки, последние документы, быстрые действия."""
 
@@ -1348,7 +1520,41 @@ class OverviewTab(QWidget):
         self.court_hint = QLabel()
         self.court_hint.setObjectName("hint")
         crow.addWidget(self.court_hint, 1)
+        self.b_phone = QPushButton("📱  На телефон")
+        self.b_phone.setObjectName("primary")
+        self.b_phone.setCursor(Qt.PointingHandCursor)
+        self.b_phone.setToolTip("Отправить дело на телефон через Яндекс Диск: памятка к заседанию и все документы")
+        self.b_phone.clicked.connect(lambda: self.cid and self.main.phone_button(self.cid))
+        crow.addWidget(self.b_phone)
         v.addLayout(crow)
+        # главное к заседанию (коротко — это видно на телефоне первым)
+        box = QFrame()
+        box.setObjectName("card")
+        bv = QVBoxLayout(box)
+        bv.setContentsMargins(14, 12, 14, 10)
+        bh = QHBoxLayout()
+        lab = QLabel("⚖️  Главное к заседанию")
+        lab.setObjectName("subtitle")
+        bh.addWidget(lab)
+        hint = QLabel("каждая мысль — с новой строки; «!» в начале — выделить красным. Видно на телефоне первым.")
+        hint.setObjectName("hint")
+        bh.addWidget(hint, 1)
+        self.brief_state = QLabel()
+        self.brief_state.setObjectName("hint")
+        bh.addWidget(self.brief_state)
+        bv.addLayout(bh)
+        self.brief = QPlainTextEdit()
+        self.brief.setObjectName("notes")
+        self.brief.setPlaceholderText("Например:\nДолг подтверждён актом сверки (л. 9)\nПретензия 01.04 — ответа нет\n"
+                                      "!Спросить: приобщить переписку о переносе сроков")
+        self.brief.setFixedHeight(104)
+        self.brief_timer = QTimer(self)
+        self.brief_timer.setSingleShot(True)
+        self.brief_timer.setInterval(700)
+        self.brief_timer.timeout.connect(self.save_brief)
+        self.brief.textChanged.connect(lambda: (self.brief_state.setText("…"), self.brief_timer.start()))
+        bv.addWidget(self.brief)
+        v.addWidget(box)
         # две колонки
         cols = QHBoxLayout()
         cols.setSpacing(14)
@@ -1453,10 +1659,17 @@ class OverviewTab(QWidget):
         if self.notes_timer.isActive() and self.cid:
             self.notes_timer.stop()
             self.save_notes()
+        if self.brief_timer.isActive() and self.cid:
+            self.brief_timer.stop()
+            self.save_brief()
         self.cid = cid
         if not cid:
             return
         c = db().case(cid) or {}
+        self.brief.blockSignals(True)
+        self.brief.setPlainText(c.get("brief") or "")
+        self.brief.blockSignals(False)
+        self.brief_state.setText("")
         url = (c.get("court_url") or "").strip()
         self.b_court.setText("🌐  Дело на сайте суда" if url else "🔎  Найти дело на сайте суда")
         self.court_hint.setText("" if url else "Найдите карточку дела и сохраните ссылку (▾) — кнопка будет вести прямо в неё.")
@@ -1529,6 +1742,12 @@ class OverviewTab(QWidget):
     def _notes_changed(self):
         self.notes_state.setText("…")
         self.notes_timer.start()
+
+    def save_brief(self):
+        if not self.cid:
+            return
+        db().update_case(self.cid, brief=self.brief.toPlainText())
+        self.brief_state.setText("сохранено")
 
     def save_notes(self):
         if not self.cid:

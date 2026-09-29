@@ -22,8 +22,13 @@ set "APPID={7C2E8F4A-3B1D-4E9A-9F21-5D6A0B8C4E11}_is1"
 set "LOG=%WORK%\update.log"
 
 if not exist "%SRC%\pdf_master.py" (
-    echo Не найден pdf_master.py рядом с update.bat.
-    echo Распакуйте архив полностью и запустите update.bat из распакованной папки.
+    echo Похоже, файл запущен прямо из архива ZIP, не распакованного до конца.
+    echo.
+    echo Что сделать:
+    echo 1. Закройте это окно.
+    echo 2. Найдите скачанный архив LegalHelper-main.zip ^(обычно в папке "Загрузки"^).
+    echo 3. Щёлкните по нему ПРАВОЙ кнопкой мыши - "Извлечь все..." - "Извлечь".
+    echo 4. В открывшейся папке LegalHelper-main дважды щёлкните УСТАНОВИТЬ.bat
     goto :fail
 )
 if not exist "%WORK%" mkdir "%WORK%"
@@ -39,12 +44,17 @@ py -3 --version >nul 2>&1 && set "PY=py -3"
 if not defined PY python --version >nul 2>&1 && set "PY=python"
 if not defined PY if exist "%VPY%" set "PY=%VPY%"
 if not defined PY (
-    echo Python не найден. Пробую установить Python 3.12 через winget...
-    winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+    echo Python не найден. Устанавливаю Python 3.12 ^(это нужно один раз^)...
+    winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements
+    if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PY="%LOCALAPPDATA%\Programs\Python\Python312\python.exe""
+    if not defined PY if exist "%ProgramFiles%\Python312\python.exe" set "PY="%ProgramFiles%\Python312\python.exe""
+)
+if not defined PY (
     echo.
-    echo Если Python установился - закройте окно и запустите update.bat ещё раз.
-    echo Иначе установите Python 3.10+ с https://www.python.org/downloads/
-    echo и отметьте галочку "Add python.exe to PATH".
+    echo Python не установился автоматически.
+    echo 1. Откройте https://www.python.org/downloads/ и нажмите "Download Python".
+    echo 2. Запустите скачанный файл и ОБЯЗАТЕЛЬНО отметьте галочку "Add python.exe to PATH" внизу окна.
+    echo 3. Нажмите "Install Now", дождитесь конца и снова запустите УСТАНОВИТЬ.bat
     goto :fail
 )
 
@@ -80,7 +90,7 @@ echo [3/5] Собираю программу...
 pushd "%BSRC%"
 "%VPY%" -m PyInstaller --noconfirm --clean --windowed --log-level WARN --name LegalHelper --icon app.ico ^
   --add-data "app.ico;." --add-data "tessdata;tessdata" --add-data "excalidraw;excalidraw" --add-data "help;help" --add-data "forms;forms" ^
-  --collect-data pptx --collect-data docx --collect-all pymupdf4llm --collect-all pdf2docx --hidden-import case_tabs --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore --hidden-import legal_ui --hidden-import legal_core --hidden-import cases --hidden-import legal_data --hidden-import templates_lib --hidden-import help_ui --hidden-import updater --hidden-import timecheck --hidden-import backup --hidden-import casefile --hidden-import anim --hidden-import timer_widget --hidden-import extwatch --hidden-import tutorial --hidden-import help_content ^
+  --collect-data pptx --collect-data docx --collect-all pymupdf4llm --collect-all pdf2docx --hidden-import case_tabs --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore --hidden-import legal_ui --hidden-import legal_core --hidden-import cases --hidden-import legal_data --hidden-import templates_lib --hidden-import help_ui --hidden-import updater --hidden-import timecheck --hidden-import backup --hidden-import casefile --hidden-import anim --hidden-import timer_widget --hidden-import extwatch --hidden-import tutorial --hidden-import help_content --hidden-import phone_export ^
   pdf_master.py >>"%LOG%" 2>&1
 set "BERR=%errorlevel%"
 popd

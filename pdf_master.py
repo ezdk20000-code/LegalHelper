@@ -5,6 +5,7 @@ LegalHelper — рабочее место юриста и настольный �
 """
 import os
 import sys
+import html
 import tempfile
 import traceback
 import subprocess
@@ -35,9 +36,10 @@ import anim
 import timer_widget as TW
 import extwatch
 import tutorial
+import phone_export as PHX
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "2.7.3"
+APP_VERSION = "2.8"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -1771,6 +1773,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(3000, lambda: self.check_updates(silent=True))
         QTimer.singleShot(8000, self.daily_backup)
         QTimer.singleShot(12000, self.cleanup_in_background)
+        QTimer.singleShot(20000, self.phone_sync_all)
         self.tutor = None
         QTimer.singleShot(2500, lambda: tutorial.offer(self))
         self.extwatch = extwatch.ExtWatch(self)
@@ -1854,6 +1857,7 @@ class MainWindow(QMainWindow):
         mf.addSeparator()
         mf.addAction("📂 Открыть дело из папки…", lambda: U.open_case_from_folder(self))
         mf.addAction("🛟 Резервные копии…", lambda: U.BackupsDialog(self).exec())
+        mf.addAction("📱 Дела на телефоне (Яндекс Диск)…", self.phone_setup)
         mf.addSeparator()
         mf.addAction("Выход", self.close)
         me = mb.addMenu("Правка")
@@ -3192,6 +3196,7 @@ class MainWindow(QMainWindow):
         if w.get("main") and cid:
             if self._same(p, self.case_pdf(cid)):
                 U.db().update_case(cid, pdf=os.path.basename(p))
+                QTimer.singleShot(300, lambda c=cid: self.phone_sync(c))     # и на телефон (если настроено)
             else:                                          # «Сохранить как» под другим именем — это уже копия
                 w["main"] = False
             self.cases_page.refresh_docs_if(cid)
@@ -3221,10 +3226,12 @@ class MainWindow(QMainWindow):
         try:
             self.cases_page.flush()
             self.overview.notes_timer.isActive() and self.overview.save_notes()
+            self.overview.brief_timer.isActive() and self.overview.save_brief()
             self.cases_page.board_tab.shutdown()
         except Exception as ex:
             log_error("Сохранение дел при выходе", ex)
         U.sync_case_file(self.mode_cid or self.last_case)
+        self.phone_sync(self.mode_cid or self.last_case)
 
     # --- сохранность данных
     def daily_backup(self):
@@ -3300,6 +3307,102 @@ class MainWindow(QMainWindow):
 
     def sync_current_case(self):
         U.sync_case_file(self.mode_cid)
+        self.phone_sync(self.mode_cid)
+
+    # --- дела на телефоне (Яндекс Диск, см. phone_export.py)
+    def phone_base(self):
+        st = settings()
+        base = st.value("phone/base", "") or ""
+        return base if str(st.value("phone/on", "0")) == "1" and base and os.path.isdir(base) else None
+
+    def _phone_selected(self):
+        return set(filter(None, str(settings().value("phone/cases", "") or "").split(",")))
+
+    def phone_sync(self, cid, force=False):
+        """Обновить файл дела на Яндекс Диске (если настроено и что-то поменялось). Возвращает путь или None."""
+        base = self.phone_base()
+        if not cid or not base:
+            return None
+        try:
+            db = U.db()
+            c = db.case(cid)
+            if not c:
+                return None
+            if c.get("archived"):
+                PHX.remove_case_file(db, cid, base, settings())
+                return None
+            if settings().value("phone/mode", "all") == "manual" and not force and \
+                    (c.get("uid") or str(cid)) not in self._phone_selected():
+                return None
+            return PHX.export_case(db, cid, base, self.case_pdf(cid), settings(), force=force)
+        except Exception as ex:
+            log_error("Дела на телефоне (Яндекс Диск)", ex)
+            return None
+
+    def phone_sync_all(self):
+        """При запуске — по одному делу, чтобы не задерживать окно."""
+        if not self.phone_base():
+            return
+        try:
+            ids = [c["id"] for c in U.db().cases()]
+        except Exception:
+            return
+
+        def step():
+            if ids:
+                self.phone_sync(ids.pop(0))
+                QTimer.singleShot(400, step)
+        step()
+
+    def phone_setup(self):
+        if U.PhoneSetupDialog(self).exec():
+            self.phone_sync_all()
+            return True
+        return False
+
+    def phone_button(self, cid):
+        """«📱 На телефон» в деле: при первом разе — помощник настройки, потом — отправить сейчас."""
+        if not self.phone_base():
+            if not self.phone_setup() or not self.phone_base():
+                return
+        c = U.db().case(cid) or {}
+        sel = self._phone_selected()
+        sel.add(c.get("uid") or str(cid))
+        settings().setValue("phone/cases", ",".join(sorted(sel)))
+        if self.modified and self.ws[self.cur_ws].get("main") and self.ws[self.cur_ws].get("case_id") == cid:
+            if QMessageBox.question(self, APP_NAME, "В PDF дела есть несохранённые изменения. Сохранить, чтобы они "
+                                    "тоже попали на телефон?") == QMessageBox.Yes:
+                self.save()
+        self.overview.brief_timer.isActive() and self.overview.save_brief()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            p = self.phone_sync(cid, force=True)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if p:
+            self.toast(f"📱  На телефоне: {Path(p).name}")
+            box = QMessageBox(self)
+            box.setWindowTitle("Дело на телефоне")
+            box.setIcon(QMessageBox.Information)
+            box.setText(f"<b>Готово!</b> Дело отправлено в Яндекс Диск:<br>«LegalHelper — дела» → {html.escape(Path(p).name)}")
+            box.setInformativeText("Через минуту-две оно появится на телефоне в приложении «Яндекс Диск», в папке "
+                                   "«LegalHelper — дела». Дальше файл будет обновляться сам после каждого "
+                                   "сохранения дела.")
+            b_how = box.addButton("Как открыть на телефоне?", QMessageBox.HelpRole)
+            b_dir = box.addButton("Показать папку", QMessageBox.ActionRole)
+            box.addButton("OK", QMessageBox.AcceptRole)
+            box.exec()
+            if box.clickedButton() is b_dir:
+                self.show_in_folder(p)
+            elif box.clickedButton() is b_how:
+                d = U.PhoneSetupDialog(self)
+                d.pages.setCurrentIndex(2)
+                d.update_nav()
+                d.exec()
+        else:
+            QMessageBox.warning(self, APP_NAME, "Не получилось отправить дело на телефон. Проверьте, что программа "
+                                "«Яндекс Диск» установлена и вы в неё вошли («Файл → 📱 Дела на телефоне»). "
+                                "Подробности — «Справка → Журнал ошибок».")
 
     def restore_backup(self, path):
         if not self.save_all_ws():
