@@ -68,11 +68,22 @@ def ensure_folder(db, cid):
         return c["folder"]
     base = os.path.join(cases_root(), clean_name(c["title"]))
     folder, n = base, 2
-    while os.path.exists(folder) and not _is_folder_of(folder, c):
+    while os.path.exists(folder) and not _is_folder_of(folder, c) and not _unclaimed(db, folder, cid):
         folder, n = f"{base} ({n})", n + 1
     os.makedirs(folder, exist_ok=True)
     db.update_case(cid, folder=folder)
     return folder
+
+
+def _unclaimed(db, folder, cid):
+    """Папка этого дела без файла сведений, которую не заняло никакое другое дело, — взять её, а не заводить «(2)»."""
+    if os.path.exists(os.path.join(folder, CASE_FILE)):
+        return False
+    key = os.path.normcase(os.path.abspath(folder))
+    for (fid, f) in db.con.execute("SELECT id, folder FROM cases WHERE id<>? AND folder<>''", (cid,)).fetchall():
+        if f and os.path.normcase(os.path.abspath(f)) == key:
+            return False
+    return True
 
 
 def _is_folder_of(folder, case):

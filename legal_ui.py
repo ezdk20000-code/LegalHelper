@@ -2224,6 +2224,16 @@ class CasesPage(QWidget):
                 vals[k] = w.text()
         if not vals.get("title", "").strip():
             vals["title"] = "Без названия"
+        cur = db().case(self.cid) or {}
+        if not str(vals.get("folder", "")).strip() and cur.get("folder"):
+            # папку дела программа завела сама после того, как форма открылась, — не стирать её пустым полем
+            # (иначе при следующем сохранении появлялась вторая папка «<дело> (2)»)
+            vals.pop("folder", None)
+            w = self.fields.get("folder")
+            if w is not None:
+                w.blockSignals(True)
+                w.setText(cur["folder"])
+                w.blockSignals(False)
         db().update_case(self.cid, **vals)
         self.h_title.setText(vals["title"])
         it = self.list.currentItem()
@@ -3155,9 +3165,10 @@ class ProfileDialog(QDialog):
 
 
 def case_output_dir(cid):
-    c = db().case(cid) if cid else None
-    if c and c.get("folder") and os.path.isdir(c["folder"]):
-        return c["folder"]
+    """Куда класть созданные документы: папка дела (та же, где PDF дела), без дела — «Дела/Без дела»."""
+    if cid and db().case(cid):
+        return CF.ensure_folder(db(), cid)
+    c = None
     base = Path.home() / "Documents" / "LegalHelper" / "Дела"
     old = Path.home() / "Documents" / "PDF Мастер" / "Дела"     # папка версий до 1.6 — продолжаем её использовать
     if old.is_dir() and not base.exists():
@@ -3444,9 +3455,13 @@ class TemplateDialog(QDialog):
         sc.setWidgetResizable(True)
         sc.setFrameShape(QFrame.NoFrame)
         rv.addWidget(sc, 1)
-        self.c_pdf = QCheckBox("Сделать PDF и открыть в программе (нужен MS Office или LibreOffice)")
-        self.c_pdf.setChecked(M.settings().value("tpl/pdf", "false") == "true")
-        rv.addWidget(self.c_pdf)
+        where = QLabel("Документ Word сохранится в папку дела и сразу добавится справа, в «PDF дела».")
+        where.setObjectName("hint")
+        where.setWordWrap(True)
+        rv.addWidget(where)
+        self.c_word = QCheckBox("Открыть в Word, чтобы дописать (правки сами появятся в PDF дела)")
+        self.c_word.setChecked(M.settings().value("tpl/word", "true") == "true")
+        rv.addWidget(self.c_word)
         bb = QHBoxLayout()
         bb.addStretch(1)
         bc = QPushButton("Закрыть")
@@ -3643,7 +3658,7 @@ class TemplateDialog(QDialog):
         for role, pe in getattr(self, "parties", {}).items():
             store[f"party:{role}"] = pe.data()
         M.settings().setValue(f"tpl_vals/{cid or 0}", json.dumps(store, ensure_ascii=False))
-        M.settings().setValue("tpl/pdf", "true" if self.c_pdf.isChecked() else "false")
+        M.settings().setValue("tpl/word", "true" if self.c_word.isChecked() else "false")
         out_dir = case_output_dir(cid)
         base = f"{Path(self.path).stem} {dt.date.today().strftime('%d.%m.%Y')}"
         out = os.path.join(out_dir, L.clean_filename(base) + ".docx")
@@ -3658,21 +3673,8 @@ class TemplateDialog(QDialog):
         if cid:
             db().add_doc(cid, out)
             self.main.last_case = cid
-        final = out
-        if self.c_pdf.isChecked():
-            pdf = os.path.splitext(out)[0] + ".pdf"
-            res = self.main.run("Преобразование в PDF…", C.office_to_pdf, out, pdf)
-            if res is not M.FAILED and os.path.exists(pdf):
-                final = pdf
-                if cid:
-                    db().add_doc(cid, pdf)
-        self.main.refresh_cases()
         self.accept()
-        if final.endswith(".pdf"):
-            self.main.open_external(final, 0, cid)
-        else:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(final))
-            self.main.msg(f"Документ создан: {final}")
+        self.main.add_created_doc(cid, out, open_word=self.c_word.isChecked())
 
 
 # =============================================================================

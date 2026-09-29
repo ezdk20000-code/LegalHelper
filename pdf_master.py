@@ -37,7 +37,7 @@ import extwatch
 import tutorial
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "2.7.2"
+APP_VERSION = "2.7.3"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -2882,7 +2882,10 @@ class MainWindow(QMainWindow):
             if slow:
                 QApplication.restoreOverrideCursor()
                 slow = False
-            self.error(f"Файл «{Path(p).name}» не открыт", e)
+            if getattr(self, "_quiet_load", False):   # вызывающий сам объяснит, что делать (см. add_created_doc)
+                log_error(f"Файл «{Path(p).name}» не открыт", e)
+            else:
+                self.error(f"Файл «{Path(p).name}» не открыт", e)
             return None
         finally:
             if slow:
@@ -3078,6 +3081,42 @@ class MainWindow(QMainWindow):
         self.open_paths([path])
         if page and self.doc.page_count > start:
             self.goto_page(min(start + page, self.doc.page_count - 1))
+
+    def add_created_doc(self, cid, path, open_word=False):
+        """Документ, созданный по шаблону: в деле — в конец PDF дела (он уже в списке документов),
+        без дела — открыть в «Без дела». При желании — сразу в Word (правки подтянутся сами)."""
+        if cid:
+            self.enter_case(cid)
+            self.open_case_tab("docs")
+            self.show_main_ws(cid)
+            start = self.doc.page_count
+            self._quiet_load = True
+            try:
+                self.open_paths([path])
+            finally:
+                self._quiet_load = False
+            added = self.doc.page_count > start
+            self.cases_page.refresh_docs_if(cid)
+            if added:
+                self.goto_page(start)
+                self.toast(f"＋  В PDF дела: {Path(path).name}")
+        else:
+            self.enter_loose()
+            self._quiet_load = True
+            try:
+                self.open_paths([path], replace=True)
+            finally:
+                self._quiet_load = False
+            added = self.doc.page_count > 0 and self._same(self._src() or "", path)
+        if not added:                            # нет Word/LibreOffice — документ всё равно создан и лежит в папке
+            QMessageBox.information(self, APP_NAME, f"Документ «{Path(path).name}» создан"
+                                    + (" в папке дела и добавлен в список документов." if cid else ".")
+                                    + "\n\nВ PDF его добавить не удалось: для этого нужен Microsoft Word или бесплатный "
+                                      "LibreOffice. Открываю его в Word.")
+            open_word = True
+        if open_word:
+            self.open_in_app(path)
+        self.msg(f"Документ создан: {path}", 8000)
 
     def build_case_pdf(self, cid):
         """Добавить в PDF дела все документы из списка, которых в нём ещё нет."""
