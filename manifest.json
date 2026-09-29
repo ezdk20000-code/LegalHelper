@@ -6,7 +6,7 @@
 },
 {
 "path": "README.md",
-"size": 11261
+"size": 11443
 },
 {
 "path": "anim.py",
@@ -35,6 +35,26 @@
 {
 "path": "cases.py",
 "size": 27321
+},
+{
+"path": "docs/.nojekyll",
+"size": 0
+},
+{
+"path": "docs/img/00_home.png",
+"size": 195464
+},
+{
+"path": "docs/img/01_main.png",
+"size": 199575
+},
+{
+"path": "docs/img/15_docs.png",
+"size": 254714
+},
+{
+"path": "docs/index.html",
+"size": 20501
 },
 {
 "path": "docs/knopka-skachat.svg",
@@ -294,7 +314,7 @@
 },
 {
 "path": "help_content.py",
-"size": 31620
+"size": 31635
 },
 {
 "path": "help_ui.py",

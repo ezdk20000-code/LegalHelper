@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LegalHelper — скачать бесплатно</title>
+<meta name="description" content="LegalHelper — бесплатная программа для юристов: дела, сроки, все документы дела одним PDF, шаблоны, расчёты, дела на телефоне. Установка за 4 шага.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E⚖️%3C/text%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f5f5f7; --panel: #ffffff; --text: #1c1c1e; --muted: #6e6e73; --line: #e5e5ea;
+  --accent: #0a84ff; --accent2: #0a6fe0; --soft: #eaf3ff; --warn-bg: #fff6e5; --warn: #8a5a00;
+  --shadow: 0 10px 30px rgba(0,0,0,.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #000000; --panel: #1c1c1e; --text: #f2f2f7; --muted: #98989f; --line: #2c2c2e;
+    --accent: #0a84ff; --accent2: #409cff; --soft: #0d2440; --warn-bg: #3a2c0c; --warn: #ffd27a;
+    --shadow: 0 10px 30px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #000000; --panel: #1c1c1e; --text: #f2f2f7; --muted: #98989f; --line: #2c2c2e;
+  --accent: #0a84ff; --accent2: #409cff; --soft: #0d2440; --warn-bg: #3a2c0c; --warn: #ffd27a;
+  --shadow: 0 10px 30px rgba(0,0,0,.5);
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 17px/1.55 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+a { color: var(--accent); }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+header.top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; gap: 12px; height: 56px; }
+.logo { font-weight: 700; font-size: 19px; display: flex; align-items: center; gap: 8px; }
+.logo span { font-size: 22px; }
+header.top nav { margin-left: auto; display: flex; gap: 18px; font-size: 15px; }
+header.top nav a { color: var(--muted); text-decoration: none; }
+header.top nav a:hover { color: var(--text); }
+.hero { text-align: center; padding: 56px 0 28px; }
+.hero h1 { font-size: clamp(32px, 6vw, 54px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -.02em; }
+.hero p.lead { font-size: clamp(17px, 2.4vw, 21px); color: var(--muted); max-width: 720px; margin: 0 auto 28px; }
+.btn { display: inline-flex; align-items: center; gap: 14px; text-decoration: none; color: #fff;
+  background: linear-gradient(#2f95ff, var(--accent2)); border-radius: 22px; padding: 18px 34px;
+  box-shadow: 0 10px 26px rgba(10,132,255,.35); transition: transform .12s ease, box-shadow .12s ease; }
+.btn:hover { transform: translateY(-2px); box-shadow: 0 14px 32px rgba(10,132,255,.45); }
+.btn:active { transform: translateY(0); }
+.btn svg { flex: none; }
+.btn b { display: block; font-size: 24px; line-height: 1.2; }
+.btn small { display: block; font-size: 14px; opacity: .9; }
+.meta { margin-top: 14px; color: var(--muted); font-size: 14px; }
+.meta .ver { display: inline-block; background: var(--soft); color: var(--accent); border-radius: 999px;
+  padding: 2px 10px; font-weight: 600; }
+.phone-note { display: none; max-width: 620px; margin: 20px auto 0; background: var(--warn-bg); color: var(--warn);
+  border-radius: 14px; padding: 12px 16px; font-size: 15px; }
+.shot { margin: 34px auto 0; max-width: 980px; border-radius: 18px; overflow: hidden; box-shadow: var(--shadow);
+  border: 1px solid var(--line); background: var(--panel); }
+.shot img { display: block; width: 100%; height: auto; }
+section { padding: 52px 0 12px; }
+section h2 { font-size: clamp(26px, 4vw, 36px); margin: 0 0 8px; letter-spacing: -.01em; }
+section p.sub { color: var(--muted); margin: 0 0 26px; }
+.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; counter-reset: s; }
+.step { background: var(--panel); border-radius: 18px; padding: 20px; box-shadow: var(--shadow); position: relative; }
+.step .n { width: 40px; height: 40px; border-radius: 12px; background: var(--accent); color: #fff; font-weight: 700;
+  display: grid; place-items: center; font-size: 20px; margin-bottom: 10px; }
+.step h3 { margin: 0 0 6px; font-size: 19px; }
+.step p { margin: 0; color: var(--muted); font-size: 15.5px; }
+.step p b { color: var(--text); }
+.warn { margin-top: 18px; background: var(--warn-bg); color: var(--warn); border-radius: 14px; padding: 14px 18px;
+  font-size: 15.5px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+.card { background: var(--panel); border-radius: 18px; padding: 18px 20px; box-shadow: var(--shadow); }
+.card .ic { font-size: 28px; }
+.card h3 { margin: 6px 0 4px; font-size: 18px; }
+.card p { margin: 0; color: var(--muted); font-size: 15px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: center; }
+@media (max-width: 760px) { .two { grid-template-columns: 1fr; } header.top nav { display: none; } }
+details { background: var(--panel); border-radius: 14px; padding: 14px 18px; margin-bottom: 10px; box-shadow: var(--shadow); }
+details summary { cursor: pointer; font-weight: 600; list-style: none; }
+details summary::-webkit-details-marker { display: none; }
+details summary::before { content: "＋"; color: var(--accent); margin-right: 10px; font-weight: 700; }
+details[open] summary::before { content: "－"; }
+details p, details ol { color: var(--muted); margin: 10px 0 0; font-size: 15.5px; }
+.news { background: var(--panel); border-radius: 18px; padding: 18px 22px; box-shadow: var(--shadow); }
+.news ul { margin: 8px 0 0; padding-left: 20px; color: var(--muted); }
+.contact { text-align: center; padding: 50px 0 60px; }
+.contact .row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
+.pill { display: inline-flex; align-items: center; gap: 8px; background: var(--panel); border-radius: 999px;
+  padding: 12px 20px; text-decoration: none; color: var(--text); box-shadow: var(--shadow); font-weight: 600; }
+footer { text-align: center; color: var(--muted); font-size: 13px; padding: 20px 0 40px; border-top: 1px solid var(--line); }
+.theme { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 10px; padding: 6px 8px; display: grid; place-items: center;
+  cursor: pointer; font-size: 14px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="logo"><span>⚖️</span> LegalHelper</div>
+    <nav>
+      <a href="#install">Установка</a>
+      <a href="#features">Возможности</a>
+      <a href="#faq">Вопросы</a>
+      <a href="#contact">Связь</a>
+    </nav>
+    <button class="theme" id="theme" title="Светлая / тёмная тема" aria-label="Светлая или тёмная тема"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 1.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/></svg></button>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="hero">
+    <h1>Рабочее место юриста<br>в одной программе</h1>
+    <p class="lead">Дела, сроки и напоминания, все документы дела одним PDF, шаблоны исков и ходатайств,
+      расчёты, опись почты — и дела на телефоне перед заседанием. Бесплатно. Всё хранится на вашем компьютере.</p>
+    <a class="btn" id="dl" href="https://github.com/ezdk20000-code/LegalHelper/archive/refs/heads/main.zip">
+      <svg width="46" height="46" viewBox="0 0 46 46" aria-hidden="true"><circle cx="23" cy="23" r="23" fill="#fff" opacity=".18"/>
+        <path d="M23 11v17M15 21l8 8 8-8M13 34h20" stroke="#fff" stroke-width="3.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span><b>Скачать LegalHelper</b><small>для Windows 10 и 11 · бесплатно</small></span>
+    </a>
+    <div class="meta">Версия <span class="ver" id="ver">…</span> · обновления ставятся сами ·
+      <a href="https://github.com/ezdk20000-code/LegalHelper">исходный код на GitHub</a></div>
+    <div class="phone-note" id="phoneNote">📱 Вы открыли страницу с телефона. Сама программа работает на компьютере с
+      Windows — откройте эту страницу на компьютере, чтобы установить. А дела на телефоне можно читать через
+      Яндекс Диск (настраивается в программе).</div>
+    <div class="shot"><img src="img/01_main.png" alt="Окно программы LegalHelper: дело, сроки, документы" loading="lazy"></div>
+  </div>
+
+  <section id="install">
+    <h2>Как установить — 4 шага</h2>
+    <p class="sub">Первая установка занимает 10–20 минут: программа сама скачивает всё нужное. Потом обновления ставятся сами.</p>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><h3>Скачайте</h3>
+        <p>Нажмите синюю кнопку <b>«Скачать LegalHelper»</b> вверху. Файл <b>LegalHelper-main.zip</b> появится в папке <b>«Загрузки»</b>.</p></div>
+      <div class="step"><div class="n">2</div><h3>Распакуйте</h3>
+        <p>Щёлкните по архиву <b>правой кнопкой мыши</b> → <b>«Извлечь все…»</b> → <b>«Извлечь»</b>. Откроется папка LegalHelper-main.</p></div>
+      <div class="step"><div class="n">3</div><h3>Запустите</h3>
+        <p>В этой папке дважды щёлкните файл <b>«УСТАНОВИТЬ»</b>. Откроется чёрное окно — <b>не закрывайте его</b>, просто подождите.</p></div>
+      <div class="step"><div class="n">4</div><h3>Готово</h3>
+        <p>Программа откроется сама, на рабочем столе появится ярлык <b>LegalHelper</b>. Пройдите <b>обучение со стрелками</b> — 10 минут.</p></div>
+    </div>
+    <div class="warn">⚠️ Если Windows покажет синее окно <b>«Windows защитила ваш компьютер»</b> — нажмите
+      <b>«Подробнее»</b> → <b>«Выполнить в любом случае»</b>. Это обычное предупреждение для программ, скачанных не из
+      магазина Microsoft. Программа собирается прямо на вашем компьютере из открытого кода.</div>
+  </section>
+
+  <section id="features">
+    <h2>Что умеет</h2>
+    <p class="sub">Всё, что нужно юристу каждый день, — без лишних программ.</p>
+    <div class="grid">
+      <div class="card"><div class="ic">📁</div><h3>Дела</h3><p>Карточка дела, суды и инстанции, стороны, ссылка на дело на сайте суда.</p></div>
+      <div class="card"><div class="ic">📚</div><h3>Одно дело — один PDF</h3><p>Все документы дела собираются в один файл: Word, сканы, PDF. Перетаскивайте мышкой.</p></div>
+      <div class="card"><div class="ic">⏰</div><h3>Сроки и напоминания</h3><p>Заседания, процессуальные сроки, всплывающие напоминания в нужное время.</p></div>
+      <div class="card"><div class="ic">📝</div><h3>Шаблоны</h3><p>Иски, ходатайства, жалобы, заявления — поля дела подставляются сами.</p></div>
+      <div class="card"><div class="ic">✏️</div><h3>Редактор PDF</h3><p>Текст, подпись, печать, маркер, удаление и поворот страниц, сжатие, распознавание сканов.</p></div>
+      <div class="card"><div class="ic">📮</div><h3>Для суда и почты</h3><p>Пакет для «Мой арбитр», опись вложения ф. 107, нумерация листов, «Копия верна».</p></div>
+      <div class="card"><div class="ic">🧮</div><h3>Расчёты</h3><p>Процессуальные сроки, госпошлина, проценты по ст. 395 ГК и неустойка.</p></div>
+      <div class="card"><div class="ic">📱</div><h3>Дела на телефоне</h3><p>Памятка к заседанию и все документы — через ваш Яндекс Диск, даже без интернета.</p></div>
+      <div class="card"><div class="ic">🎓</div><h3>Обучение</h3><p>Программа сама стрелками покажет, куда нажимать. Справка — энциклопедия со 130 статьями.</p></div>
+    </div>
+    <div class="two" style="margin-top:26px">
+      <div class="shot" style="margin:0"><img src="img/15_docs.png" alt="Документы дела и PDF дела" loading="lazy"></div>
+      <div><h3 style="font-size:22px;margin:0 0 8px">Все документы дела — в одном файле</h3>
+        <p style="color:var(--muted);margin:0">Слева — список документов, справа — «PDF дела». Добавили договор или
+          претензию — они встали в общий файл. Правите в Word — страницы обновляются сами. «Сохранить» кладёт
+          файл в папку дела, без лишних копий.</p></div>
+    </div>
+  </section>
+
+  <section id="news">
+    <h2>Что нового</h2>
+    <div class="news" id="newsBox"><b>Версия <span id="ver2">…</span></b><ul id="notes"><li>Загружаю список изменений…</li></ul>
+      <p style="margin:10px 0 0"><a href="https://github.com/ezdk20000-code/LegalHelper/blob/main/CHANGELOG.md">Подробная история всех версий →</a></p></div>
+  </section>
+
+  <section id="faq">
+    <h2>Частые вопросы</h2>
+    <details><summary>Это правда бесплатно?</summary><p>Да. Программа бесплатная, без рекламы и подписок.
+      Её код открыт на GitHub.</p></details>
+    <details><summary>Где хранятся мои дела и документы?</summary><p>Только на вашем компьютере: в папке
+      «Документы → LegalHelper». Программа никуда их не отправляет. Если вы сами включите «Дела на телефоне» —
+      файлы пойдут в <b>ваш</b> Яндекс Диск.</p></details>
+    <details><summary>Установка пишет «запущен прямо из архива»</summary><p>Архив не распакован. Щёлкните по
+      LegalHelper-main.zip правой кнопкой → «Извлечь все…» → «Извлечь», и запустите «УСТАНОВИТЬ» из новой папки.</p></details>
+    <details><summary>Пишет «Python не установился»</summary><ol>
+      <li>Откройте <a href="https://www.python.org/downloads/">python.org/downloads</a> и нажмите «Download Python».</li>
+      <li>В установщике <b>обязательно отметьте галочку «Add python.exe to PATH»</b> внизу окна.</li>
+      <li>Нажмите «Install Now», дождитесь конца и снова запустите «УСТАНОВИТЬ».</li></ol></details>
+    <details><summary>Антивирус ругается на файл</summary><p>Разрешите файл «УСТАНОВИТЬ» / update.bat: это
+      скрипт, который собирает программу из открытого кода прямо на вашем компьютере. Антивирусы часто
+      осторожничают с такими скриптами.</p></details>
+    <details><summary>Нужен ли Microsoft Word?</summary><p>Для большинства функций — нет. Чтобы превращать
+      Word-файлы в PDF, нужен Microsoft Word или бесплатный <a href="https://ru.libreoffice.org/download/">LibreOffice</a>.</p></details>
+    <details><summary>Как обновлять программу?</summary><p>Никак — она обновляется сама: при запуске появится
+      плашка «Доступна новая версия» с кнопками «Что нового» и «Установить сейчас». Дела и настройки сохраняются.</p></details>
+    <details><summary>Есть ли версия для Mac или телефона?</summary><p>Программа — для Windows. На телефоне
+      (iPhone и Android) дела можно читать через Яндекс Диск: в деле нажмите «📱 На телефон», и помощник всё объяснит.</p></details>
+  </section>
+
+  <section id="contact" class="contact">
+    <h2>Связь с разработчиком</h2>
+    <p class="sub" style="margin:0">Не получилось установить, нашли ошибку или есть идея — напишите.</p>
+    <div class="row">
+      <a class="pill" href="mailto:axis.juris@bk.ru">✉️ axis.juris@bk.ru</a>
+      <a class="pill" href="https://t.me/axis_juris">✈️ Telegram @axis_juris</a>
+    </div>
+  </section>
+</main>
+<footer>LegalHelper · бесплатная программа для юристов · <a href="https://github.com/ezdk20000-code/LegalHelper">GitHub</a></footer>
+
+<script>
+(function () {
+  // тема: как в системе, по кнопке — светлая/тёмная (запоминается, если браузер разрешает)
+  var root = document.documentElement, key = "lh-theme";
+  try { var saved = localStorage.getItem(key); if (saved) root.setAttribute("data-theme", saved); } catch (e) {}
+  document.getElementById("theme").addEventListener("click", function () {
+    var dark = root.getAttribute("data-theme") ? root.getAttribute("data-theme") === "dark"
+      : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    var next = dark ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem(key, next); } catch (e) {}
+  });
+  // с телефона — подсказка, что программа для Windows
+  if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) document.getElementById("phoneNote").style.display = "block";
+  // текущая версия и что нового — из того же version.json, что проверяет программа
+  fetch("https://raw.githubusercontent.com/ezdk20000-code/LegalHelper/main/version.json", {cache: "no-store"})
+    .then(function (r) { return r.json(); })
+    .then(function (v) {
+      document.getElementById("ver").textContent = v.version;
+      document.getElementById("ver2").textContent = v.version;
+      var ul = document.getElementById("notes"); ul.innerHTML = "";
+      (v.notes || []).forEach(function (n) { var li = document.createElement("li"); li.textContent = n; ul.appendChild(li); });
+    })
+    .catch(function () {
+      document.getElementById("ver").textContent = "последняя";
+      document.getElementById("ver2").textContent = "последняя";
+      document.getElementById("notes").innerHTML = "<li>Список изменений — по ссылке ниже.</li>";
+    });
+})();
+</script>
+</body>
+</html>
