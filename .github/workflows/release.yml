@@ -47,6 +47,35 @@ jobs:
           python -m pip uninstall -y pymupdf4llm pymupdf_layout onnxruntime
           python -m pip list
 
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Свой стартовый файл PyInstaller
+        shell: pwsh
+        run: |
+          # Стартовый файл PyInstaller (runw.exe → LegalHelper.exe) берёт из COMCTL32 функцию LoadIconMetric
+          # (порядковый номер 380) — только чтобы нарисовать значок в окне ошибки. Она есть лишь в новой версии
+          # COMCTL32, которую Windows выдаёт по манифесту; на некоторых компьютерах этого не происходит, и
+          # программа не запускалась: «Порядковый номер 380 не найден … LegalHelper.exe». Собираем стартовый
+          # файл сами, с обычным значком (LoadIconW, так предусмотрено в исходнике PyInstaller).
+          $ver = (python -c "import PyInstaller; print(PyInstaller.__version__)").Trim()
+          python -m pip download "pyinstaller==$ver" --no-deps --no-binary=:all: -d pyi_src
+          tar -xzf (Get-ChildItem pyi_src\*.tar.gz).FullName -C pyi_src
+          $root = (Get-ChildItem pyi_src -Directory | Select-Object -First 1).FullName
+          $c = Join-Path $root "bootloader\src\pyi_exception_dialog.c"
+          $txt = Get-Content $c -Raw
+          $new = $txt -replace '#if 0(\s+dialog->hErrorIcon = LoadIconW)', '#if 1$1'
+          if ($new -eq $txt) { throw "Не нашёл место с LoadIconMetric в $c" }
+          Set-Content $c $new -NoNewline
+          Push-Location (Join-Path $root "bootloader")
+          python ./waf all --target-arch=64bit
+          if ($LASTEXITCODE -ne 0) { throw "Стартовый файл не собрался" }
+          Pop-Location
+          $dst = python -c "import PyInstaller, os; print(os.path.join(os.path.dirname(PyInstaller.__file__), 'bootloader', 'Windows-64bit-intel'))"
+          Copy-Item (Join-Path $root "PyInstaller\bootloader\Windows-64bit-intel\*.exe") $dst.Trim() -Force
+          python -m pip install pefile
+          python -c "import pefile,sys,os; p=os.path.join(sys.argv[1],'runw.exe'); d=[e.dll.decode() for e in pefile.PE(p).DIRECTORY_ENTRY_IMPORT]; print(p, d); sys.exit(1 if any('COMCTL' in x.upper() for x in d) else 0)" $dst.Trim()
+          if ($LASTEXITCODE -ne 0) { throw "В стартовом файле осталась зависимость от COMCTL32" }
+
       - name: Сборка программы
         run: >
           python -m PyInstaller --noconfirm --clean --windowed --log-level WARN --name LegalHelper --icon app.ico
@@ -79,6 +108,8 @@ jobs:
             Write-Host "$n $((Get-Item $src).VersionInfo.FileVersion)"
           }
           if (Get-ChildItem $dist -Recurse -Filter "onnxruntime*.dll") { throw "В сборку попал onnxruntime" }
+          python -c "import pefile,sys; d=[e.dll.decode() for e in pefile.PE(sys.argv[1]).DIRECTORY_ENTRY_IMPORT]; print(d); sys.exit(1 if any('COMCTL' in x.upper() for x in d) else 0)" "$dist\LegalHelper.exe"
+          if ($LASTEXITCODE -ne 0) { throw "LegalHelper.exe всё ещё требует COMCTL32" }
 
       - name: Проверка сборки
         shell: pwsh

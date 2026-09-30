@@ -2,11 +2,11 @@
 "files": [
 {
 "path": ".github/workflows/release.yml",
-"size": 7510
+"size": 10330
 },
 {
 "path": "CHANGELOG.md",
-"size": 62022
+"size": 63262
 },
 {
 "path": "README.md",
@@ -394,7 +394,7 @@
 },
 {
 "path": "version.json",
-"size": 892
+"size": 852
 },
 {
 "path": "УСТАНОВИТЬ.bat",

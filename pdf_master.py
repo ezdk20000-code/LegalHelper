@@ -41,7 +41,7 @@ import phone_export as PHX
 import palette
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.0.2"
+APP_VERSION = "3.0.3"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
