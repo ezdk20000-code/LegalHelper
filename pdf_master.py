@@ -13,9 +13,10 @@ from pathlib import Path
 
 import pymupdf as fitz
 from PySide6.QtCore import (Qt, QSize, QTimer, Signal, QPointF, QRectF, QUrl, QByteArray, QBuffer,
-                            QIODevice)
+                            QIODevice, QEvent)
 from PySide6.QtGui import (QAction, QActionGroup, QIcon, QImage, QPixmap, QPainter, QPen, QColor,
-                           QFont, QKeySequence, QDesktopServices, QPainterPath, QPalette, QFontDatabase)
+                           QFont, QKeySequence, QDesktopServices, QPainterPath, QPalette, QFontDatabase,
+                           QCursor)
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QListWidget, QListWidgetItem, QListView, QAbstractItemView,
     QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton, QToolBar, QFileDialog, QMessageBox,
@@ -37,9 +38,10 @@ import timer_widget as TW
 import extwatch
 import tutorial
 import phone_export as PHX
+import palette
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "2.9"
+APP_VERSION = "3.0"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -1868,6 +1870,9 @@ class MainWindow(QMainWindow):
             me.addAction(a)
         me.addSeparator()
         me.addAction("🗑 Корзина…", self.show_trash)
+        a_find = me.addAction("🔍 Поиск по всему…", lambda: palette.show(self))
+        a_find.setShortcut("Ctrl+K")
+        self.addAction(a_find)
         mv = mb.addMenu("Вид")
         mtheme = mv.addMenu("Тема оформления")
         grp = QActionGroup(self)
@@ -1884,8 +1889,8 @@ class MainWindow(QMainWindow):
             a.triggered.connect(lambda _=False, k=key: self.set_theme(k))
         mv.addSeparator()
         for i, (name, key) in enumerate((("Обзор дела", "overview"), ("Документы", "docs"),
-                                         ("Подготовить", "prepare"), ("Сроки и заседания", "events"),
-                                         ("Расчёты", "calc"), ("Карта дела", "board"))):
+                                         ("Создать документ", "prepare"), ("Сроки", "events"),
+                                         ("Деньги", "money"), ("Сведения", "info"))):
             a = mv.addAction(name, lambda key=key: self.open_case_tab(key))
             a.setShortcut(f"Ctrl+{i + 1}")
         a_anim = mv.addAction("Анимации")
@@ -2015,6 +2020,8 @@ class MainWindow(QMainWindow):
         self.pages = PageList()
         self.pages.orderChanged.connect(self.on_reorder)
         self.pages.filesDropped.connect(lambda paths, idx: self.open_paths(paths, insert_at=idx))
+        self.pages.installEventFilter(self)
+        self.pages.viewport().installEventFilter(self)
         self.pages.itemDoubleClicked.connect(self._page_double)
         self.pages.setContextMenuPolicy(Qt.CustomContextMenu)
         self.pages.customContextMenuRequested.connect(self.context_menu)
@@ -2036,7 +2043,15 @@ class MainWindow(QMainWindow):
         sub.setObjectName("brandsub")
         sv.addWidget(brand)
         sv.addWidget(sub)
-        sv.addSpacing(14)
+        sv.addSpacing(10)
+        gs = QPushButton("🔍   Найти что угодно…        Ctrl+K")
+        gs.setObjectName("globalsearch")
+        gs.setCursor(Qt.PointingHandCursor)
+        gs.setToolTip("Поиск по всему: дела, документы, сроки, шаблоны, инструменты и справка")
+        gs.clicked.connect(lambda: palette.show(self))
+        self.b_global_search = gs
+        sv.addWidget(gs)
+        sv.addSpacing(8)
 
         self.cases_page = U.CasesPage(self)
         self.cases_page.openFile.connect(lambda p, pg: self.open_external(p, pg, self.cases_page.cid))
@@ -3577,13 +3592,84 @@ class MainWindow(QMainWindow):
         self.modified = False
         QApplication.quit()
 
+    # --- файлы можно бросить в любое место окна
+    @staticmethod
+    def _drop_paths(md):
+        return [u.toLocalFile() for u in md.urls() if u.isLocalFile() and os.path.isfile(u.toLocalFile())] \
+            if md.hasUrls() else []
+
+    def _drop_hint(self):
+        if self.stack.currentWidget() is self.cases_page and self.mode_cid:
+            c = U.db().case(self.mode_cid) or {}
+            return f"Отпустите — файлы добавятся в дело «{c.get('title', '')}» и в его PDF"
+        return "Отпустите — файлы откроются в «Без дела — просто PDF»"
+
+    def show_drop_overlay(self, on):
+        ov = getattr(self, "_drop_ov", None)
+        if ov is None:
+            ov = QLabel(self)
+            ov.setObjectName("dropoverlay")
+            ov.setAlignment(Qt.AlignCenter)
+            ov.setWordWrap(True)
+            ov.setAttribute(Qt.WA_TransparentForMouseEvents)    # не мешает бросить файл на то, что под ней
+            self._drop_ov = ov
+        if not on:
+            ov.hide()
+            return
+        ov.setStyleSheet(f"QLabel#dropoverlay {{ background: rgba(0,122,255,0.10); border: 3px dashed {T['accent']};"
+                         f" border-radius: 18px; color: {T['accent']}; font-size: 17pt; font-weight: 700; }}")
+        ov.setText("⬇\n" + self._drop_hint())
+        ov.setGeometry(self.centralWidget().geometry().adjusted(8, 8, -8, -8))
+        ov.show()
+        ov.raise_()
+
+    def drop_files(self, paths):
+        """Файлы брошены на окно (не на страницы): в деле — в дело, иначе — в «Без дела»."""
+        if not paths:
+            return
+        if self.stack.currentWidget() is self.cases_page and self.mode_cid:
+            self.open_case_tab("docs")
+            self.show_main_ws(self.mode_cid)
+            self.open_paths(paths)
+        else:
+            self.enter_loose()
+            self.loose_tabs.setCurrentIndex(0)
+            self.open_paths(paths, replace=True)
+
     def dragEnterEvent(self, e):
-        if e.mimeData().hasUrls():
+        if self._drop_paths(e.mimeData()):
+            e.acceptProposedAction()
+            self.show_drop_overlay(True)
+
+    def dragMoveEvent(self, e):
+        if self._drop_paths(e.mimeData()):
             e.acceptProposedAction()
 
+    def dragLeaveEvent(self, e):
+        self._drop_left()
+
+    def _drop_left(self):
+        # переход между частями окна тоже даёт «уход» — прячем, только если курсор правда вышел из окна
+        QTimer.singleShot(80, lambda: self.frameGeometry().contains(QCursor.pos()) or self.show_drop_overlay(False))
+
     def dropEvent(self, e):
-        paths = [u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile()]
-        self.open_paths(paths)
+        self.show_drop_overlay(False)
+        paths = self._drop_paths(e.mimeData())
+        if paths:
+            e.acceptProposedAction()
+            QTimer.singleShot(0, lambda: self.drop_files(paths))
+
+    def eventFilter(self, obj, ev):
+        """Подсказка «Отпустите — …» и над страницами (они сами принимают файлы и событие до окна не доходит).
+        Фильтр стоит только на области страниц, а не на всём приложении: так он не мешает встроенному браузеру."""
+        t = ev.type()
+        if t == QEvent.DragEnter and self._drop_paths(ev.mimeData()) and ev.source() is None:
+            self.show_drop_overlay(True)
+        elif t == QEvent.DragLeave:
+            self._drop_left()
+        elif t == QEvent.Drop:
+            QTimer.singleShot(0, lambda: self.show_drop_overlay(False))
+        return super().eventFilter(obj, ev)
 
     # ------------------------------------------------------------- page ops
     def on_reorder(self):
@@ -4000,15 +4086,48 @@ class MainWindow(QMainWindow):
         cp.l_docs.setColumnWidth(2, 128)
         prepare = U.PrepareTab(self, None)
         self.case_calc_slot = self._slot()
-        order = [("overview", "Обзор", self.overview), ("docs", "Документы", docs), ("prepare", "Подготовить", prepare),
-                 ("events", "Сроки и заседания", cp.events_tab), ("calc", "Расчёты", self.case_calc_slot),
-                 ("board", "Карта дела", cp.board_tab), ("info", "Сведения о деле", by_name.get("Сведения")),
-                 ("laws", "Нормы права", cp.laws_tab), ("money", "Время и оплата", by_name.get("Время и оплата")),
+        # «Деньги»: учёт времени и оплат + калькуляторы (пошлина, проценты, сроки) — переключателем сверху
+        money = QWidget()
+        mv = QVBoxLayout(money)
+        mv.setContentsMargins(0, 8, 0, 0)
+        mv.setSpacing(6)
+        mseg = QTabBar()
+        mseg.setObjectName("docseg")
+        mseg.setDrawBase(False)
+        mseg.addTab("⏱  Время и оплата")
+        mseg.addTab("🧮  Калькуляторы")
+        mseg.setUsesScrollButtons(False)
+        mseg.setTabToolTip(1, "Госпошлина, проценты ст. 395 ГК и неустойка, процессуальные сроки")
+        mrow = QHBoxLayout()
+        mrow.addWidget(mseg)
+        mrow.addStretch(1)
+        mv.addLayout(mrow)
+        self.money_stack = QStackedWidget()
+        self.money_stack.addWidget(by_name.get("Время и оплата"))
+        self.money_stack.addWidget(self.case_calc_slot)
+        mseg.currentChanged.connect(self.money_stack.setCurrentIndex)
+        mseg.currentChanged.connect(lambda *_: anim.fade_in(self.money_stack.currentWidget()))
+        self.money_seg = mseg
+        mv.addWidget(self.money_stack, 1)
+        # понятные названия; редкое — в «Ещё ▾»
+        order = [("overview", "Обзор", self.overview), ("docs", "Документы", docs),
+                 ("prepare", "Создать документ", prepare), ("events", "Сроки", cp.events_tab),
+                 ("money", "Деньги", money), ("info", "Сведения", by_name.get("Сведения")),
+                 ("board", "Карта дела", cp.board_tab), ("laws", "Нормы права", cp.laws_tab),
                  ("quotes", "Выписки", by_name.get("Выписки"))]
         self.case_tab_keys = {}
         for key, title, w in order:
             self.case_tab_keys[key] = tabs.addTab(w, title)
-        self.hidden_tabs = [self.case_tab_keys[k] for k in ("info", "laws", "money", "quotes")]
+        self.case_tab_keys["calc"] = self.case_tab_keys["money"]
+        tips = {"overview": "Главное по делу: ближайшие сроки, заметки к заседанию, последние документы",
+                "docs": "Документы дела и «PDF дела» — все документы одним файлом",
+                "prepare": "Документ по шаблону, пакет в суд, опись — и все инструменты для PDF",
+                "events": "Заседания, процессуальные сроки и задачи — с напоминаниями",
+                "money": "Учёт времени и оплат, калькуляторы госпошлины, процентов и сроков",
+                "info": "Суд, номер дела, стороны, инстанции, папка дела"}
+        for key, tip in tips.items():
+            tabs.setTabToolTip(self.case_tab_keys[key], tip)
+        self.hidden_tabs = [self.case_tab_keys[k] for k in ("board", "laws", "quotes")]
         for i in self.hidden_tabs:
             tabs.setTabVisible(i, False)
         more = QToolButton()
@@ -4016,8 +4135,7 @@ class MainWindow(QMainWindow):
         more.setText("Ещё ▾")
         more.setPopupMode(QToolButton.InstantPopup)
         mm = QMenu(more)
-        for key, title in (("info", "Сведения о деле"), ("laws", "Нормы права"), ("money", "Время и оплата"),
-                           ("quotes", "Выписки")):
+        for key, title in (("board", "🗺️ Карта дела"), ("laws", "📚 Нормы права"), ("quotes", "✂️ Выписки")):
             mm.addAction(title, lambda k=key: self.open_case_tab(k))
         mm.addSeparator()
         mm.addAction("📁 Открыть папку дела", lambda: U.open_case_folder(self.mode_cid))
@@ -4051,6 +4169,8 @@ class MainWindow(QMainWindow):
             self.enter_case(cid)
         self.stack.setCurrentWidget(self.cases_page)
         self.cases_page.tabs.setCurrentIndex(self.case_tab_keys[key])
+        if key in ("calc", "money"):
+            self.money_seg.setCurrentIndex(1 if key == "calc" else 0)
 
     def _first_case(self):
         try:
@@ -5343,6 +5463,9 @@ QToolBar QLabel#doctitle {{ color: {t['text']}; font-family: "{S}"; font-size: 1
 QToolBar#pagebar QLabel#doctitle {{ font-size: 11pt; padding-right: 8px; }}
 
 /* уведомления сверху — скруглённые плашки */
+QPushButton#globalsearch {{ text-align: left; padding: 8px 12px; border-radius: 10px; background: {t['panel']};
+    color: {t['muted']}; border: 1px solid {t['border']}; }}
+QPushButton#globalsearch:hover {{ border-color: {t['accent']}; color: {t['text']}; }}
 QPushButton#banner {{ background: {t['banner']}; color: {t['banner_text']}; border: none; border-radius: 12px;
     margin: 10px 18px 0 18px; padding: 10px 16px; text-align: left; font-weight: 600; }}
 QPushButton#banner:hover {{ background: {t['banner']}; text-decoration: underline; }}

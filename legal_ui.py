@@ -1967,6 +1967,23 @@ NO_DOC_TOOLS = {"merge", "img2pdf", "word2pdf", "xls2pdf", "ppt2pdf", "html2pdf"
                 "blank"}
 
 
+def tool_callable(m, key):
+    """Что делает карточка инструмента (вкладка «Создать документ», поиск Ctrl+K)."""
+    special = {
+        "template": lambda: tool_template(m, m.cases_page.cid),
+        "package": lambda: m.tool_package(), "f107": lambda: m.tool_f107(),
+        "board": lambda: m.open_case_tab("board"), "case_search": lambda: m.tool_case_search(),
+        "compare_ed": lambda: m.tool_compare_ed(),
+        "calc_deadline": lambda: m.show_calc(0), "calc_duty": lambda: m.show_calc(1),
+        "calc_interest": lambda: m.show_calc(2),
+    }
+    if key in special:
+        return special[key]
+    if key in NO_DOC_TOOLS:
+        return lambda: (m.open_case_tab("docs"), m.run_tool(key))
+    return lambda: m.run_doc_tool(key)
+
+
 class PrepareTab(QWidget):
     """Подготовить: все инструменты для документов дела — крупными карточками по разделам, с поиском
     и прокруткой. Комплект для подачи — во вкладке «Документы»."""
@@ -1999,8 +2016,35 @@ class PrepareTab(QWidget):
         v.setContentsMargins(2, 6, 10, 14)
         v.setSpacing(8)
         self.sections = []                       # (заголовок, сетка-виджет, [(карточка, текст для поиска)])
+        # сверху крупно — то, ради чего сюда приходят чаще всего: создать документ для суда
+        hero = [("template", "📝", "По шаблону", "Иск, ходатайство, жалоба"),
+                ("package", "📦", "Пакет в суд", "Иск и приложения одним PDF"),
+                ("f107", "📮", "Опись ф. 107", "Для ценного письма")]
+        hcards = []
+        for key, icon, label, tip in hero:
+            card = ActionCard(icon, label, tip, self._slot(key), key if key in HELP else None)
+            hcards.append((card, f"{label} {tip} создать документ".lower()))
+        hlab = QLabel("Создать документ")
+        hlab.setObjectName("subtitle")
+        hbox = QWidget()
+        hg = card_grid([c for c, _t in hcards], cols=3)
+        hg.setContentsMargins(0, 2, 0, 10)
+        hbox.setLayout(hg)
+        hbox.setProperty("cols", 3)
+        hbox.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        v.addWidget(hlab)
+        v.addWidget(hbox)
+        self.sections.append((hlab, hbox, hcards))
+        tools_lab = QLabel("Все инструменты для документов дела")
+        tools_lab.setObjectName("hint")
+        v.addSpacing(6)
+        v.addWidget(tools_lab)
+        self.tools_lab = tools_lab
         for cat, items in M.TOOLS:
             cards = []
+            items = [it for it in items if it[0] not in {k for k, *_ in hero}]    # они уже наверху
+            if not items:
+                continue
             for key, label, tip in items:
                 card = ActionCard(TOOL_ICONS.get(key, "•"), label, tip, self._slot(key),
                                   key if key in HELP else None)
@@ -2027,20 +2071,7 @@ class PrepareTab(QWidget):
         v.addStretch(1)
 
     def _slot(self, key):
-        m = self.main
-        special = {
-            "template": lambda: tool_template(m, m.cases_page.cid),
-            "package": lambda: m.tool_package(), "f107": lambda: m.tool_f107(),
-            "board": lambda: m.open_case_tab("board"), "case_search": lambda: m.tool_case_search(),
-            "compare_ed": lambda: m.tool_compare_ed(),
-            "calc_deadline": lambda: m.show_calc(0), "calc_duty": lambda: m.show_calc(1),
-            "calc_interest": lambda: m.show_calc(2),
-        }
-        if key in special:
-            return special[key]
-        if key in NO_DOC_TOOLS:
-            return lambda: (m.open_case_tab("docs"), m.run_tool(key))
-        return lambda: m.run_doc_tool(key)
+        return tool_callable(self.main, key)
 
     def filter(self, text):
         t = text.lower().strip()
@@ -2051,11 +2082,13 @@ class PrepareTab(QWidget):
             for c, _hay in cards:
                 grid.removeWidget(c)
                 c.setVisible(c in vis)
+            cols = box.property("cols") or self.COLS
             for i, c in enumerate(vis):                   # переложить найденные плотно, без дыр
-                grid.addWidget(c, i // self.COLS, i % self.COLS)
+                grid.addWidget(c, i // cols, i % cols)
             lab.setVisible(bool(vis))
             box.setVisible(bool(vis))
             shown += len(vis)
+        self.tools_lab.setVisible(not t)
         self.nothing.setVisible(shown == 0)
 
 
@@ -2080,7 +2113,7 @@ class CasesPage(QWidget):
         lv.setContentsMargins(14, 14, 14, 14)
         lv.addLayout(title_row("Дела", "cases", big=True))
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Поиск: номер, доверитель, суд…")
+        self.search.setPlaceholderText("Фильтр дел: номер, доверитель, суд…")
         self.search.textChanged.connect(self.reload)
         lv.addWidget(self.search)
         self.list = QListWidget()
@@ -2243,6 +2276,11 @@ class CasesPage(QWidget):
             b.clicked.connect(fn)
             r.addWidget(b)
         r.addStretch(1)
+        calc = QPushButton("⏱  Посчитать срок")
+        calc.setToolTip("Калькулятор процессуальных сроков с учётом выходных и праздников; "
+                        "результат можно сразу добавить в дело")
+        calc.clicked.connect(lambda: self.main.show_calc(0))
+        r.addWidget(calc)
         v.addLayout(r)
         self.tabs.addTab(w, "Сроки и заседания")
 
@@ -2256,7 +2294,8 @@ class CasesPage(QWidget):
         self.docs_stack.addWidget(self.l_docs)
         self.docs_empty = EmptyState("📄", "Документов пока нет",
                                      "Добавьте иск, договор, переписку — всё, что относится к делу. "
-                                     "Файлы сразу соберутся в один «PDF дела» справа.",
+                                     "Можно просто перетащить файлы мышкой в окно программы. "
+                                     "Они сразу соберутся в один «PDF дела» справа.",
                                      "+ Добавить файлы", lambda: self.add_docs())
         self.docs_stack.addWidget(self.docs_empty)
         v.addWidget(self.docs_stack, 1)
