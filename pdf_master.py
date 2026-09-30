@@ -5870,25 +5870,27 @@ def polish_ui(root):
         bar.setDrawBase(False)
 
 
-def _selftest():
+def _selftest(say):
     """Собрать главное окно и загрузить все библиотеки, которые программа подгружает позже (Word, Excel,
-    распознавание…). Код выхода 0 — всё на месте; иначе причина — в журнале ошибок. Окно не показывается."""
+    распознавание…). Код выхода 0 — всё на месте; иначе причина — в отчёте SELFTEST_LOG. Окно не показывается."""
     code = 0
     try:
         w = MainWindow()
+        say("MainWindow ok")
         QApplication.processEvents()
         for mod in ("pdf2docx", "cv2", "numpy", "docx", "pptx", "openpyxl", "palette",
                     "PySide6.QtWebEngineWidgets"):
             try:
                 __import__(mod)
+                say("import ok", mod)
             except Exception as e:
-                log_error(f"Пробный запуск: не загрузилось {mod}", e)
+                say("IMPORT FAILED", mod, repr(e))
                 code = 2
         w.hide()
-    except Exception as e:
-        log_error("Пробный запуск", e)
+    except Exception:
+        say("FAILED:\n" + traceback.format_exc())
         code = 1
-    sys.stdout.flush()
+    say("exit code", code)
     os._exit(code)
 
 
@@ -5899,7 +5901,44 @@ def _safe_delete(w):
         pass
 
 
+SELFTEST_LOG = os.path.join(tempfile.gettempdir(), "legalhelper_selftest.txt")
+
+
+def _selftest_guard():
+    """Для пробного запуска: никаких окон с вопросами (их некому закрыть) — всё в отчёт; зависание дольше
+    минуты — записать, где программа застряла, и выйти с кодом 3."""
+    import faulthandler
+    import threading
+    rep = open(SELFTEST_LOG, "w", encoding="utf-8", buffering=1)
+    rep.write(f"LegalHelper {APP_VERSION} selftest\n")
+    faulthandler.enable(rep)
+
+    def say(*a):
+        rep.write(" ".join(str(x) for x in a) + "\n")
+
+    def box(kind):
+        def f(*a, **k):
+            say(f"QMessageBox.{kind}:", *[x for x in a if isinstance(x, str)][:2])
+            return QMessageBox.No if kind == "question" else QMessageBox.Ok
+        return staticmethod(f)
+    for kind in ("warning", "information", "critical", "question"):
+        setattr(QMessageBox, kind, box(kind))
+    QDialog.exec = lambda self, *a: (say("QDialog.exec:", type(self).__name__, self.windowTitle()), 0)[1]
+    QMessageBox.exec = lambda self, *a: (say("QMessageBox.exec:", self.text()[:120]), 0)[1]
+
+    def watchdog():
+        import time
+        time.sleep(90)
+        say("ЗАВИСАНИЕ: где сейчас каждый поток:")
+        faulthandler.dump_traceback(rep, all_threads=True)
+        rep.flush()
+        os._exit(3)
+    threading.Thread(target=watchdog, daemon=True).start()
+    return say
+
+
 def main():
+    say = _selftest_guard() if "--selftest" in sys.argv else None
     if C.IS_WIN:
         try:  # своя иконка на панели задач
             import ctypes
@@ -5938,8 +5977,9 @@ def main():
                                                        app.topLevelWidgets() if hasattr(w, "refresh_theme")]))
     except Exception:
         pass
-    if "--selftest" in sys.argv:                # пробный запуск при сборке установщика (см. release.yml)
-        _selftest()
+    if say:                                     # пробный запуск при сборке установщика (см. release.yml)
+        say("QApplication ok, db ok")
+        _selftest(say)
     anim.ENABLED = str(settings().value("animations", "1")) != "0"
     splash = None
     if anim.ENABLED:                            # заставка, пока открывается главное окно

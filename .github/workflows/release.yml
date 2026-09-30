@@ -87,7 +87,10 @@ jobs:
           # пробный запуск: программа открывает главное окно без показа и сразу закрывается (код 0 — всё загрузилось)
           $env:QT_QPA_PLATFORM = "offscreen"
           $p = Start-Process dist\LegalHelper\LegalHelper.exe -ArgumentList "--selftest" -PassThru
-          if (-not $p.WaitForExit(180000)) { $p.Kill(); throw "Пробный запуск завис" }
+          $done = $p.WaitForExit(180000)
+          $log = Join-Path $env:TEMP "legalhelper_selftest.txt"
+          if (Test-Path $log) { Get-Content $log -Encoding utf8 | Write-Host } else { Write-Host "отчёта нет" }
+          if (-not $done) { $p.Kill(); throw "Пробный запуск завис" }
           if ($p.ExitCode -ne 0) { throw "Пробный запуск завершился с кодом $($p.ExitCode)" }
           Write-Host "Пробный запуск: OK"
 
