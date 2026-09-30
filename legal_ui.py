@@ -2707,6 +2707,14 @@ class CasesPage(QWidget):
         docs = db().docs(self.cid) if self.cid else []
         self.l_docs.load(docs)
         self.docs_stack.setCurrentIndex(0 if docs else 1)
+        if docs and hasattr(self.main, "prewarm_conversions"):
+            # Word-файлы, которых ещё нет в PDF дела, заранее тихо превращаем в PDF — перетащить их потом мгновенно
+            try:
+                in_pdf = self.main.case_pdf_sources(self.cid)
+            except Exception:
+                in_pdf = set()
+            todo = [d["path"] for d in docs if d["path"] and os.path.normcase(os.path.abspath(d["path"])) not in in_pdf]
+            QTimer.singleShot(1500, lambda: self.main.prewarm_conversions(todo))
 
     def add_docs(self):
         paths, _ = QFileDialog.getOpenFileNames(self, "Документы дела", self.fields["folder"].text() or

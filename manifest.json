@@ -6,7 +6,7 @@
 },
 {
 "path": "CHANGELOG.md",
-"size": 57703
+"size": 59852
 },
 {
 "path": "README.md",
@@ -318,7 +318,7 @@
 },
 {
 "path": "installer.iss",
-"size": 3552
+"size": 3554
 },
 {
 "path": "legal_core.py",
@@ -330,7 +330,7 @@
 },
 {
 "path": "legal_ui.py",
-"size": 241417
+"size": 242011
 },
 {
 "path": "palette.py",
@@ -338,11 +338,11 @@
 },
 {
 "path": "pdf_core.py",
-"size": 49436
+"size": 52063
 },
 {
 "path": "pdf_master.py",
-"size": 288736
+"size": 294364
 },
 {
 "path": "phone_export.py",
@@ -390,7 +390,7 @@
 },
 {
 "path": "version.json",
-"size": 867
+"size": 1237
 },
 {
 "path": "УСТАНОВИТЬ.bat",

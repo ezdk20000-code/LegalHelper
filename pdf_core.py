@@ -382,20 +382,86 @@ def resize_pages(doc, pages, size_name, orientation="Автоматически"
     return out
 
 
+# ----------------------------------------------------------------------------
+#  Запас готовых PDF из Word/Excel/PowerPoint/HTML
+# ----------------------------------------------------------------------------
+# Превращение Word в PDF — это запуск Word и несколько секунд ожидания. Готовый PDF запоминается
+# (по пути, размеру и времени изменения файла): тот же неизменённый файл второй раз открывается мгновенно,
+# а изменённый в Word — делается заново.
+CACHE_MAX_FILES = 400
+import threading
+_convert_lock = threading.Lock()          # одновременно — одно превращение (Word не любит два сразу)
+
+
+def convert_cache_dir():
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".cache")
+    d = os.path.join(base, "PDFMaster", "convert_cache")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _cache_key(path):
+    import hashlib
+    st = os.stat(path)
+    raw = f"{os.path.normcase(os.path.abspath(path))}|{st.st_size}|{int(st.st_mtime)}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def cached_pdf(path):
+    """Путь к уже готовому PDF этого файла или None."""
+    try:
+        p = os.path.join(convert_cache_dir(), _cache_key(path) + ".pdf")
+        return p if os.path.isfile(p) and os.path.getsize(p) > 0 else None
+    except OSError:
+        return None
+
+
+def converted_pdf(path):
+    """Word/Excel/PowerPoint/HTML → путь к PDF (из запаса или сделать и запомнить).
+    Можно вызывать не из главного потока: сама программа Office запускается внутри."""
+    with _convert_lock:
+        return _converted_pdf(path)
+
+
+def _converted_pdf(path):
+    hit = cached_pdf(path)
+    if hit:
+        try:
+            os.utime(hit)                    # «недавно нужен» — не удалять при уборке запаса
+        except OSError:
+            pass
+        return hit
+    ext = Path(path).suffix.lower()
+    tmp = os.path.join(tempfile.mkdtemp(prefix="pdfm_"), Path(path).stem + ".pdf")
+    (html_to_pdf if ext in HTML_EXT else office_to_pdf)(path, tmp)
+    try:
+        dst = os.path.join(convert_cache_dir(), _cache_key(path) + ".pdf")
+        shutil.copyfile(tmp, dst + ".part")
+        os.replace(dst + ".part", dst)
+        _trim_cache()
+        return dst
+    except OSError:
+        return tmp
+
+
+def _trim_cache():
+    try:
+        d = convert_cache_dir()
+        files = sorted((os.path.join(d, f) for f in os.listdir(d) if f.endswith(".pdf")), key=os.path.getmtime)
+        for f in files[:-CACHE_MAX_FILES]:
+            os.remove(f)
+    except OSError:
+        pass
+
+
 def open_as_pdf(path, password_cb=None):
     """Открыть любой поддерживаемый файл как PDF-документ в памяти.
     password_cb(name) -> пароль или None. Возвращает fitz.Document или None."""
     ext = Path(path).suffix.lower()
     if ext in IMAGE_EXT:
         return images_to_pdf([path])
-    if ext in OFFICE_EXT:
-        tmp = os.path.join(tempfile.mkdtemp(prefix="pdfm_"), Path(path).stem + ".pdf")
-        office_to_pdf(path, tmp)
-        return fitz.open("pdf", Path(tmp).read_bytes())
-    if ext in HTML_EXT:
-        tmp = os.path.join(tempfile.mkdtemp(prefix="pdfm_"), Path(path).stem + ".pdf")
-        html_to_pdf(path, tmp)
-        return fitz.open("pdf", Path(tmp).read_bytes())
+    if ext in OFFICE_EXT or ext in HTML_EXT:
+        return fitz.open("pdf", Path(converted_pdf(path)).read_bytes())
     doc = fitz.open(path)
     if doc.needs_pass:
         while True:

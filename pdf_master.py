@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pymupdf as fitz
 from PySide6.QtCore import (Qt, QSize, QTimer, Signal, QPointF, QRectF, QUrl, QByteArray, QBuffer,
-                            QIODevice, QEvent)
+                            QIODevice, QEvent, QElapsedTimer, QEventLoop)
 from PySide6.QtGui import (QAction, QActionGroup, QIcon, QImage, QPixmap, QPainter, QPen, QColor,
                            QFont, QKeySequence, QDesktopServices, QPainterPath, QPalette, QFontDatabase,
                            QCursor)
@@ -41,7 +41,7 @@ import phone_export as PHX
 import palette
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.0"
+APP_VERSION = "3.0.1"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -2779,10 +2779,10 @@ class MainWindow(QMainWindow):
         self._restore(self.redo_stack.pop())
         self.refresh_all()
 
-    def after_change(self, pages=None, keep_selection=None):
+    def after_change(self, pages=None, keep_selection=None, thumbs=None):
         self.modified = True
         if pages is None:
-            self.refresh_all(keep_selection)
+            self.refresh_all(keep_selection, thumbs=thumbs)
         else:
             self.invalidate(pages)
         self.update_title()
@@ -2816,6 +2816,29 @@ class MainWindow(QMainWindow):
         icon.addPixmap(self._thumb_pixmap(i, True), QIcon.Selected)
         return icon
 
+    def _shadow_pm(self, s, dpr, x, y, w, h):
+        """Тень под листом одинакова у всех страниц одного размера — рисуем её один раз и берём из запаса.
+        Раньше тень рисовалась заново для каждой страницы, и в большом деле это заметно тормозило."""
+        sc = T.get("shadow", (0, 0, 0, 40))
+        key = (s.width(), s.height(), round(x, 1), round(y, 1), round(w, 1), round(h, 1), dpr, tuple(sc))
+        cache = self.__dict__.setdefault("_shadow_cache", {})
+        pm = cache.get(key)
+        if pm is None:
+            if len(cache) > 64:
+                cache.clear()
+            pm = QPixmap(int(s.width() * dpr), int(s.height() * dpr))
+            pm.setDevicePixelRatio(dpr)
+            pm.fill(Qt.transparent)
+            q = QPainter(pm)
+            q.setRenderHint(QPainter.Antialiasing)
+            q.setPen(Qt.NoPen)
+            for k, al in ((6, 0.18), (3, 0.35), (1, 0.6)):
+                q.setBrush(QColor(sc[0], sc[1], sc[2], int(sc[3] * al)))
+                q.drawRoundedRect(QRectF(x - k / 2, y + k / 2 + 1, w + k, h + k / 2), 2, 2)
+            q.end()
+            cache[key] = pm
+        return pm
+
     def _thumb_pixmap(self, i, selected):
         s = self.cell_size()
         dpr = self.devicePixelRatioF()
@@ -2833,11 +2856,8 @@ class MainWindow(QMainWindow):
             z = min(self.thumb_w / r.width, self.thumb_w * 1.42 / r.height)
             w, h = r.width * z, r.height * z
         x, y = (s.width() - w) / 2, (area_h - h) / 2 + 6
-        sc = T.get("shadow", (0, 0, 0, 40))
+        p.drawPixmap(0, 0, self._shadow_pm(s, dpr, x, y, w, h))   # мягкая тень листа (готовая, из запаса)
         p.setPen(Qt.NoPen)
-        for k, al in ((6, 0.18), (3, 0.35), (1, 0.6)):          # мягкая тень листа
-            p.setBrush(QColor(sc[0], sc[1], sc[2], int(sc[3] * al)))
-            p.drawRoundedRect(QRectF(x - k / 2, y + k / 2 + 1, w + k, h + k / 2), 2, 2)
         head = getattr(self, "_heads", {}).get(i)
         if head:                                                  # свёрнутый файл — стопка листов
             p.setPen(QPen(QColor(T["thumb_border"]), 1))
@@ -2875,9 +2895,11 @@ class MainWindow(QMainWindow):
         p.end()
         return pm
 
-    def refresh_all(self, keep_selection=None):
+    def refresh_all(self, keep_selection=None, thumbs=None):
+        """Перестроить список страниц. thumbs — уже готовые миниатюры в новом порядке (None — нарисовать):
+        так после вставки или удаления заново рисуются только новые страницы, а не всё дело."""
         n = self.doc.page_count
-        self.thumbs = [None] * n
+        self.thumbs = list(thumbs) if thumbs is not None and len(thumbs) == n else [None] * n
         self._compute_groups()
         lst = self.pages
         lst.blockSignals(True)
@@ -2919,23 +2941,43 @@ class MainWindow(QMainWindow):
         self._thumb_pos = 0
         self.thumb_timer.start()
 
+    def _visible_missing(self):
+        """Страницы без миниатюры, которые сейчас видны на экране, — их рисуем первыми."""
+        lst, vr = self.pages, self.pages.viewport().rect()
+        out = []
+        for i, t in enumerate(self.thumbs):
+            if t is None and i < lst.count() and not lst.isRowHidden(i) and \
+                    lst.visualItemRect(lst.item(i)).intersects(vr):
+                out.append(i)
+        return out
+
     def load_some_thumbs(self):
+        """Дорисовать миниатюры понемногу (≈25 мс за раз), чтобы окно не подвисало: сначала видимые страницы."""
         if self.busy:
             return
         n = len(self.thumbs)
-        done = 0
+        clock = QElapsedTimer()
+        clock.start()
+        queue = self._visible_missing()
         i = getattr(self, "_thumb_pos", 0)
-        while i < n and done < 3:
-            if self.thumbs[i] is None:
+        while clock.elapsed() < 25:
+            if queue:
+                k = queue.pop(0)
+            else:
+                while i < n and self.thumbs[i] is not None:
+                    i += 1
+                if i >= n:
+                    break
+                k = i
+            if self.thumbs[k] is None:
                 try:
-                    self.thumbs[i] = self.render_thumb(i)
+                    self.thumbs[k] = self.render_thumb(k)
                 except Exception:
-                    self.thumbs[i] = QImage()
-                self.pages.item(i).setIcon(self.compose_icon(i))
-                done += 1
-            i += 1
+                    self.thumbs[k] = QImage()
+                if k < self.pages.count():
+                    self.pages.item(k).setIcon(self.compose_icon(k))
         self._thumb_pos = i
-        if i >= n:
+        if all(t is not None for t in self.thumbs):
             self.thumb_timer.stop()
 
     # ------------------------------------------------------------- files
@@ -2947,12 +2989,14 @@ class MainWindow(QMainWindow):
     def load_file(self, p):
         """Файл любого поддерживаемого типа → fitz.Document (или None)."""
         ext = Path(p).suffix.lower()
-        slow = ext in C.OFFICE_EXT or ext in C.HTML_EXT
+        slow = (ext in C.OFFICE_EXT or ext in C.HTML_EXT) and not C.cached_pdf(p)
         if slow:
             QApplication.setOverrideCursor(Qt.WaitCursor)
-            self.msg(f"Конвертирую {Path(p).name}…", 0)
+            self.msg(f"Готовлю {Path(p).name}…", 0)
             QApplication.processEvents()
         try:
+            if slow:                                  # Word — в фоне, окно при этом не зависает
+                self._convert_in_background(p)
             while True:
                 try:
                     return C.open_as_pdf(p, self.password_prompt)
@@ -2973,6 +3017,53 @@ class MainWindow(QMainWindow):
             if slow:
                 QApplication.restoreOverrideCursor()
             self.statusBar().clearMessage()
+
+    def _convert_in_background(self, p):
+        """Превратить Word/Excel/… в PDF в отдельном потоке и подождать, не замораживая окно.
+        Результат попадает в запас (C.converted_pdf), дальше load_file открывает его мгновенно."""
+        import threading
+        box = {}
+
+        def work():
+            try:
+                C.converted_pdf(p)
+            except Exception as e:
+                box["err"] = e
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        dlg = QProgressDialog(f"Готовлю «{Path(p).name}»…\nWord превращает документ в PDF — это несколько секунд. "
+                              "В следующий раз этот файл откроется сразу.", None, 0, 0, self)
+        dlg.setWindowTitle(APP_NAME)
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(400)
+        dlg.setCancelButton(None)
+        while th.is_alive():
+            QApplication.processEvents(QEventLoop.AllEvents, 40)
+            th.join(0.02)
+        dlg.close()
+        dlg.deleteLater()
+        if "err" in box:
+            raise box["err"]
+
+    def prewarm_conversions(self, paths):
+        """Заранее и тихо сделать PDF из Word-файлов дела — чтобы потом перетаскивание было мгновенным."""
+        todo = [p for p in paths if p and os.path.isfile(p) and Path(p).suffix.lower() in C.OFFICE_EXT
+                and not C.cached_pdf(p)]
+        if not todo or getattr(self, "_prewarm_busy", False):
+            return
+        import threading
+        self._prewarm_busy = True
+
+        def work():
+            try:
+                for p in todo[:30]:
+                    try:
+                        C.converted_pdf(p)
+                    except Exception:
+                        pass                      # не вышло — сделается при открытии, с понятной ошибкой
+            finally:
+                self._prewarm_busy = False
+        threading.Thread(target=work, daemon=True).start()
 
     def maybe_save(self):
         if not self.modified or self.doc.page_count == 0:
@@ -3051,9 +3142,12 @@ class MainWindow(QMainWindow):
             self.push_undo()
             rest = loaded
         pos = insert_at if insert_at is not None and 0 <= insert_at < self.doc.page_count else None
+        keep = list(self.thumbs) if len(self.thumbs) == self.doc.page_count else None   # готовые миниатюры
         new_sel = []
         for p, d in rest:
             start = pos if pos is not None else self.doc.page_count
+            if keep is not None:
+                keep[start:start] = [None] * d.page_count
             if pos is None:
                 self.doc.insert_pdf(d)
             else:
@@ -3079,7 +3173,7 @@ class MainWindow(QMainWindow):
                 U.sync_case_file(cid)
             except Exception as ex:
                 log_error("Документ в список дела", ex)
-        self.refresh_all(new_sel)
+        self.refresh_all(new_sel, thumbs=keep if rest is loaded else None)
         if new_sel:
             it = self.pages.item(new_sel[0])
             if it and not it.isHidden():
@@ -3224,8 +3318,10 @@ class MainWindow(QMainWindow):
             return 0
         if undo:
             self.push_undo()
+        gone = set(pages)
+        keep = [t for i, t in enumerate(self.thumbs) if i not in gone] if len(self.thumbs) == self.doc.page_count else None
         self.doc.delete_pages(pages)
-        self.refresh_all()
+        self.refresh_all(thumbs=keep)
         self.update_title()
         return len(pages)
 
@@ -3713,8 +3809,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, APP_NAME, "Нельзя удалить все страницы документа.")
             return
         self.push_undo()
+        gone = set(pages)
+        keep = [t for i, t in enumerate(self.thumbs) if i not in gone] if len(self.thumbs) == self.doc.page_count else None
         self.doc.delete_pages(pages)
-        self.after_change(keep_selection=[min(pages[0], self.doc.page_count - 1)])
+        self.after_change(keep_selection=[min(pages[0], self.doc.page_count - 1)], thumbs=keep)
         self.msg(f"Удалено страниц: {len(pages)}")
 
     def delete_selected(self):
