@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS laws(
     url TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS boards(
     case_id INTEGER PRIMARY KEY, scene TEXT DEFAULT '', updated TEXT);
+CREATE TABLE IF NOT EXISTS trash(
+    id INTEGER PRIMARY KEY, kind TEXT, title TEXT DEFAULT '', case_id INTEGER DEFAULT 0,
+    case_title TEXT DEFAULT '', deleted TEXT, data TEXT);
 CREATE TABLE IF NOT EXISTS instances(
     id INTEGER PRIMARY KEY, case_id INTEGER, pos INTEGER DEFAULT 0, level TEXT DEFAULT '', court TEXT DEFAULT '',
     number TEXT DEFAULT '', judge TEXT DEFAULT '', url TEXT DEFAULT '', result TEXT DEFAULT '');
@@ -121,6 +124,10 @@ class CaseDB:
         self.con.executescript(SCHEMA)
         self._migrate()
         self.con.commit()
+        try:
+            self.trash_purge()
+        except Exception:
+            pass
 
     def _migrate(self):
         """Добавить новые поля в базы, созданные старыми версиями (данные не теряются)."""
@@ -237,6 +244,97 @@ class CaseDB:
         now = dt.datetime.now().isoformat(timespec="seconds")
         self._exec(f"UPDATE cases SET {','.join(k + '=?' for k in keys)}, updated=? WHERE id=?",
                    [kw[k] for k in keys] + [now, cid])
+
+    # ---------------------------------------------------------------- корзина
+    # Удалённое не пропадает сразу: строки всех таблиц сохраняются в «trash» (JSON) и через 30 дней
+    # стираются насовсем. Восстановление возвращает строки с теми же номерами — связи не рвутся.
+    CASE_TABLES = ("events", "docs", "time_entries", "payments", "quotes", "laws", "boards", "instances", "packs")
+    TRASH_DAYS = 30
+
+    def _rows(self, table, where, args):
+        return [dict(r) for r in self.con.execute(f"SELECT * FROM {table} WHERE {where}", args)]
+
+    def _trash_put(self, kind, title, cid, data):
+        import json
+        c = self.case(cid) if cid else None
+        return self._exec("INSERT INTO trash(kind,title,case_id,case_title,deleted,data) VALUES (?,?,?,?,?,?)",
+                          (kind, title, cid or 0, (c or {}).get("title", ""), _now(), json.dumps(data, ensure_ascii=False)))
+
+    def trash_case(self, cid):
+        """Дело со всем содержимым — в корзину. Возвращает номер записи корзины."""
+        c = self.case(cid)
+        if not c:
+            return None
+        data = {"cases": self._rows("cases", "id=?", (cid,))}
+        for t in self.CASE_TABLES:
+            data[t] = self._rows(t, "case_id=?", (cid,))
+        data["pack_items"] = [r for p in data["packs"] for r in self._rows("pack_items", "pack_id=?", (p["id"],))]
+        tid = self._trash_put("case", c["title"], cid, data)
+        self.delete_case(cid)
+        return tid
+
+    def trash_events(self, eids):
+        eids = [e for e in eids if e]
+        rows = [r for e in eids for r in self._rows("events", "id=?", (e,))]
+        if not rows:
+            return None
+        title = rows[0]["title"] or rows[0]["kind"] if len(rows) == 1 else f"{len(rows)} событий"
+        tid = self._trash_put("event", title, rows[0]["case_id"], {"events": rows})
+        for e in eids:
+            self.con.execute("DELETE FROM events WHERE id=?", (e,))
+        self.con.commit()
+        return tid
+
+    def trash_docs(self, dids):
+        dids = [d for d in dids if d]
+        rows = [r for d in dids for r in self._rows("docs", "id=?", (d,))]
+        if not rows:
+            return None
+        title = rows[0]["title"] if len(rows) == 1 else f"{len(rows)} документов"
+        tid = self._trash_put("doc", title, rows[0]["case_id"], {"docs": rows})
+        for d in dids:
+            self.con.execute("DELETE FROM docs WHERE id=?", (d,))
+        self.con.commit()
+        return tid
+
+    def trash_items(self):
+        return self._all("SELECT id, kind, title, case_id, case_title, deleted FROM trash ORDER BY deleted DESC, id DESC")
+
+    def trash_data(self, tid):
+        import json
+        r = self._one("SELECT * FROM trash WHERE id=?", (tid,))
+        return (dict(r), json.loads(r["data"] or "{}")) if r else (None, {})
+
+    def trash_restore(self, tid):
+        """Вернуть из корзины. Возвращает (удалось, пояснение)."""
+        item, data = self.trash_data(tid)
+        if not item:
+            return False, "Этой записи уже нет в корзине"
+        if item["kind"] != "case" and item["case_id"] and not self.case(item["case_id"]):
+            return False, f"Сначала восстановите дело «{item['case_title']}» — этот элемент был в нём"
+        for table, rows in data.items():
+            cols = {r[1] for r in self.con.execute(f"PRAGMA table_info({table})")}
+            for r in rows:
+                if table == "docs" and self._one("SELECT id FROM docs WHERE case_id=? AND path=? AND id<>?",
+                                                 (r["case_id"], r["path"], r["id"])):
+                    continue                        # этот файл уже снова добавлен в дело
+                keys = [k for k in r if k in cols]
+                self.con.execute(f"INSERT OR REPLACE INTO {table}({','.join(keys)}) VALUES ({','.join('?' * len(keys))})",
+                                 [r[k] for k in keys])
+        self.con.execute("DELETE FROM trash WHERE id=?", (tid,))
+        self.con.commit()
+        return True, ""
+
+    def trash_forget(self, tid):
+        self._exec("DELETE FROM trash WHERE id=?", (tid,))
+
+    def trash_empty(self):
+        self._exec("DELETE FROM trash")
+
+    def trash_purge(self, days=None):
+        """Стереть насовсем то, что лежит в корзине дольше срока."""
+        edge = (dt.datetime.now() - dt.timedelta(days=days or self.TRASH_DAYS)).isoformat(timespec="seconds")
+        self._exec("DELETE FROM trash WHERE deleted < ?", (edge,))
 
     def delete_case(self, cid):
         for t in ("events", "docs", "time_entries", "payments", "quotes", "laws", "boards", "instances"):

@@ -937,11 +937,15 @@ class BoardTab(QWidget):
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 6, 0, 0)
         top = QHBoxLayout()
-        top.addWidget(QLabel("Интеллект-карта: ход дела, позиции сторон, доказательства, риски"))
+        cap = QLabel("Интеллект-карта: ход дела, позиции сторон, доказательства, риски")
+        cap.setWordWrap(True)                          # длинные подписи переносятся, а не раздвигают окно
+        cap.setMinimumWidth(10)
+        top.addWidget(cap, 1)
         top.addWidget(U.HelpButton("board"))
-        top.addStretch(1)
         self.state = QLabel("")
         self.state.setObjectName("hint")
+        self.state.setWordWrap(True)
+        self.state.setMinimumWidth(10)
         top.addWidget(self.state)
         top.addWidget(_btn("Новая карта из шаблона", self.new_map))
         self.b_win = _btn("В отдельном окне", self.fullscreen, tip="Открыть карту в большом отдельном окне. "
@@ -1003,8 +1007,15 @@ class BoardTab(QWidget):
             return
         self.activate()
 
+    def showEvent(self, e):
+        super().showEvent(e)
+        QTimer.singleShot(60, self.activate)       # сначала показать «Карта загружается…»
+
     def activate(self):
-        """Вызывается, когда вкладка становится видимой."""
+        """Вызывается, когда вкладка становится видимой. Пока карту не видно, встроенный браузер
+        не создаётся — он тяжёлый и раньше замедлял запуск программы."""
+        if not self.isVisible():
+            return
         if not self._ensure_view():
             return
         cid = self.cid

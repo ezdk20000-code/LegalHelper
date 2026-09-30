@@ -868,6 +868,9 @@ class DocsTable(QTableWidget):
         if e.key() == Qt.Key_Delete and self.state() != QAbstractItemView.EditingState:
             self.page.del_doc()
             return
+        if e.modifiers() & Qt.ControlModifier and e.key() in (Qt.Key_Up, Qt.Key_Down):
+            self.move(-1 if e.key() == Qt.Key_Up else 1)
+            return
         super().keyPressEvent(e)
 
     def paths(self, only_selected=False):
@@ -966,14 +969,59 @@ class DocsTable(QTableWidget):
         m.addAction("Отправлен сейчас", lambda: (db().update_doc(did, sent=dt.datetime.now().isoformat(timespec="minutes")),
                                                 self.page.load_docs()))
         m.addSeparator()
-        m.addAction("Выше", lambda: (self.selectRow(r), self.move(-1)))
-        m.addAction("Ниже", lambda: (self.selectRow(r), self.move(1)))
+        m.addAction("▲  Выше (Ctrl+↑)", lambda: (self.selectRow(r), self.move(-1)))
+        m.addAction("▼  Ниже (Ctrl+↓)", lambda: (self.selectRow(r), self.move(1)))
         m.addAction("Показать в папке", lambda: self.page.main.show_in_folder(path))
         m.addSeparator()
         if r not in self.selected_rows():
             self.selectRow(r)
-        m.addAction("🗑  Удалить…", self.page.del_doc)
+        m.addAction("🗑  Убрать из дела (Delete)", self.page.del_doc)
+        m.addAction("Удалить файл с диска…", self.page.del_doc_files)
         m.exec(self.viewport().mapToGlobal(pos))
+
+
+class EmptyState(QWidget):
+    """Пустой экран, который подсказывает, что делать: крупный значок, пара слов и одна кнопка."""
+
+    def __init__(self, icon, title, text="", button=None, on_click=None, parent=None):
+        super().__init__(parent)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(24, 24, 24, 24)
+        v.addStretch(1)
+        ic = QLabel(icon)
+        ic.setAlignment(Qt.AlignCenter)
+        f = ic.font()
+        f.setPointSize(34)
+        ic.setFont(f)
+        v.addWidget(ic)
+        t = QLabel(title)
+        t.setObjectName("subtitle")
+        t.setAlignment(Qt.AlignCenter)
+        t.setWordWrap(True)
+        tf = t.font()
+        tf.setPointSize(tf.pointSize() + 3)
+        tf.setBold(True)
+        t.setFont(tf)
+        v.addWidget(t)
+        self.text = QLabel(text)
+        self.text.setObjectName("hint")
+        self.text.setAlignment(Qt.AlignCenter)
+        self.text.setWordWrap(True)
+        v.addWidget(self.text)
+        self.button = None
+        if button:
+            v.addSpacing(6)
+            b = QPushButton(button)
+            b.setObjectName("primary")
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(on_click)
+            h = QHBoxLayout()
+            h.addStretch(1)
+            h.addWidget(b)
+            h.addStretch(1)
+            v.addLayout(h)
+            self.button = b
+        v.addStretch(2)
 
 
 class ActionCard(QPushButton):
@@ -1519,6 +1567,8 @@ class OverviewTab(QWidget):
         crow.addWidget(self.b_court_more)
         self.court_hint = QLabel()
         self.court_hint.setObjectName("hint")
+        self.court_hint.setWordWrap(True)             # не распирать окно в ширину на небольших экранах
+        self.court_hint.setMinimumWidth(10)
         crow.addWidget(self.court_hint, 1)
         self.b_phone = QPushButton("📱  На телефон")
         self.b_phone.setObjectName("primary")
@@ -1538,6 +1588,8 @@ class OverviewTab(QWidget):
         bh.addWidget(lab)
         hint = QLabel("каждая мысль — с новой строки; «!» в начале — выделить красным. Видно на телефоне первым.")
         hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        hint.setMinimumWidth(10)
         bh.addWidget(hint, 1)
         self.brief_state = QLabel()
         self.brief_state.setObjectName("hint")
@@ -1803,7 +1855,8 @@ class OverviewTab(QWidget):
         if what == "done":
             db().update_event(eid, done=1)
         elif what == "delete":
-            db().delete_event(eid)
+            trash_event_with_undo(self.main, eid)
+            return
         self.load_reminders()
         self.main.cases_page.reload_upcoming()
 
@@ -2044,7 +2097,9 @@ class CasesPage(QWidget):
         rb.addStretch(1)
         rb.addWidget(self.show_arch)
         lv.addLayout(rb)
-        lv.addWidget(QLabel("Ближайшие 14 дней"))
+        self.upcoming_lbl = QLabel("Ближайшие 14 дней")
+        lv.addWidget(self.upcoming_lbl)
+        self.upcoming_lbl.hide()                      # то же самое есть на «Главной» и в «Обзоре» дела
         self.upcoming = QListWidget()
         self.upcoming.setObjectName("upcoming")
         self.upcoming.setMaximumHeight(190)
@@ -2053,6 +2108,7 @@ class CasesPage(QWidget):
         self.upcoming.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.upcoming.itemDoubleClicked.connect(self.goto_event_case)
         lv.addWidget(self.upcoming)
+        self.upcoming.hide()
         left.setMinimumWidth(300)
         self.left = left
         split.addWidget(left)
@@ -2072,7 +2128,8 @@ class CasesPage(QWidget):
         self.b_arch = QPushButton("В архив")
         self.b_arch.clicked.connect(self.toggle_archive)
         self.b_del = b_del = QPushButton("Удалить")
-        b_del.clicked.connect(self.delete_case)
+        b_del.clicked.connect(lambda: self.delete_case())
+        b_del.hide()                                  # удаление — в «Ещё ▾»: не нажать случайно
         head.addWidget(self.b_arch)
         head.addWidget(b_del)
         cv.addLayout(head)
@@ -2171,7 +2228,13 @@ class CasesPage(QWidget):
         v = QVBoxLayout(w)
         self.t_events = self._table(["Дата", "Время", "Вид", "Что", "Место", "Готово"])
         self.t_events.cellDoubleClicked.connect(self.edit_event)
-        v.addWidget(self.t_events, 1)
+        self.ev_stack = QStackedWidget()
+        self.ev_stack.addWidget(self.t_events)
+        self.ev_stack.addWidget(EmptyState("📅", "Сроков и заседаний пока нет",
+                                           "Добавьте ближайшее заседание или процессуальный срок — программа "
+                                           "заранее напомнит о нём.", "+ Заседание",
+                                           lambda: self.add_event("Заседание")))
+        v.addWidget(self.ev_stack, 1)
         r = QHBoxLayout()
         for text, fn in (("+ Заседание", lambda: self.add_event("Заседание")), ("+ Срок", lambda: self.add_event("Срок")),
                          ("+ Задача", lambda: self.add_event("Задача")), ("Отметить выполненным", self.toggle_done),
@@ -2186,52 +2249,34 @@ class CasesPage(QWidget):
     def _build_docs(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        hint = QLabel("Справа — «PDF дела»: все документы дела одним файлом. Двойной щелчок или перетаскивание "
-                      "вправо — добавить документ в него (синие — уже там). Правый щелчок → «Открыть в своей "
-                      "программе» — править в Word.")
-        hint.setObjectName("hint")
-        hint.setWordWrap(True)
-        v.addWidget(hint)
         self.l_docs = DocsTable(self)
-        v.addWidget(self.l_docs, 1)
-        er = QHBoxLayout()
-        b_open = QPushButton("Открыть →")
-        b_open.setObjectName("compact")
-        b_open.setToolTip("Открыть выбранный документ справа")
-        b_open.clicked.connect(self.open_doc)
-        er.addWidget(b_open)
-        self.doc_edit_btns = [b_open]
-        for text, fn, tip in (("✎ Название", self.l_docs.rename_current, "Изменить название документа"),
-                              ("📅 Отправка", self.l_docs.sent_current, "Когда документ отправлен: дата и время"),
-                              ("🙂 Значок", self.l_docs.icon_current, "Выбрать значок для документа")):
-            b = QPushButton(text)
-            b.setObjectName("compact")
-            b.setToolTip(tip)
-            b.clicked.connect(fn)
-            b.setEnabled(False)
-            er.addWidget(b)
-            self.doc_edit_btns.append(b)
-        er.addStretch(1)
-        v.addLayout(er)
-        self.l_docs.itemSelectionChanged.connect(
-            lambda: [b.setEnabled(len(self.l_docs.selected_rows()) == 1) for b in self.doc_edit_btns])
-        b_open.setEnabled(False)
+        self.l_docs.setToolTip("Синие — уже в PDF дела справа. Двойной щелчок — показать или добавить в него.\n"
+                               "Правый щелчок — все действия: переименовать, отметить отправку, открыть в Word…")
+        self.docs_stack = QStackedWidget()
+        self.docs_stack.addWidget(self.l_docs)
+        self.docs_empty = EmptyState("📄", "Документов пока нет",
+                                     "Добавьте иск, договор, переписку — всё, что относится к делу. "
+                                     "Файлы сразу соберутся в один «PDF дела» справа.",
+                                     "+ Добавить файлы", lambda: self.add_docs())
+        self.docs_stack.addWidget(self.docs_empty)
+        v.addWidget(self.docs_stack, 1)
+        tip = QLabel("Правый щелчок по документу — все действия")
+        tip.setObjectName("hint")
+        v.addWidget(tip)
         r = QHBoxLayout()
         b_add = QToolButton()
-        b_add.setText("+ Добавить")
+        b_add.setText("+ Добавить документ")
         b_add.setObjectName("primarytool")
+        b_add.setToolTip("Файл с компьютера, документ по шаблону или пустой PDF. Добавленное сразу попадает в PDF дела")
         b_add.setPopupMode(QToolButton.InstantPopup)
         ma = QMenu(b_add)
         ma.addAction("Файлы с компьютера…", self.add_docs)
         ma.addAction("Документ по шаблону…", lambda: tool_template(self.main, self.cid))
         ma.addAction("Новый пустой PDF", lambda: self.main.new_doc())
         b_add.setMenu(ma)
+        self.b_add_doc = b_add
+        QTimer.singleShot(0, lambda: b_add.setMinimumWidth(b_add.sizeHint().width()))   # после стилей — не обрезать
         r.addWidget(b_add)
-        for text, fn, tip in (("▲", lambda: self.l_docs.move(-1), "Выше"), ("▼", lambda: self.l_docs.move(1), "Ниже")):
-            b = _small_btn(text)
-            b.setToolTip(tip)
-            b.clicked.connect(fn)
-            r.addWidget(b)
         r.addStretch(1)
         b_more = QToolButton()
         b_more.setText("Ещё ▾")
@@ -2251,7 +2296,8 @@ class CasesPage(QWidget):
         a_copy.setChecked(copy_docs_enabled())
         a_copy.toggled.connect(lambda on: M.settings().setValue("copy_docs", "1" if on else "0"))
         mm.addSeparator()
-        mm.addAction("🗑  Удалить выбранные…", self.del_doc)
+        mm.addAction("🗑  Убрать выбранные из дела", self.del_doc)
+        mm.addAction("Удалить выбранные файлы с диска…", self.del_doc_files)
         mm.addAction("Убрать из списка файлы, которых больше нет", self.drop_missing_docs)
         b_more.setMenu(mm)
         r.addWidget(b_more)
@@ -2283,8 +2329,11 @@ class CasesPage(QWidget):
             r2.addWidget(b)
         self.balance = QLabel()
         self.balance.setObjectName("subtitle")
-        r2.addStretch(1)
-        r2.addWidget(self.balance)
+        self.balance.setWordWrap(True)
+        self.balance.setMinimumWidth(10)
+        self.balance.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        r2.addSpacing(20)
+        r2.addWidget(self.balance, 1)
         v.addLayout(r2)
         self.tabs.addTab(w, "Время и оплата")
 
@@ -2320,6 +2369,15 @@ class CasesPage(QWidget):
             self.list.addItem(it)
             if c["id"] == cur:
                 self.list.setCurrentItem(it)
+        if not self.list.count():                     # пустой список — подсказать, что делать
+            text = ("Ничего не найдено" if self.search.text().strip() else
+                    "В архиве пусто" if self.show_arch.isChecked() else
+                    "Дел пока нет.\nНажмите «+ Новое дело» ниже —\nпрограмма сама заведёт папку дела.")
+            it = QListWidgetItem(text)
+            it.setFlags(Qt.NoItemFlags)
+            it.setTextAlignment(Qt.AlignCenter)
+            it.setForeground(QColor(M.T["muted"]))
+            self.list.addItem(it)
         self.list.blockSignals(False)
         self.reload_upcoming()
         if self.list.currentItem() is None:
@@ -2476,17 +2534,35 @@ class CasesPage(QWidget):
                 self.main.enter_case(cid)
                 self.main.open_case_tab("overview")
 
-    def delete_case(self):
-        c = db().case(self.cid)
-        if c and DeleteCaseDialog(self, c["title"]).exec():
-            try:
-                sync_case_file(self.cid)
-                BK.make_backup(M.data_dir(), "delete", M.APP_VERSION)
-            except Exception as e:
-                M.log_error("Резервная копия перед удалением дела", e)
-            db().delete_case(self.cid)
+    def delete_case(self, cid=None):
+        """Дело — в корзину, сразу и без вопросов; внизу окна 10 секунд есть «Отменить»,
+        а потом его можно вернуть из «🗑 Корзины» в течение 30 дней."""
+        cid = cid or self.cid
+        c = db().case(cid)
+        if not c:
+            return
+        try:
+            sync_case_file(cid)
+        except Exception as e:
+            M.log_error("Сведения дела перед удалением", e)
+        tid = db().trash_case(cid)
+        if cid == self.cid:
             self.cid = None
+        self.reload()
+        if hasattr(self.main, "show_home") and getattr(self.main, "mode_cid", None) == cid:
+            self.main.show_home()
+        refresh_trash_button(self.main)
+
+        def undo():
+            ok, why = db().trash_restore(tid)
+            if not ok:
+                self.main.toast(why)
+                return
             self.reload()
+            refresh_trash_button(self.main)
+            if hasattr(self.main, "enter_case"):
+                self.main.enter_case(cid)
+        self.main.toast_undo(f"Дело «{c['title']}» — в корзине", undo)
 
     def toggle_archive(self):
         c = db().case(self.cid)
@@ -2519,6 +2595,7 @@ class CasesPage(QWidget):
                 t.setItem(r, c, it)
         t.resizeColumnsToContents()
         t.horizontalHeader().setStretchLastSection(True)
+        self.ev_stack.setCurrentIndex(0 if t.rowCount() else 1)
 
     def _event_dialog(self, e=None, kind="Срок"):
         e = e or {}
@@ -2580,9 +2657,7 @@ class CasesPage(QWidget):
     def del_event(self):
         eid = self._cur_id(self.t_events)
         if eid:
-            db().delete_event(eid)
-            self.load_events()
-            self.reload_upcoming()
+            trash_event_with_undo(self.main, eid)
 
     # ------------------------------------------------------------ документы
     def refresh_docs_if(self, cid):
@@ -2590,7 +2665,9 @@ class CasesPage(QWidget):
             self.load_docs()
 
     def load_docs(self):
-        self.l_docs.load(db().docs(self.cid) if self.cid else [])
+        docs = db().docs(self.cid) if self.cid else []
+        self.l_docs.load(docs)
+        self.docs_stack.setCurrentIndex(0 if docs else 1)
 
     def add_docs(self):
         paths, _ = QFileDialog.getOpenFileNames(self, "Документы дела", self.fields["folder"].text() or
@@ -2628,40 +2705,66 @@ class CasesPage(QWidget):
         paths = self.l_docs.paths()
         SearchDialog(self.main, paths).exec()
 
-    def del_doc(self):
-        """Удалить выбранные документы: только из списка дела или вместе с файлом (в Корзину)."""
+    def _sel_docs(self):
         docs = [self.l_docs.row_doc(r) for r in self.l_docs.selected_rows()]
-        docs = [d for d in docs if d[0] is not None]
+        return [d for d in docs if d[0] is not None]
+
+    def del_doc(self):
+        """Убрать выбранные документы из дела — сразу, без вопросов: в корзину программы (файлы на диске
+        остаются), их страницы — из PDF дела. Внизу окна 10 секунд есть «Отменить»."""
+        docs = self._sel_docs()
         if not docs:
             return
-        what = f"«{docs[0][2]}»" if len(docs) == 1 else f"выбранные документы ({len(docs)})"
-        box = QMessageBox(self)
-        box.setWindowTitle("Удалить")
-        box.setIcon(QMessageBox.Question)
-        box.setText(f"Удалить {what}?")
-        box.setInformativeText("«Удалить файл совсем» — файл уйдёт в Корзину Windows и исчезнет из программы "
-                               "(документ закроется, пропадёт из комплектов). Из Корзины его можно вернуть.\n\n"
-                               "«Только из дела» — файл останется на диске, программа его забудет.")
-        in_pdf = self.main.case_pdf_sources(self.cid)
-        has_pages = any(p and os.path.normcase(os.path.abspath(p)) in in_pdf for _i, p, _t in docs)
-        cb = None
-        if has_pages:
-            cb = QCheckBox("Убрать и его страницы из PDF дела")
-            cb.setChecked(True)
-            box.setCheckBox(cb)
-        b_file = box.addButton("🗑  Удалить файл совсем", QMessageBox.DestructiveRole)
-        b_list = box.addButton("Только из дела", QMessageBox.AcceptRole)
-        box.addButton("Отмена", QMessageBox.RejectRole)
-        box.exec()
-        if box.clickedButton() not in (b_file, b_list):
+        cid, main = self.cid, self.main
+        in_pdf = main.case_pdf_sources(cid)
+        paths = [p for _i, p, _t in docs if p and os.path.normcase(os.path.abspath(p)) in in_pdf]
+        snap, removed = None, 0
+        if paths:                                       # один снимок для «Отменить» — на все документы сразу
+            main.show_main_ws(cid)
+            main.push_undo()
+            snap = main.undo_stack[-1]
+            removed = sum(main.remove_from_case_pdf(cid, p, undo=False) for p in paths)
+            main.update_title()
+        tid = db().trash_docs([d[0] for d in docs])
+        self.load_docs()
+        sync_case_file(cid)
+        refresh_trash_button(main)
+
+        def undo():
+            ok, why = db().trash_restore(tid)
+            if not ok:
+                main.toast(why)
+                return
+            if removed:                                  # вернуть и страницы — отменой в PDF дела
+                main.show_main_ws(cid)
+                if main.undo_stack and main.undo_stack[-1] is snap:
+                    main.undo()
+                else:
+                    main.open_paths([p for _i, p, _t in docs if p and os.path.exists(p)])
+            self.refresh_docs_if(cid)
+            sync_case_file(cid)
+            refresh_trash_button(main)
+        what = f"«{docs[0][2]}»" if len(docs) == 1 else f"Документы ({len(docs)})"
+        extra = f", страниц из PDF дела: {removed}" if removed else ""
+        main.toast_undo(f"{what} — убрано из дела{extra}. Файлы на диске целы", undo)
+
+    def del_doc_files(self):
+        """Удалить сами файлы с диска (в Корзину Windows) — это уже всерьёз, поэтому спрашиваем."""
+        docs = self._sel_docs()
+        if not docs:
+            return
+        what = f"файл «{docs[0][2]}»" if len(docs) == 1 else f"файлы выбранных документов ({len(docs)})"
+        if QMessageBox.question(self, "Удалить с диска",
+                                f"Удалить {what} с диска?\n\nФайлы уйдут в Корзину Windows (оттуда их можно "
+                                "вернуть), документы уберутся из дела, а их страницы — из PDF дела.") \
+                != QMessageBox.Yes:
             return
         gone = 0
-        if cb is not None and (cb.isChecked() or box.clickedButton() is b_file):
-            removed = sum(self.main.remove_from_case_pdf(self.cid, p) for _i, p, _t in docs if p)
-            if removed:
-                self.main.toast(f"Из PDF дела убрано страниц: {removed} (вернуть — Ctrl+Z)")
+        for _i, p, _t in docs:
+            if p:
+                self.main.remove_from_case_pdf(self.cid, p)
         for did, path, _t in docs:
-            if box.clickedButton() is b_file and path and os.path.exists(path):
+            if path and os.path.exists(path):
                 if not self.main.delete_file_completely(path):
                     continue
                 db().forget_path(path)
@@ -2670,7 +2773,7 @@ class CasesPage(QWidget):
         self.load_docs()
         sync_case_file(self.cid)
         if gone:
-            self.main.toast(f"🗑  В Корзину: {gone} файл(ов)")
+            self.main.toast(f"🗑  В Корзину Windows: {gone} файл(ов)")
 
     def drop_missing_docs(self):
         n = 0
@@ -2704,8 +2807,9 @@ class CasesPage(QWidget):
                 it.setData(Qt.UserRole, e["id"])
                 p.setItem(r, c, it)
         b = db().balance(self.cid)
-        self.balance.setText(f"Часов: {b['hours']:g} · Начислено: {L.money(b['billed'])} ₽ · Оплачено: "
-                             f"{L.money(b['paid'])} ₽ · Долг: {L.money(b['due'])} ₽")
+        nb = lambda x: f"{L.money(x)} ₽".replace(" ", "\u00a0")       # сумма не рвётся на две строки
+        self.balance.setText(f"Часов:\u00a0{b['hours']:g} · Начислено:\u00a0{nb(b['billed'])} · "
+                             f"Оплачено:\u00a0{nb(b['paid'])} · Долг:\u00a0{nb(b['due'])}")
 
     def _del_row(self, table, fn):
         i = self._cur_id(table)
@@ -3540,58 +3644,181 @@ class PartyEditor(QFrame):
         return "\n".join(lines)
 
 
-class DeleteCaseDialog(QDialog):
-    """Удаление дела — только после ввода случайного шестизначного кода (защита от случайного нажатия)."""
+def refresh_after_events(main):
+    """Обновить всё, где видны сроки: карточку дела, «Обзор», «Главную»."""
+    cp = main.cases_page
+    try:
+        if cp.cid:
+            cp.load_events()
+        cp.reload_upcoming()
+        if getattr(main, "mode_cid", None) and hasattr(main, "overview"):
+            main.overview.set_case(main.mode_cid)
+        if hasattr(main, "home_page") and main.home_page.isVisible():
+            main.home_page.refresh()
+    except Exception as e:
+        M.log_error("Обновление сроков", e)
 
-    def __init__(self, parent, title):
-        super().__init__(parent)
-        import random
-        self.code = f"{random.SystemRandom().randint(0, 999999):06d}"
-        self.setWindowTitle("Удалить дело")
-        self.setMinimumWidth(460)
+
+def trash_event_with_undo(main, eid):
+    e = next((x for x in db().events() if x["id"] == eid), None)
+    tid = db().trash_events([eid])
+    if not tid:
+        return
+    refresh_after_events(main)
+    refresh_trash_button(main)
+
+    def undo():
+        ok, why = db().trash_restore(tid)
+        if not ok:
+            main.toast(why)
+        refresh_after_events(main)
+        refresh_trash_button(main)
+    title = (e or {}).get("title") or (e or {}).get("kind") or "Событие"
+    main.toast_undo(f"«{title}» — в корзине", undo)
+
+
+TRASH_KINDS = {"case": "📁 Дело", "doc": "📄 Документ", "event": "📅 Срок / заседание"}
+
+
+def refresh_trash_button(main):
+    b = getattr(main, "b_trash", None)
+    if b is None:
+        return
+    try:
+        n = len(db().trash_items())
+    except Exception:
+        n = 0
+    b.setText("🗑   Корзина" + (f" ({n})" if n else ""))
+
+
+class TrashDialog(QDialog):
+    """Корзина: удалённые дела, документы и сроки. Хранятся 30 дней, потом стираются сами."""
+
+    def __init__(self, main):
+        super().__init__(main)
+        self.main = main
+        self.setWindowTitle("Корзина")
+        self.resize(720, 460)
         v = QVBoxLayout(self)
-        v.setContentsMargins(22, 18, 22, 16)
-        v.setSpacing(10)
-        t = QLabel("Удалить дело?")
+        v.setContentsMargins(20, 16, 20, 16)
+        t = QLabel("🗑  Корзина")
         t.setObjectName("title")
         v.addWidget(t)
-        info = QLabel(f"«{html.escape(title)}» будет удалено вместе со сроками, заметками, напоминаниями, учётом "
-                      "времени и картой дела. Файлы документов на диске останутся, а перед удалением программа "
-                      "сделает резервную копию.<br><br>Чтобы подтвердить, введите код:")
-        info.setWordWrap(True)
-        info.setTextFormat(Qt.RichText)
-        v.addWidget(info)
-        code = QLabel(" ".join(self.code))
-        code.setAlignment(Qt.AlignCenter)
-        code.setTextInteractionFlags(Qt.NoTextInteraction)      # не скопировать — только ввести
-        f = code.font()
-        f.setPointSize(24)
-        f.setBold(True)
-        f.setLetterSpacing(QFont.AbsoluteSpacing, 3)
-        code.setFont(f)
-        code.setStyleSheet(f"color: {M.T['danger']}; background: {M.T['banner']}; border-radius: 12px; padding: 10px;")
-        v.addWidget(code)
-        self.inp = QLineEdit()
-        self.inp.setPlaceholderText("6 цифр")
-        self.inp.setMaxLength(6)
-        self.inp.setAlignment(Qt.AlignCenter)
-        fi = self.inp.font()
-        fi.setPointSize(16)
-        self.inp.setFont(fi)
-        v.addWidget(self.inp)
+        hint = QLabel(f"Здесь лежит удалённое за последние {db().TRASH_DAYS} дней — потом оно стирается само. "
+                      "Файлы на диске при удалении не трогаются.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+        self.stack = QStackedWidget()
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Что", "Название", "Из дела", "Удалено"])
+        self.table.verticalHeader().hide()
+        self.table.setShowGrid(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        h = self.table.horizontalHeader()
+        h.setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.setColumnWidth(0, 150)
+        self.table.setColumnWidth(2, 180)
+        self.table.setColumnWidth(3, 150)
+        self.table.verticalHeader().setDefaultSectionSize(36)
+        self.table.cellDoubleClicked.connect(lambda *_: self.restore())
+        self.stack.addWidget(self.table)
+        self.empty = EmptyState("🗑", "Корзина пуста", "Удалённые дела, документы и сроки будут лежать здесь "
+                                f"{db().TRASH_DAYS} дней — их можно вернуть.")
+        self.stack.addWidget(self.empty)
+        v.addWidget(self.stack, 1)
         row = QHBoxLayout()
+        self.b_restore = QPushButton("↩  Восстановить")
+        self.b_restore.setObjectName("primary")
+        self.b_restore.clicked.connect(self.restore)
+        self.b_forget = QPushButton("Удалить навсегда")
+        self.b_forget.clicked.connect(self.forget)
+        self.b_empty = QPushButton("Очистить корзину")
+        self.b_empty.clicked.connect(self.empty_all)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(self.accept)
+        row.addWidget(self.b_restore)
+        row.addWidget(self.b_forget)
         row.addStretch(1)
-        cancel = QPushButton("Отмена")
-        cancel.clicked.connect(self.reject)
-        self.ok = QPushButton("Удалить дело")
-        self.ok.setProperty("danger", True)
-        self.ok.setEnabled(False)
-        self.ok.clicked.connect(self.accept)
-        row.addWidget(cancel)
-        row.addWidget(self.ok)
+        row.addWidget(self.b_empty)
+        row.addWidget(close)
         v.addLayout(row)
-        self.inp.textChanged.connect(lambda t: self.ok.setEnabled(t.strip() == self.code))
-        cancel.setDefault(True)
+        self.table.itemSelectionChanged.connect(self._sync)
+        self.load()
+
+    def load(self):
+        items = db().trash_items()
+        self.table.setRowCount(0)
+        for it in items:
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            try:
+                when = dt.datetime.fromisoformat(it["deleted"]).strftime("%d.%m.%Y %H:%M")
+            except Exception:
+                when = it["deleted"] or ""
+            for c, val in enumerate((TRASH_KINDS.get(it["kind"], it["kind"]), it["title"],
+                                     it["case_title"] if it["kind"] != "case" else "", when)):
+                cell = QTableWidgetItem(val)
+                cell.setData(Qt.UserRole, it["id"])
+                self.table.setItem(r, c, cell)
+        self.stack.setCurrentIndex(0 if items else 1)
+        self.b_empty.setEnabled(bool(items))
+        if items:
+            self.table.selectRow(0)
+        self._sync()
+        refresh_trash_button(self.main)
+
+    def _ids(self):
+        return [self.table.item(r, 0).data(Qt.UserRole)
+                for r in sorted({i.row() for i in self.table.selectedIndexes()})]
+
+    def _sync(self):
+        on = bool(self._ids()) and self.stack.currentIndex() == 0
+        self.b_restore.setEnabled(on)
+        self.b_forget.setEnabled(on)
+
+    def restore(self):
+        ids = self._ids()
+        # дела — первыми: тогда вернутся и их документы и сроки, выбранные вместе с ними
+        kinds = {i: k["kind"] for k in db().trash_items() for i in [k["id"]]}
+        ids.sort(key=lambda i: kinds.get(i) != "case")
+        done, fails = 0, []
+        for tid in ids:
+            ok, why = db().trash_restore(tid)
+            if ok:
+                done += 1
+            elif why not in fails:
+                fails.append(why)
+        self.main.cases_page.reload()
+        if self.main.cases_page.cid:
+            self.main.cases_page.load_docs()
+            self.main.cases_page.load_events()
+        if hasattr(self.main, "overview") and getattr(self.main, "mode_cid", None):
+            self.main.overview.set_case(self.main.mode_cid)
+        self.load()
+        if fails:
+            QMessageBox.information(self, "Корзина", "\n".join(fails))
+        elif done:
+            self.main.toast(f"↩  Восстановлено: {done}")
+
+    def forget(self):
+        ids = self._ids()
+        if not ids:
+            return
+        if QMessageBox.question(self, "Корзина", f"Удалить навсегда ({len(ids)})? Вернуть будет нельзя.") \
+                != QMessageBox.Yes:
+            return
+        for tid in ids:
+            db().trash_forget(tid)
+        self.load()
+
+    def empty_all(self):
+        if QMessageBox.question(self, "Корзина", "Очистить корзину? Всё, что в ней, будет удалено навсегда.") \
+                != QMessageBox.Yes:
+            return
+        db().trash_empty()
+        self.load()
 
 
 class TemplateDialog(QDialog):
@@ -4167,19 +4394,14 @@ class Reminders:
         overdue = [e for e in due if dt.date.fromisoformat(e["date"]) < today]
         todays = [e for e in due if dt.date.fromisoformat(e["date"]) == today]
         tomorrow = [e for e in due if dt.date.fromisoformat(e["date"]) > today]
-        parts = []
-        if overdue:
-            parts.append(f"просрочено: {len(overdue)}")
-        if todays:
-            parts.append(f"сегодня: {len(todays)}")
-        if tomorrow:
-            parts.append(f"завтра: {len(tomorrow)}")
         first = (todays or tomorrow or overdue)[0]
         when = "сегодня" if dt.date.fromisoformat(first["date"]) == today else (
             "завтра" if dt.date.fromisoformat(first["date"]) > today else "просрочено")
-        self.main.set_banner(f"{', '.join(parts).capitalize()}.  Ближайшее, {when}"
-                             f"{(' в ' + first['time']) if first['time'] else ''}: {first['kind'].lower()} "
-                             f"«{first['title']}», {first['case_title'] or 'без дела'}. Нажмите, чтобы открыть дела.")
+        more = len(due) - 1
+        self.main.set_banner(f"⚠  {when.capitalize()}{(' в ' + first['time']) if first['time'] else ''}: "
+                             f"{first['kind'].lower()} «{first['title']}» · {first['case_title'] or 'без дела'}"
+                             f"{f'  (и ещё {more})' if more > 0 else ''}   →",
+                             first.get("case_id"))
         new = [e for e in due if not e["notified"]]
         if new and self.tray:
             text = "\n".join(f"{CS.ru(e['date'])} {e['time']} {e['kind']}: {e['title']} ({e['case_title'] or ''})"

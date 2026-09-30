@@ -39,7 +39,7 @@ import tutorial
 import phone_export as PHX
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "2.8"
+APP_VERSION = "2.9"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -1825,8 +1825,8 @@ class MainWindow(QMainWindow):
         self.a_dup = act("Дублировать", self.duplicate_selected, "Ctrl+D")
         self.a_blank = act("Пустая страница", self.insert_blank)
         self.a_extract = act("Извлечь", self.extract_selected, "Ctrl+E", tip="Сохранить выбранные страницы в новый файл")
-        self.a_edit = act("✎ Редактировать", lambda: self.open_editor(), "Ctrl+Return",
-                          tip="Открыть страницу в редакторе")
+        self.a_edit = act("✎ Править", lambda: self.open_editor(), "Ctrl+Return",
+                          tip="Редактировать страницу: текст, подпись, печать, маркер, скрыть данные")
         self.a_selall = act("Выделить всё", lambda: self.pages.selectAll(), QKeySequence.SelectAll)
         self.a_nav = act("Мои дела", self.toggle_nav, "Ctrl+B", tip="Показать или скрыть список дел и документов")
         self.a_nav.setCheckable(True)
@@ -1866,6 +1866,8 @@ class MainWindow(QMainWindow):
         me.addSeparator()
         for a in (self.a_rl, self.a_rr, self.a_del, self.a_dup, self.a_blank, self.a_extract, self.a_edit):
             me.addAction(a)
+        me.addSeparator()
+        me.addAction("🗑 Корзина…", self.show_trash)
         mv = mb.addMenu("Вид")
         mtheme = mv.addMenu("Тема оформления")
         grp = QActionGroup(self)
@@ -1967,7 +1969,8 @@ class MainWindow(QMainWindow):
         self.slider.setToolTip("Размер миниатюр")
         self.slider.valueChanged.connect(self.set_thumb_size)
         self.slider.sliderReleased.connect(lambda: settings().setValue("thumb_w", self.slider.value()))
-        tb2.addWidget(self.slider)
+        self.slider_act = tb2.addWidget(self.slider)
+        self.slider_act.setVisible(False)             # размер миниатюр — в «Вид ▾»: место нужнее кнопкам
 
         # левая панель инструментов
         self.tree = QTreeWidget()
@@ -2080,7 +2083,15 @@ class MainWindow(QMainWindow):
         b_help.setObjectName("sidelink")
         b_help.setCursor(Qt.PointingHandCursor)
         b_help.clicked.connect(lambda: self.show_section(3))
+        b_trash = QPushButton("🗑   Корзина")
+        self.b_trash = b_trash
+        b_trash.setObjectName("sidelink")
+        b_trash.setCursor(Qt.PointingHandCursor)
+        b_trash.setToolTip("Удалённые дела, документы и сроки — их можно вернуть в течение 30 дней")
+        b_trash.clicked.connect(self.show_trash)
+        sv.addWidget(b_trash)
         sv.addWidget(b_help)
+        QTimer.singleShot(0, lambda: U.refresh_trash_button(self))
 
         # область документа: панель инструментов + страницы
         self.removeToolBar(self.toolbar)
@@ -2174,8 +2185,10 @@ class MainWindow(QMainWindow):
         self.banner = QPushButton()
         self.banner.setObjectName("banner")
         self.banner.setCursor(Qt.PointingHandCursor)
-        self.banner.clicked.connect(self.show_cases)
+        self.banner.clicked.connect(self._banner_click)
         self.banner.hide()
+        self._banner_text, self._banner_cid = "", None
+        self.stack.currentChanged.connect(lambda *_: self._sync_banner())
 
         right = QWidget()
         rv = QVBoxLayout(right)
@@ -2598,6 +2611,56 @@ class MainWindow(QMainWindow):
         lab.show()
         lab.raise_()
         QTimer.singleShot(ms, lab.deleteLater)
+
+    def show_trash(self):
+        U.TrashDialog(self).exec()
+
+    def toast_undo(self, text, on_undo, ms=10000):
+        """Плашка внизу окна: «Удалено. [Отменить]» — вместо вопросов «Вы уверены?» перед удалением."""
+        old = getattr(self, "_undo_bar", None)
+        if old is not None:
+            try:
+                old.deleteLater()
+            except RuntimeError:
+                pass
+        bar = QFrame(self)
+        self._undo_bar = bar
+        bar.setObjectName("undobar")
+        bar.setStyleSheet(f"QFrame#undobar {{ background: {T['text']}; border-radius: 12px; }}"
+                          f"QLabel {{ color: {T['panel']}; font-weight: 600; background: transparent; }}"
+                          f"QPushButton {{ color: {T['accent']}; background: {T['panel']}; border: none; "
+                          "border-radius: 8px; padding: 5px 14px; font-weight: 700; }")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(16, 8, 8, 8)
+        h.setSpacing(14)
+        lab = QLabel(text)
+        lab.setWordWrap(True)
+        lab.setMinimumWidth(min(lab.fontMetrics().horizontalAdvance(text) + 12, 440))
+        h.addWidget(lab, 1)
+        b = QPushButton("Отменить")
+        b.setCursor(Qt.PointingHandCursor)
+        h.addWidget(b)
+        done = []
+
+        def undo():
+            if done:
+                return
+            done.append(1)
+            bar.hide()
+            bar.deleteLater()
+            try:
+                on_undo()
+            except Exception as e:
+                self.error("Не удалось отменить", e)
+        b.clicked.connect(undo)
+        bar.setMaximumWidth(min(620, self.width() - 40))
+        bar.adjustSize()
+        bar.move((self.width() - bar.width()) // 2, self.height() - bar.height() - 44)
+        bar.show()
+        bar.raise_()
+        anim.fade_in(bar, 160)
+        QTimer.singleShot(ms, lambda: (not done) and _safe_delete(bar))
+        return bar
 
     def ask_save_path(self, title, suffix, flt, name_suffix=""):
         default = os.path.join(self.default_dir(), f"{self.base_name()}{name_suffix}{suffix}")
@@ -3136,7 +3199,7 @@ class MainWindow(QMainWindow):
             return
         self.open_paths(paths)
 
-    def remove_from_case_pdf(self, cid, path):
+    def remove_from_case_pdf(self, cid, path, undo=True):
         """Убрать страницы файла из PDF дела (с возможностью отменить)."""
         self.show_main_ws(cid)
         key = os.path.normcase(os.path.abspath(path))
@@ -3144,7 +3207,8 @@ class MainWindow(QMainWindow):
                  if os.path.normcase(_pdf_key(self.doc, k, "LHSrc") or "") == key]
         if not pages:
             return 0
-        self.push_undo()
+        if undo:
+            self.push_undo()
         self.doc.delete_pages(pages)
         self.refresh_all()
         self.update_title()
@@ -3720,6 +3784,8 @@ class MainWindow(QMainWindow):
     def _mount_parts(self):
         """Редактор PDF и калькуляторы — там, где сейчас пользователь (в деле или «Без дела»)."""
         QTimer.singleShot(0, lambda: self.status_lbl.setVisible(self.docarea.isVisible()))
+        for a in (self.a_open, self.a_add):          # в деле документы добавляются одной кнопкой слева
+            a.setVisible(not self.mode_cid)
         if self.mode_cid:
             self._mount(self.docarea, self.case_doc_slot)
             self._mount(self.calc_page, self.case_calc_slot)
@@ -3747,7 +3813,7 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         self.a_preview = m.addAction("Просмотр страницы крупно")
         self.a_preview.setCheckable(True)
-        self.a_preview.setChecked(str(settings().value("preview_on", "1")) == "1")
+        self.a_preview.setChecked(str(settings().value("preview_on", "0")) == "1")
         self.a_preview.setShortcut("F3")
         self.a_preview.toggled.connect(self.set_preview)
         self.addAction(self.a_preview)
@@ -3755,7 +3821,15 @@ class MainWindow(QMainWindow):
         m.addAction("Свернуть все файлы", lambda: self.collapse_all(True))
         m.addAction("Развернуть все файлы", lambda: self.collapse_all(False))
         b.setMenu(m)
-        self.toolbar2.addWidget(b)
+        pv = QToolButton()
+        pv.setDefaultAction(self.a_preview)
+        pv.setObjectName("toolsbtn")
+        pv.setToolTip("Показать выбранную страницу крупно рядом с миниатюрами (F3)")
+        self.preview_btn = pv
+        pv.setText("🔍")                               # во втором ряду тесно — только значок, пояснение в подсказке
+        pv.setToolTip("Крупно: показать выбранную страницу крупно справа, чтобы прочитать (F3)")
+        self.toolbar2.addWidget(pv)
+        self.toolbar.addWidget(b)                      # «Вид» — в первый ряд: во втором на узком экране тесно
 
     def set_thumb_size_saved(self, w):
         settings().setValue("thumb_w", w)
@@ -3889,6 +3963,7 @@ class MainWindow(QMainWindow):
         cp = self.cases_page
         tabs = cp.tabs
         by_name = {tabs.tabText(i): tabs.widget(i) for i in range(tabs.count())}
+        cp._restoring = True                       # перестройка вкладок — не «переход» пользователя
         while tabs.count():
             tabs.removeTab(0)
         self.overview = U.OverviewTab(self)
@@ -3915,12 +3990,12 @@ class MainWindow(QMainWindow):
         self.docs_seg = seg
         lv.addWidget(self.docs_mode, 1)
         dl = left
-        dl.setMinimumWidth(395)
+        dl.setMinimumWidth(360)
         docs.addWidget(dl)
         self.case_doc_slot = self._slot()
         docs.addWidget(self.case_doc_slot)
         docs.setStretchFactor(1, 1)
-        docs.setSizes([410, 870])
+        docs.setSizes([370, 910])
         cp.l_docs.setColumnHidden(3, True)
         cp.l_docs.setColumnWidth(2, 128)
         prepare = U.PrepareTab(self, None)
@@ -3947,8 +4022,11 @@ class MainWindow(QMainWindow):
         mm.addSeparator()
         mm.addAction("📁 Открыть папку дела", lambda: U.open_case_folder(self.mode_cid))
         mm.addAction("📦 Собрать все файлы в папку дела", lambda: U.collect_case_files(self, self.mode_cid))
+        mm.addSeparator()
+        mm.addAction("🗑 Удалить дело (в корзину)", lambda: cp.delete_case(self.mode_cid))
         more.setMenu(mm)
         tabs.setCornerWidget(more, Qt.TopRightCorner)
+        cp._restoring = False
         tabs.currentChanged.connect(self._on_case_tab)
         tabs.currentChanged.connect(lambda *_: anim.fade_in(tabs.currentWidget()))
 
@@ -4159,13 +4237,27 @@ class MainWindow(QMainWindow):
     def tool_calc_interest(self):
         self.show_calc(2)
 
-    def set_banner(self, text):
+    def set_banner(self, text, cid=None):
+        """Красная полоса о срочном (сегодня, завтра, просрочено). На «Главной» не показывается —
+        там то же самое есть в карточке «Горящие и просроченные»."""
+        self._banner_text, self._banner_cid = text, cid
+        self._sync_banner()
+
+    def _sync_banner(self):
+        text = self._banner_text if self.stack.currentWidget() is not self.home_page else ""
         was = self.banner.isVisible()
         self.banner.setText(text)
         if text and not was and self.isVisible():
             anim.slide_down(self.banner)
         else:
             self.banner.setVisible(bool(text))
+
+    def _banner_click(self):
+        if self._banner_cid and U.db().case(self._banner_cid):
+            self.enter_case(self._banner_cid)
+            self.open_case_tab("overview")
+        else:
+            self.show_home()
 
     def refresh_cases(self):
         if self.cases_page:
@@ -5557,6 +5649,13 @@ def polish_ui(root):
         bar.setDrawBase(False)
 
 
+def _safe_delete(w):
+    try:
+        w.deleteLater()
+    except RuntimeError:
+        pass
+
+
 def main():
     if C.IS_WIN:
         try:  # своя иконка на панели задач
@@ -5602,7 +5701,8 @@ def main():
         splash = anim.Splash(QIcon(resource("app.ico")).pixmap(256, 256), APP_NAME, APP_VERSION,
                              dark=T.get("name") == "dark")
         splash.start()
-        anim.wait(450)
+        anim.wait(420)                          # дать заставке спокойно проявиться
+        splash.hold()
     w = MainWindow()
     if splash:
         w.setWindowOpacity(0.0)

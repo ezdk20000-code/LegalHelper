@@ -6,7 +6,7 @@
 },
 {
 "path": "CHANGELOG.md",
-"size": 48300
+"size": 54319
 },
 {
 "path": "README.md",
@@ -14,7 +14,7 @@
 },
 {
 "path": "anim.py",
-"size": 7133
+"size": 8290
 },
 {
 "path": "app.ico",
@@ -30,7 +30,7 @@
 },
 {
 "path": "case_tabs.py",
-"size": 68853
+"size": 69536
 },
 {
 "path": "casefile.py",
@@ -38,7 +38,7 @@
 },
 {
 "path": "cases.py",
-"size": 27321
+"size": 32450
 },
 {
 "path": "docs/.nojekyll",
@@ -206,23 +206,23 @@
 },
 {
 "path": "help/img/00_home.png",
-"size": 195464
+"size": 170520
 },
 {
 "path": "help/img/01_main.png",
-"size": 199575
+"size": 168887
 },
 {
 "path": "help/img/02_sidebar.png",
-"size": 72415
+"size": 47969
 },
 {
 "path": "help/img/03_loose.png",
-"size": 147683
+"size": 116986
 },
 {
 "path": "help/img/04_toolbar.png",
-"size": 14478
+"size": 10994
 },
 {
 "path": "help/img/05_editor.png",
@@ -254,63 +254,83 @@
 },
 {
 "path": "help/img/12_case.png",
-"size": 201164
+"size": 162669
 },
 {
 "path": "help/img/13_banner.png",
-"size": 12517
+"size": 10771
 },
 {
 "path": "help/img/14_events.png",
-"size": 138726
+"size": 109746
 },
 {
 "path": "help/img/15_docs.png",
-"size": 254714
+"size": 181232
 },
 {
 "path": "help/img/16_prepare.png",
-"size": 213177
+"size": 183634
 },
 {
 "path": "help/img/17_laws.png",
-"size": 153838
+"size": 125259
 },
 {
 "path": "help/img/18_money.png",
-"size": 154331
+"size": 127352
 },
 {
 "path": "help/img/19_board.png",
-"size": 166526
+"size": 147021
 },
 {
 "path": "help/img/20_deadline.png",
-"size": 173822
+"size": 146213
 },
 {
 "path": "help/img/21_duty.png",
-"size": 153467
+"size": 124138
 },
 {
 "path": "help/img/22_interest.png",
-"size": 161280
+"size": 132276
 },
 {
 "path": "help/img/23_dark.png",
-"size": 201033
+"size": 174943
 },
 {
 "path": "help/img/24_groups.png",
-"size": 254714
+"size": 181232
+},
+{
+"path": "help_article.png",
+"size": 161224
 },
 {
 "path": "help_content.py",
-"size": 31620
+"size": 32082
+},
+{
+"path": "help_dark.png",
+"size": 202714
+},
+{
+"path": "help_learn.png",
+"size": 201945
+},
+{
+"path": "help_search.png",
+"size": 182202
+},
+{
+"path": "help_start.png",
+"size": 229158
 },
 {
 "path": "help_ui.py",
-"size": 83040
+"size": 84448
 },
 {
 "path": "index.html",
@@ -330,7 +350,7 @@
 },
 {
 "path": "legal_ui.py",
-"size": 229201
+"size": 239077
 },
 {
 "path": "pdf_core.py",
@@ -338,7 +358,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 276767
+"size": 281924
 },
 {
 "path": "phone_export.py",
@@ -374,7 +394,7 @@
 },
 {
 "path": "tutorial.py",
-"size": 38934
+"size": 39250
 },
 {
 "path": "update.bat",
@@ -386,7 +406,7 @@
 },
 {
 "path": "version.json",
-"size": 1153
+"size": 1036
 },
 {
 "path": "УСТАНОВИТЬ.bat",

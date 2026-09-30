@@ -5,7 +5,7 @@
 в покое на компьютер ничего не нагружает. Встроенный браузер (карта дела) не анимируется — эффекты
 прозрачности с ним несовместимы. Выключаются в «Вид → Анимации».
 """
-from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation, QTimer, QEventLoop, QRectF, QPointF
+from PySide6.QtCore import Qt, QElapsedTimer, QEasingCurve, QPropertyAnimation, QTimer, QEventLoop, QRectF, QPointF
 from PySide6.QtGui import QPainter, QColor, QFont, QPixmap, QLinearGradient
 from PySide6.QtWidgets import QWidget, QGraphicsOpacityEffect, QApplication
 
@@ -100,6 +100,9 @@ class Splash(QWidget):
         self.name, self.version, self.dark = name, version, dark
         self.pix = pixmap if isinstance(pixmap, QPixmap) else QPixmap(pixmap)
         self.phase = 0.0
+        self.progress = 0.0            # полоска заполняется слева направо, а не «бегает»
+        self.held = False
+        self.clock = QElapsedTimer()
         self.timer = QTimer(self)
         self.timer.setInterval(16)
         self.timer.timeout.connect(self._tick)
@@ -109,20 +112,37 @@ class Splash(QWidget):
             self.move(g.center().x() - self.width() // 2, g.center().y() - self.height() // 2)
 
     def _tick(self):
-        self.phase = (self.phase + 0.018) % 1.0
+        t = min(1.0, self.clock.elapsed() / 420.0)
+        self.phase = t
+        self.progress = 0.9 * (1 - (1 - t) ** 3)          # плавное замедление к концу
         self.update()
 
     def start(self):
+        self.clock.start()
         self.show()
         self.timer.start()
         window_fade(self, 0.0, 1.0, 260)
         QApplication.processEvents()
 
-    def finish(self, main_window):
-        """Главное окно проявляется, заставка тает."""
+    def hold(self):
+        """Замереть перед тяжёлой работой (сборка главного окна): неподвижная картинка не выглядит
+        «подвисшей», а бегущая полоска, остановившаяся на полпути, — выглядит."""
         self.timer.stop()
-        window_fade(main_window, 0.0, 1.0, 320)
-        window_fade(self, self.windowOpacity(), 0.0, 260, then=self.close)
+        self.progress, self.phase = 0.9, 1.0
+        self.held = True
+        self.repaint()
+        QApplication.processEvents()
+
+    def finish(self, main_window):
+        """Главное окно сначала полностью отрисовывается (ещё невидимым), потом проявляется, а заставка тает."""
+        self.timer.stop()
+        self.progress = 1.0
+        self.repaint()
+        QApplication.processEvents()
+        main_window.repaint()
+        QApplication.processEvents()
+        window_fade(main_window, 0.0, 1.0, 280)
+        window_fade(self, self.windowOpacity(), 0.0, 220, then=self.close)
 
     def paintEvent(self, _e):
         p = QPainter(self)
@@ -136,8 +156,7 @@ class Splash(QWidget):
         p.setBrush(QColor(bg))
         p.drawRoundedRect(r, 22, 22)
         # иконка с лёгким «дыханием»
-        import math
-        s = 84 + 4 * math.sin(self.phase * 2 * math.pi)
+        s = 80 + 8 * (1 - (1 - self.phase) ** 3)            # иконка мягко «вырастает» при появлении
         if not self.pix.isNull():
             p.drawPixmap(QRectF(r.center().x() - s / 2, r.top() + 30 + (88 - s) / 2, s, s), self.pix,
                          QRectF(self.pix.rect()))
@@ -152,16 +171,16 @@ class Splash(QWidget):
         p.setFont(f)
         p.setPen(QColor(sub))
         p.drawText(QRectF(r.left(), r.top() + 156, r.width(), 20), Qt.AlignCenter, f"версия {self.version}")
-        # бегущая полоска загрузки
+        # полоска загрузки
         track = QRectF(r.center().x() - 70, r.bottom() - 36, 140, 4)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(118, 118, 128, 50))
         p.drawRoundedRect(track, 2, 2)
-        x = track.left() + (track.width() + 50) * self.phase - 50
-        seg = QRectF(max(track.left(), x), track.top(), 50, 4).intersected(track)
-        grad = QLinearGradient(QPointF(seg.left(), 0), QPointF(seg.right(), 0))
-        grad.setColorAt(0, QColor(0, 122, 255, 60))
-        grad.setColorAt(1, QColor(0, 122, 255, 255))
-        p.setBrush(grad)
-        p.drawRoundedRect(seg, 2, 2)
+        if self.progress > 0:
+            seg = QRectF(track.left(), track.top(), track.width() * self.progress, 4)
+            grad = QLinearGradient(QPointF(seg.left(), 0), QPointF(seg.right(), 0))
+            grad.setColorAt(0, QColor(0, 122, 255, 140))
+            grad.setColorAt(1, QColor(0, 122, 255, 255))
+            p.setBrush(grad)
+            p.drawRoundedRect(seg, 2, 2)
         p.end()
