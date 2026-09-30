@@ -1,7 +1,7 @@
 ﻿; Скрипт установщика Inno Setup 6 для «LegalHelper» (до версии 1.6 — «PDF Мастер»)
 #define MyAppName "LegalHelper"
 #ifndef MyAppVersion
-  #define MyAppVersion "3.0.1"
+  #define MyAppVersion "3.0.2"
 #endif
 #define MyAppExe "LegalHelper.exe"
 
@@ -26,6 +26,9 @@ PrivilegesRequiredOverridesAllowed=commandline
 DisableDirPage=yes
 DisableReadyPage=yes
 ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed=x64compatible
+; Windows 10 версии 1809 и новее (раньше — непонятные ошибки при запуске; Inno Setup скажет это сам)
+MinVersion=10.0.17763
 CloseApplications=force
 UsePreviousAppDir=yes
 UsePreviousPrivileges=yes

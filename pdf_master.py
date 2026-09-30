@@ -41,7 +41,7 @@ import phone_export as PHX
 import palette
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.0.1"
+APP_VERSION = "3.0.2"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -5870,6 +5870,28 @@ def polish_ui(root):
         bar.setDrawBase(False)
 
 
+def _selftest():
+    """Собрать главное окно и загрузить все библиотеки, которые программа подгружает позже (Word, Excel,
+    распознавание…). Код выхода 0 — всё на месте; иначе причина — в журнале ошибок. Окно не показывается."""
+    code = 0
+    try:
+        w = MainWindow()
+        QApplication.processEvents()
+        for mod in ("pdf2docx", "cv2", "numpy", "docx", "pptx", "openpyxl", "palette",
+                    "PySide6.QtWebEngineWidgets"):
+            try:
+                __import__(mod)
+            except Exception as e:
+                log_error(f"Пробный запуск: не загрузилось {mod}", e)
+                code = 2
+        w.hide()
+    except Exception as e:
+        log_error("Пробный запуск", e)
+        code = 1
+    sys.stdout.flush()
+    os._exit(code)
+
+
 def _safe_delete(w):
     try:
         w.deleteLater()
@@ -5916,6 +5938,8 @@ def main():
                                                        app.topLevelWidgets() if hasattr(w, "refresh_theme")]))
     except Exception:
         pass
+    if "--selftest" in sys.argv:                # пробный запуск при сборке установщика (см. release.yml)
+        _selftest()
     anim.ENABLED = str(settings().value("animations", "1")) != "0"
     splash = None
     if anim.ENABLED:                            # заставка, пока открывается главное окно

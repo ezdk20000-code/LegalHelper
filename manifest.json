@@ -2,11 +2,11 @@
 "files": [
 {
 "path": ".github/workflows/release.yml",
-"size": 4390
+"size": 7301
 },
 {
 "path": "CHANGELOG.md",
-"size": 59852
+"size": 62022
 },
 {
 "path": "README.md",
@@ -39,6 +39,10 @@
 {
 "path": "cases.py",
 "size": 32450
+},
+{
+"path": "constraints-build.txt",
+"size": 805
 },
 {
 "path": "docs/.nojekyll",
@@ -318,7 +322,7 @@
 },
 {
 "path": "installer.iss",
-"size": 3554
+"size": 3773
 },
 {
 "path": "legal_core.py",
@@ -342,7 +346,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 294364
+"size": 295494
 },
 {
 "path": "phone_export.py",
@@ -390,7 +394,7 @@
 },
 {
 "path": "version.json",
-"size": 1237
+"size": 892
 },
 {
 "path": "УСТАНОВИТЬ.bat",

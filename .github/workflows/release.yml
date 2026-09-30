@@ -40,24 +40,56 @@ jobs:
       - name: Библиотеки
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pyinstaller
+          python -m pip install -r requirements.txt pyinstaller -c constraints-build.txt
+          # pymupdf4llm (PDF → Markdown) в новых версиях требует движок нейросетей onnxruntime, а его
+          # onnxruntime.dll конфликтует с одноимённой системной библиотекой Windows 11. В установщик их не берём:
+          # для Markdown у программы есть свой способ (pdf_core._simple_markdown)
+          python -m pip uninstall -y pymupdf4llm pymupdf_layout onnxruntime
+          python -m pip list
 
       - name: Сборка программы
         run: >
           python -m PyInstaller --noconfirm --clean --windowed --log-level WARN --name LegalHelper --icon app.ico
           --add-data "app.ico;." --add-data "tessdata;tessdata" --add-data "excalidraw;excalidraw" --add-data "help;help" --add-data "forms;forms"
-          --collect-data pptx --collect-data docx --collect-all pymupdf4llm --collect-all pdf2docx
+          --collect-data pptx --collect-data docx --collect-all pdf2docx
           --hidden-import case_tabs --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore
           --hidden-import legal_ui --hidden-import legal_core --hidden-import cases --hidden-import legal_data
           --hidden-import templates_lib --hidden-import help_ui --hidden-import updater --hidden-import timecheck
           --hidden-import backup --hidden-import casefile --hidden-import anim --hidden-import timer_widget
           --hidden-import extwatch --hidden-import tutorial --hidden-import help_content --hidden-import phone_export --hidden-import palette
+          --exclude-module onnxruntime --exclude-module pymupdf.layout --exclude-module pymupdf4llm
           pdf_master.py
+
+      - name: Библиотеки Visual C++ рядом с программой
+        shell: pwsh
+        run: |
+          # Windows ищет системные DLL сначала в папке программы, потом в System32 и только потом во внутренних
+          # папках сборки. На свежем компьютере в System32 бывают старые файлы Visual C++ — и программа
+          # падала с «Порядковый номер … не найден». Кладём свежие копии (с этого сервера, где стоит
+          # последняя версия Visual C++) прямо рядом с LegalHelper.exe и заменяем ими копии внутри сборки.
+          $names = "msvcp140.dll","msvcp140_1.dll","msvcp140_2.dll","msvcp140_atomic_wait.dll","msvcp140_codecvt_ids.dll",
+                   "vcruntime140.dll","vcruntime140_1.dll","concrt140.dll","vcomp140.dll"
+          $dist = "dist\LegalHelper"
+          foreach ($n in $names) {
+            $src = Join-Path $env:SystemRoot "System32\$n"
+            if (-not (Test-Path $src)) { Write-Host "нет $n"; continue }
+            Copy-Item $src $dist -Force
+            Get-ChildItem $dist -Recurse -Filter $n | Where-Object { $_.DirectoryName -ne (Resolve-Path $dist).Path } |
+              ForEach-Object { Copy-Item $src $_.FullName -Force }
+            Write-Host "$n $((Get-Item $src).VersionInfo.FileVersion)"
+          }
+          if (Get-ChildItem $dist -Recurse -Filter "onnxruntime*.dll") { throw "В сборку попал onnxruntime" }
 
       - name: Проверка сборки
         shell: pwsh
         run: |
           if (-not (Test-Path dist\LegalHelper\LegalHelper.exe)) { throw "Нет dist\LegalHelper\LegalHelper.exe" }
+          # пробный запуск: программа открывает главное окно без показа и сразу закрывается (код 0 — всё загрузилось)
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process dist\LegalHelper\LegalHelper.exe -ArgumentList "--selftest" -PassThru
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); throw "Пробный запуск завис" }
+          if ($p.ExitCode -ne 0) { throw "Пробный запуск завершился с кодом $($p.ExitCode)" }
+          Write-Host "Пробный запуск: OK"
 
       - name: Inno Setup
         shell: pwsh
