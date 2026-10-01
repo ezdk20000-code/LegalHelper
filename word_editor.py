@@ -49,6 +49,7 @@ SKIP_PAR_TAGS = {qn(t) for t in ("w:pPr", "w:bookmarkStart", "w:bookmarkEnd", "w
 ALIGN = {"left": Qt.AlignLeft, "start": Qt.AlignLeft, "center": Qt.AlignHCenter, "right": Qt.AlignRight,
          "end": Qt.AlignRight, "both": Qt.AlignJustify, "distribute": Qt.AlignJustify}
 PX = 96 / 72.0                             # пунктов → точек экрана
+DEFAULT_FONT = "Times New Roman"           # шрифт юридических документов: везде, где документ не задал другой
 
 
 def _iv(x):
@@ -110,25 +111,55 @@ class DocxModel:
         self.objs = []           # исходные объекты внутри абзацев (картинки, поля…)
         self.complex_tables = 0
         st = self.doc.styles
+        self.theme_fonts = self._read_theme_fonts()
         try:
             nf = st["Normal"].font
-            self.base_family = nf.name or "Times New Roman"
-            self.base_size = nf.size.pt if nf.size else 12.0
+            self.base_family = nf.name or DEFAULT_FONT
+            self.base_size = nf.size.pt if nf.size else 14.0
         except KeyError:
-            self.base_family, self.base_size = "Times New Roman", 12.0
+            self.base_family, self.base_size = DEFAULT_FONT, 14.0
         defaults = self.doc.styles.element.find(qn("w:docDefaults"))
         if defaults is not None:
             rpr = defaults.find(qn("w:rPrDefault") + "/" + qn("w:rPr"))
             if rpr is not None:
                 fonts = rpr.find(qn("w:rFonts"))
                 if fonts is not None and not self.doc.styles["Normal"].font.name:
-                    self.base_family = fonts.get(qn("w:ascii")) or fonts.get(qn("w:hAnsi")) or self.base_family
+                    self.base_family = self._font_name(fonts) or self.base_family
                 sz = rpr.find(qn("w:sz"))
                 if sz is not None and not self.doc.styles["Normal"].font.size:
                     try:
                         self.base_size = int(_val(sz)) / 2
                     except (TypeError, ValueError):
                         pass
+
+    def _read_theme_fonts(self):
+        """Шрифты темы оформления (Word пишет не «Times New Roman», а «основной шрифт темы»)."""
+        out = {}
+        try:
+            for part in self.doc.part.package.iter_parts():
+                if "/theme/" in str(part.partname):
+                    import re
+                    xml = part.blob.decode("utf-8", "replace")
+                    for kind in ("major", "minor"):
+                        m = re.search(rf"<a:{kind}Font>\s*<a:latin typeface=\"([^\"]*)\"", xml)
+                        if m and m.group(1):
+                            out[kind] = m.group(1)
+                    break
+        except Exception:
+            pass
+        return out
+
+    def _font_name(self, rfonts):
+        """Имя шрифта из <w:rFonts>: прямое или из темы; None — не задано."""
+        if rfonts is None:
+            return None
+        name = rfonts.get(qn("w:ascii")) or rfonts.get(qn("w:hAnsi")) or rfonts.get(qn("w:cs"))
+        if name:
+            return name
+        theme = rfonts.get(qn("w:asciiTheme")) or rfonts.get(qn("w:hAnsiTheme"))
+        if theme:
+            return self.theme_fonts.get("major" if theme.startswith("major") else "minor")
+        return None
 
     # ------------------------------------------------------------------ свойства из Word
     def _style_font(self, style_id, kind):
@@ -147,9 +178,9 @@ class DocxModel:
                     if el is not None and _val(el):
                         return int(_val(el)) / 2
                 elif kind == "font":
-                    el = rpr.find(qn("w:rFonts"))
-                    if el is not None and (el.get(qn("w:ascii")) or el.get(qn("w:hAnsi"))):
-                        return el.get(qn("w:ascii")) or el.get(qn("w:hAnsi"))
+                    name = self._font_name(rpr.find(qn("w:rFonts")))
+                    if name:
+                        return name
             based = st.find(qn("w:basedOn"))
             st = self.doc.styles.element.get_by_id(_val(based)) if based is not None else None
             seen += 1
@@ -171,9 +202,7 @@ class DocxModel:
                     size = int(_val(sz)) / 2
                 except ValueError:
                     pass
-            f = rpr.find(qn("w:rFonts"))
-            if f is not None:
-                family = f.get(qn("w:ascii")) or f.get(qn("w:hAnsi")) or f.get(qn("w:cs"))
+            family = self._font_name(rpr.find(qn("w:rFonts")))
         size = size or self._style_font(pstyle, "sz") or self.base_size
         family = family or self._style_font(pstyle, "font") or self.base_family
         return b, i, u, float(size), family
@@ -184,7 +213,7 @@ class DocxModel:
         cf.setFontItalic(i)
         cf.setFontUnderline(u)
         cf.setFontPointSize(size)
-        cf.setFontFamilies([family])
+        cf.setFontFamilies([family, DEFAULT_FONT] if family != DEFAULT_FONT else [family])
         cf.setProperty(R_RPR, rpr_idx)
         cf.setProperty(R_B0, b)
         cf.setProperty(R_I0, i)
@@ -622,8 +651,21 @@ class DocxModel:
     def save(self, path=None):
         path = path or self.path
         tmp = path + ".lh_tmp"
+        self._forget_word_stats()
         self.doc.save(tmp)
         os.replace(tmp, path)
+
+    def _forget_word_stats(self):
+        """Число страниц, записанное Word, после нашей правки уже неверно — убрать его (см. word_page_count)."""
+        try:
+            for rel in self.doc.part.package.iter_parts():
+                if str(rel.partname).endswith("/docProps/app.xml"):
+                    import re
+                    xml = rel.blob.decode("utf-8", "replace")
+                    xml = re.sub(r"<Pages>\d+</Pages>", "", xml)
+                    rel._blob = xml.encode("utf-8")
+        except Exception:
+            pass
 
 
 # порядок элементов внутри pPr/rPr важен для Word — вставляем на «своё» место
@@ -721,6 +763,7 @@ class WordEditor(QDialog):
         self.tb.addSeparator()
         self.font_box = QFontComboBox()
         self.font_box.setMaximumWidth(160)
+        self.font_box.setCurrentFont(QFont(DEFAULT_FONT))
         self.font_box.setToolTip("Шрифт")
         self.font_box.currentFontChanged.connect(lambda f: self._merge(lambda cf: cf.setFontFamilies([f.family()])))
         self.tb.addWidget(self.font_box)

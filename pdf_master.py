@@ -42,7 +42,7 @@ import palette
 import word_editor as WE
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.1"
+APP_VERSION = "3.1.1"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -3021,7 +3021,9 @@ class MainWindow(QMainWindow):
                 self._convert_in_background(p)
             while True:
                 try:
-                    return C.open_as_pdf(p, self.password_prompt)
+                    d = C.open_as_pdf(p, self.password_prompt)
+                    self._check_word_pages(p, d)
+                    return d
                 except Exception as e:
                     if slow:
                         raise
@@ -3039,6 +3041,19 @@ class MainWindow(QMainWindow):
             if slow:
                 QApplication.restoreOverrideCursor()
             self.statusBar().clearMessage()
+
+    def _check_word_pages(self, p, d):
+        """Сторож: в PDF не должно оказаться меньше страниц, чем насчитал сам Word. Иначе — громко сказать."""
+        want = C.word_page_count(p)
+        if d is None or not want or d.page_count >= want:
+            return
+        log_error(f"Word → PDF: в «{Path(p).name}» Word насчитал {want} стр., в PDF вышло {d.page_count}")
+        QMessageBox.warning(
+            self, APP_NAME,
+            f"Внимание: в Word документ «{Path(p).name}» занимает {want} стр., а при переводе в PDF получилось "
+            f"{d.page_count}.\n\nПроверьте последние страницы этого документа в PDF дела. Если чего-то не хватает — "
+            "откройте документ в Word (правый щелчок → «Открыть в своей программе»), сохраните его там ещё раз, "
+            "и программа обновит страницы.")
 
     def _convert_in_background(self, p):
         """Превратить Word/Excel/… в PDF в отдельном потоке и подождать, не замораживая окно.

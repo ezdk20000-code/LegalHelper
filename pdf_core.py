@@ -403,8 +403,28 @@ def convert_cache_dir():
 def _cache_key(path):
     import hashlib
     st = os.stat(path)
-    raw = f"{os.path.normcase(os.path.abspath(path))}|{st.st_size}|{int(st.st_mtime)}"
+    # время — с точностью до наносекунд: два сохранения в Word за одну секунду не спутаются
+    raw = f"{os.path.normcase(os.path.abspath(path))}|{st.st_size}|{st.st_mtime_ns}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def word_page_count(path):
+    """Сколько страниц насчитал сам Word при последнем сохранении (docProps/app.xml) или None.
+    Записывает только Word; если файл последним сохранила другая программа — не доверяем."""
+    if not str(path).lower().endswith((".docx", ".docm")):
+        return None
+    try:
+        import zipfile
+        with zipfile.ZipFile(path) as z:
+            xml = z.read("docProps/app.xml").decode("utf-8", "replace")
+    except Exception:
+        return None
+    app = re.search(r"<Application>([^<]*)</Application>", xml)
+    pages = re.search(r"<Pages>(\d+)</Pages>", xml)
+    if not pages or not app or "Microsoft" not in app.group(1):
+        return None
+    n = int(pages.group(1))
+    return n if n > 0 else None
 
 
 def cached_pdf(path):
@@ -1076,8 +1096,15 @@ def _office_com(src, out):
             app.Visible = False
             app.DisplayAlerts = 0
             try:
-                d = app.Documents.Open(src, ReadOnly=True, ConfirmConversions=False)
-                d.ExportAsFixedFormat(out, 17)
+                d = app.Documents.Open(src, ReadOnly=True, ConfirmConversions=False, AddToRecentFiles=False)
+                try:
+                    d.Repaginate()
+                except Exception:
+                    pass
+                # явно: весь документ (Range=0), всё содержимое (Item=0), качество для печати (OptimizeFor=0)
+                d.ExportAsFixedFormat(OutputFileName=out, ExportFormat=17, OpenAfterExport=False, OptimizeFor=0,
+                                      Range=0, Item=0, IncludeDocProps=True, KeepIRM=True, CreateBookmarks=0,
+                                      DocStructureTags=True, BitmapMissingFonts=True, UseISO19005_1=False)
                 d.Close(False)
             finally:
                 app.Quit()
