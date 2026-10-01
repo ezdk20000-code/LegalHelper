@@ -726,5 +726,7 @@ def start(main):
         return
     if not main.save_all_ws():
         return
+    if hasattr(main, "set_sidebar"):              # стрелки показывают на список дел слева — он должен быть виден
+        main.set_sidebar(True, animate=False)
     main.tutor = Tutor(main)
     main.tutor.start()

@@ -41,7 +41,7 @@ import phone_export as PHX
 import palette
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.0.3"
+APP_VERSION = "3.0.4"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -1830,9 +1830,9 @@ class MainWindow(QMainWindow):
         self.a_edit = act("✎ Править", lambda: self.open_editor(), "Ctrl+Return",
                           tip="Редактировать страницу: текст, подпись, печать, маркер, скрыть данные")
         self.a_selall = act("Выделить всё", lambda: self.pages.selectAll(), QKeySequence.SelectAll)
-        self.a_nav = act("Мои дела", self.toggle_nav, "Ctrl+B", tip="Показать или скрыть список дел и документов")
+        self.a_nav = act("Левая панель", self.toggle_nav, "Ctrl+B", tip="Показать или скрыть левую панель с делами")
         self.a_nav.setCheckable(True)
-        self.a_nav.setChecked(settings().value("nav_visible", "true") == "true")
+        self.a_nav.setChecked(str(settings().value("sidebar_collapsed", "0")) != "1")
         tb.addAction(self.a_nav)
         self.doc_title = QLabel("Новый документ")
         self.doc_title.setObjectName("doctitle")
@@ -1893,6 +1893,7 @@ class MainWindow(QMainWindow):
                                          ("Деньги", "money"), ("Сведения", "info"))):
             a = mv.addAction(name, lambda key=key: self.open_case_tab(key))
             a.setShortcut(f"Ctrl+{i + 1}")
+        mv.addAction(self.a_nav)
         a_anim = mv.addAction("Анимации")
         a_anim.setCheckable(True)
         a_anim.setChecked(anim.ENABLED)
@@ -2033,7 +2034,11 @@ class MainWindow(QMainWindow):
         # боковая панель: название, «Без дела», список дел, справка
         side = QWidget()
         side.setObjectName("sidebar")
-        side.setFixedWidth(300)
+        side.setMinimumWidth(0)
+        side.setMaximumWidth(300)
+        side.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        side.resize(300, side.height())
+        self.side = side
         sv = QVBoxLayout(side)
         sv.setContentsMargins(12, 16, 12, 10)
         sv.setSpacing(0)
@@ -2041,8 +2046,21 @@ class MainWindow(QMainWindow):
         brand.setObjectName("brand")
         sub = QLabel("документы, дела и сроки")
         sub.setObjectName("brandsub")
-        sv.addWidget(brand)
-        sv.addWidget(sub)
+        bh = QHBoxLayout()
+        bh.setContentsMargins(0, 0, 0, 0)
+        bcol = QVBoxLayout()
+        bcol.setSpacing(0)
+        bcol.addWidget(brand)
+        bcol.addWidget(sub)
+        bh.addLayout(bcol, 1)
+        b_fold = QToolButton()
+        b_fold.setText("«")
+        b_fold.setObjectName("sidefold")
+        b_fold.setCursor(Qt.PointingHandCursor)
+        b_fold.setToolTip("Свернуть левую панель — больше места для работы (Ctrl+B)")
+        b_fold.clicked.connect(lambda: self.set_sidebar(False))
+        bh.addWidget(b_fold, 0, Qt.AlignTop)
+        sv.addLayout(bh)
         sv.addSpacing(10)
         gs = QPushButton("🔍   Найти что угодно…        Ctrl+K")
         gs.setObjectName("globalsearch")
@@ -2217,8 +2235,11 @@ class MainWindow(QMainWindow):
         ch.setContentsMargins(0, 0, 0, 0)
         ch.setSpacing(0)
         ch.addWidget(side)
+        ch.addWidget(self._build_rail())
         ch.addWidget(right, 1)
         self.setCentralWidget(central)
+        self.addAction(self.a_nav)
+        self.set_sidebar(str(settings().value("sidebar_collapsed", "0")) != "1", animate=False)
         QTimer.singleShot(60, self._initial_mode)
         self.status_lbl = QLabel()
         self.statusBar().addPermanentWidget(self.status_lbl)
@@ -4657,12 +4678,72 @@ class MainWindow(QMainWindow):
         self.open_external(path, 0, cid)
 
     def toggle_nav(self):
-        vis = not self.navigator.isVisible()
-        self.navigator.setVisible(vis)
-        self.a_nav.setChecked(vis)
-        settings().setValue("nav_visible", "true" if vis else "false")
-        if vis:
-            self.navigator.refresh()
+        self.set_sidebar(not self.side.isVisible() or self.side.maximumWidth() < 300)
+
+    def _build_rail(self):
+        """Свёрнутая левая панель: узкая полоска со значками самых нужных действий."""
+        rail = QWidget()
+        rail.setObjectName("sidebar")
+        rail.setFixedWidth(54)
+        v = QVBoxLayout(rail)
+        v.setContentsMargins(7, 14, 7, 10)
+        v.setSpacing(6)
+
+        def btn(text, tip, fn):
+            b = QToolButton()
+            b.setText(text)
+            b.setObjectName("railbtn")
+            b.setToolTip(tip)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedSize(40, 40)
+            b.clicked.connect(fn)
+            v.addWidget(b, 0, Qt.AlignHCenter)
+            return b
+        btn("»", "Развернуть левую панель (Ctrl+B)", lambda: self.set_sidebar(True))
+        v.addSpacing(8)
+        btn("🔍", "Найти что угодно (Ctrl+K)", lambda: palette.show(self))
+        btn("🏠", "Главная", self.show_home)
+        btn("📂", "Без дела — просто PDF", self.enter_loose)
+        btn("➕", "Новое дело", lambda: self.cases_page.new_case())
+        v.addStretch(1)
+        btn("🗑", "Корзина", self.show_trash)
+        btn("?", "Справка", lambda: self.show_section(3))
+        rail.hide()
+        self.rail = rail
+        return rail
+
+    def set_sidebar(self, show, animate=True):
+        """Развернуть или свернуть левую панель (свёрнутая — узкая полоска со значками)."""
+        settings().setValue("sidebar_collapsed", "0" if show else "1")
+        self.a_nav.setChecked(show)
+        side, rail = self.side, self.rail
+        old = getattr(self, "_side_anim", None)
+        if old is not None:
+            old.stop()
+        if not anim.ENABLED or not animate or not self.isVisible():
+            side.setMaximumWidth(300)
+            side.setMinimumWidth(300 if show else 0)
+            (rail if show else side).hide()             # сначала спрятать — иначе окно на миг раздастся вширь
+            (side if show else rail).show()
+            return
+        from PySide6.QtCore import QPropertyAnimation, QEasingCurve
+        a = QPropertyAnimation(side, b"maximumWidth", self)
+        a.setDuration(200)
+        a.setEasingCurve(QEasingCurve.OutCubic)
+        side.setMinimumWidth(0)
+        if show:
+            rail.hide()
+            side.setMaximumWidth(0)
+            side.show()
+            a.setStartValue(0)
+            a.setEndValue(300)
+            a.finished.connect(lambda: side.setMinimumWidth(300))
+        else:
+            a.setStartValue(side.width())
+            a.setEndValue(0)
+            a.finished.connect(lambda: (side.hide(), side.setMaximumWidth(300), rail.show()))
+        self._side_anim = a
+        a.start()
 
     def fill_case_menu(self):
         m = self.case_menu
@@ -5530,6 +5611,11 @@ QMenu::item:disabled {{ color: {t['disabled']}; }}
 QMenu::separator {{ height: 1px; background: {t['border']}; margin: 5px 10px; }}
 
 /* боковая панель — как в iPadOS */
+QToolButton#sidefold {{ border: none; border-radius: 8px; padding: 2px 8px; font-size: 15pt; color: {t['muted']};
+    background: transparent; }}
+QToolButton#sidefold:hover {{ background: {t['side_hover']}; color: {t['text']}; }}
+QToolButton#railbtn {{ border: none; border-radius: 10px; font-size: 14pt; background: transparent; color: {t['text']}; }}
+QToolButton#railbtn:hover {{ background: {t['side_hover']}; }}
 QWidget#sidebar {{ background: {t['side']}; border-right: 1px solid {t['border']}; }}
 QLabel#brand {{ color: {t['text']}; font-family: "{S}"; font-size: 18pt; font-weight: 700; }}
 QLabel#brandsub {{ color: {t['muted']}; font-size: 9pt; }}

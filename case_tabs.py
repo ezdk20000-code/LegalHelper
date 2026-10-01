@@ -934,6 +934,7 @@ class BoardTab(QWidget):
         self.view = None
         self.ready = False
         self.pending = None
+        self.loaded = None                 # дело, чья карта сейчас открыта в редакторе
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 6, 0, 0)
         top = QHBoxLayout()
@@ -1020,7 +1021,8 @@ class BoardTab(QWidget):
             return
         cid = self.cid
         if self.ready:
-            self._load(cid)
+            if cid != self.loaded:            # та же карта уже открыта — не перечитывать (правки и масштаб целы)
+                self._load(cid)
         else:
             self.pending = cid
 
@@ -1032,6 +1034,7 @@ class BoardTab(QWidget):
         theme = U.M.T.get("name", "light")
         js = f"PM.load({_js(scene)}, {_js(theme)}, {_js(title)})"
         self.view.page().runJavaScript(js)
+        self.loaded = cid
         self.state.setText("Сохранено" if scene else "Новая карта — сохранится автоматически")
         self.timer.start()
 
@@ -1043,7 +1046,7 @@ class BoardTab(QWidget):
         cid = self.cid
 
         def got(res):
-            if res:
+            if res and db().case(cid):           # дело могли удалить — карту «в пустоту» не пишем
                 db().save_board(cid, res)
                 self.state.setText("Сохранено ✓")
             if cb:
