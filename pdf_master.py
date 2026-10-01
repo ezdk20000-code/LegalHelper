@@ -39,9 +39,10 @@ import extwatch
 import tutorial
 import phone_export as PHX
 import palette
+import word_editor as WE
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.0.4"
+APP_VERSION = "3.1"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -3900,12 +3901,28 @@ class MainWindow(QMainWindow):
             return
         self.done(f"Сохранено страниц: {len(pages)}\n{p}", p)
 
-    def open_editor(self, index=None, mode="text"):
+    def open_editor(self, index=None, mode="text", ask_word=True):
         if not self.need_doc():
             return
         if index is None:
             sel = self.selected()
             index = sel[0] if sel else 0
+        src = _pdf_key(self.doc, index, "LHSrc") if 0 <= index < self.doc.page_count else None
+        if ask_word and mode == "text" and WE.can_edit(src) and not getattr(self, "tutor", None):
+            box = QMessageBox(self)                     # страница из Word — удобнее править сам документ
+            box.setWindowTitle("Правка")
+            box.setText(f"Эта страница — из документа Word «{Path(src).name}».")
+            box.setInformativeText("Удобнее править сам документ: текст, абзацы, таблицы — а страницы в PDF дела "
+                                   "обновятся сами. Править страницу как картинку PDF — для подписи, печати, пометок.")
+            b_word = box.addButton("✏️ Править документ Word", QMessageBox.AcceptRole)
+            b_pdf = box.addButton("Править страницу PDF", QMessageBox.ActionRole)
+            box.addButton("Отмена", QMessageBox.RejectRole)
+            box.setDefaultButton(b_word)
+            box.exec()
+            if box.clickedButton() is b_word:
+                return self.edit_word(src)
+            if box.clickedButton() is not b_pdf:
+                return
         ed = PageEditor(self, index, mode)
         self._editor = ed
         try:
@@ -3938,7 +3955,10 @@ class MainWindow(QMainWindow):
             else:
                 m.addAction(f"▾ Свернуть «{run[1]}» ({run[3] - run[2] + 1} стр.)", lambda: self.toggle_group(row, True))
             m.addSeparator()
-        m.addAction("✎ Редактировать страницу", lambda: self.open_editor())
+        src = _pdf_key(self.doc, row, "LHSrc") if row >= 0 else None
+        if WE.can_edit(src):
+            m.addAction(f"✏️ Править документ Word «{Path(src).name}»", lambda s=src: self.edit_word(s))
+        m.addAction("✎ Редактировать страницу", lambda: self.open_editor(ask_word=False))
         m.addAction("Подписать", lambda: self.open_editor(mode="sign"))
         m.addSeparator()
         m.addAction("↺ Повернуть влево", lambda: self.rotate_selected(-90))
@@ -4547,6 +4567,45 @@ class MainWindow(QMainWindow):
             self.pages.scrollToItem(it)
 
     # --- файлы, открытые в своих программах (Word, Acrobat…): правки подтягиваются сами
+    def edit_word(self, path):
+        """Встроенный редактор Word. Старые форматы (.doc, .rtf) — в самом Word."""
+        if not path or not os.path.exists(path):
+            return QMessageBox.warning(self, APP_NAME, f"Файл не найден:\n{path}")
+        if not WE.can_edit(path):
+            QMessageBox.information(self, APP_NAME, f"«{Path(path).name}» — в формате, который встроенный редактор не "
+                                    "открывает (он понимает .docx). Открываю в Word — после сохранения там изменения "
+                                    "появятся здесь сами.")
+            return self.open_in_app(path)
+        eds = self.__dict__.setdefault("_word_eds", {})
+        key = os.path.normcase(os.path.abspath(path))
+        ed = eds.get(key)
+        if ed is not None:
+            try:
+                ed.showNormal()
+                ed.raise_()
+                ed.activateWindow()
+                return ed
+            except RuntimeError:
+                eds.pop(key, None)
+        try:
+            ed = WE.WordEditor(self, path)
+        except Exception as e:
+            self.error(f"Не удалось открыть «{Path(path).name}» для правки", e)
+            return None
+        ed.setAttribute(Qt.WA_DeleteOnClose)
+        ed.destroyed.connect(lambda *_: eds.pop(key, None))
+        eds[key] = ed
+        ed.show()
+        return ed
+
+    def on_word_saved(self, path):
+        """Документ сохранили во встроенном редакторе — обновить его страницы в PDF дела (и сохранить его)."""
+        self.extwatch.refresh(path)
+        self.on_external_changed(path)
+        cid = self.mode_cid
+        if cid:
+            self.cases_page.refresh_docs_if(cid)
+
     def open_in_app(self, path):
         if not os.path.exists(path):
             return QMessageBox.warning(self, APP_NAME, f"Файл не найден:\n{path}")
@@ -4587,8 +4646,26 @@ class MainWindow(QMainWindow):
             w["redo"].clear()
             if replace_source_pages(w["doc"], path, new):
                 w["modified"] = True
+                if w.get("main") and w.get("case_id"):     # PDF дела — сразу на диск, без «Сохранить»
+                    self._save_case_ws(i)
         self._load_ws(self.cur_ws)
-        self.toast(f"↻  Обновлено: {name}")
+        self.toast(f"↻  Обновлено и сохранено: {name}")
+
+    def _save_case_ws(self, i):
+        """Записать «PDF дела» из открытого документа i (не обязательно текущего) в папку дела."""
+        w = self.ws[i]
+        cid = w["case_id"]
+        target = self.case_pdf(cid)
+        try:
+            C.save_pdf(w["doc"], target)
+        except Exception as e:
+            log_error("Автосохранение PDF дела после правки в Word", e)
+            return False
+        self.extwatch.refresh(target)
+        w.update(path=target, modified=False)
+        U.db().update_case(cid, pdf=os.path.basename(target))
+        QTimer.singleShot(300, lambda c=cid: self.phone_sync(c))
+        return True
 
     # ------------------------------------------------------------- открытые документы
     def _blank_ws(self):
@@ -5964,7 +6041,7 @@ def _selftest(say):
         w = MainWindow()
         say("MainWindow ok")
         QApplication.processEvents()
-        for mod in ("pdf2docx", "cv2", "numpy", "docx", "pptx", "openpyxl", "palette",
+        for mod in ("pdf2docx", "cv2", "numpy", "docx", "pptx", "openpyxl", "palette", "word_editor", "lxml",
                     "PySide6.QtWebEngineWidgets"):
             try:
                 __import__(mod)

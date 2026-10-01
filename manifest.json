@@ -2,11 +2,11 @@
 "files": [
 {
 "path": ".github/workflows/release.yml",
-"size": 10330
+"size": 10358
 },
 {
 "path": "CHANGELOG.md",
-"size": 65359
+"size": 67883
 },
 {
 "path": "README.md",
@@ -310,11 +310,11 @@
 },
 {
 "path": "help_content.py",
-"size": 32250
+"size": 32865
 },
 {
 "path": "help_ui.py",
-"size": 85921
+"size": 87215
 },
 {
 "path": "index.html",
@@ -322,7 +322,7 @@
 },
 {
 "path": "installer.iss",
-"size": 3773
+"size": 3771
 },
 {
 "path": "legal_core.py",
@@ -334,7 +334,7 @@
 },
 {
 "path": "legal_ui.py",
-"size": 242011
+"size": 242212
 },
 {
 "path": "palette.py",
@@ -346,7 +346,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 301241
+"size": 305736
 },
 {
 "path": "phone_export.py",
@@ -386,7 +386,7 @@
 },
 {
 "path": "update.bat",
-"size": 13703
+"size": 13731
 },
 {
 "path": "updater.py",
@@ -394,7 +394,11 @@
 },
 {
 "path": "version.json",
-"size": 930
+"size": 907
+},
+{
+"path": "word_editor.py",
+"size": 43429
 },
 {
 "path": "УСТАНОВИТЬ.bat",

@@ -85,7 +85,7 @@ jobs:
           --hidden-import legal_ui --hidden-import legal_core --hidden-import cases --hidden-import legal_data
           --hidden-import templates_lib --hidden-import help_ui --hidden-import updater --hidden-import timecheck
           --hidden-import backup --hidden-import casefile --hidden-import anim --hidden-import timer_widget
-          --hidden-import extwatch --hidden-import tutorial --hidden-import help_content --hidden-import phone_export --hidden-import palette
+          --hidden-import extwatch --hidden-import tutorial --hidden-import help_content --hidden-import phone_export --hidden-import palette --hidden-import word_editor
           --exclude-module onnxruntime --exclude-module pymupdf.layout --exclude-module pymupdf4llm
           pdf_master.py
 

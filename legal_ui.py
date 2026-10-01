@@ -961,6 +961,8 @@ class DocsTable(QTableWidget):
             return
         did, path, title = self.row_doc(r)
         m = QMenu(self)
+        if (path or "").lower().endswith((".docx", ".doc", ".rtf", ".odt")):
+            m.addAction("✏️ Править здесь (документ Word)", lambda: self.page.main.edit_word(path))
         m.addAction("Показать в PDF дела (справа)", lambda: self.page.openFile.emit(path, 0))
         m.addAction("Открыть в своей программе (Word, Acrobat…)", lambda: self.page.main.open_in_app(path))
         m.addAction("Переименовать", lambda: self.editItem(self.item(r, 1)))
