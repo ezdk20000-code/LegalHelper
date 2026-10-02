@@ -44,7 +44,7 @@ import modern_ui
 import word_editor as WE
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.3"
+APP_VERSION = "3.3.1"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -1088,6 +1088,14 @@ class PageEditor(QDialog):
         ("erase", "Удалить объект", "point", "Щёлкните по заметке, пометке, полю или ссылке, чтобы удалить"),
         ("quote", "Выписка в дело", "rect", "Выделите фрагмент текста — он попадёт в заметки дела с номером листа"),
     ]
+    GROUPS = [("Текст", ["text", "replace", "highlight", "quote"]),
+              ("Вставить", ["sign", "image", "note", "link"]),
+              ("Рисовать", ["rect", "ellipse", "line", "arrow", "ink"]),
+              ("Убрать", ["whiteout", "redact", "crop", "erase"]),
+              ("Поля формы", ["field_text", "field_check"])]
+    ICONS = {"text": "🅰", "replace": "✏️", "highlight": "🖍", "quote": "📌", "sign": "✍️", "image": "🖼",
+             "note": "💬", "link": "🔗", "rect": "▭", "ellipse": "◯", "line": "╱", "arrow": "➚", "ink": "✎",
+             "whiteout": "🧽", "redact": "⬛", "crop": "✂️", "erase": "🗑", "field_text": "⌨", "field_check": "☑"}
 
     def __init__(self, main, index, mode="text"):
         super().__init__(main)
@@ -1101,44 +1109,75 @@ class PageEditor(QDialog):
         self.resize(1200, 900)
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
 
+        self.setObjectName("pageeditor")
         root = QHBoxLayout(self)
-        # ---- панель инструментов слева
-        side = QVBoxLayout()
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        # ---- панель инструментов слева: группы, у каждого инструмента значок
+        sw = QFrame()
+        sw.setObjectName("edside")
+        sw.setFixedWidth(214)
+        side = QVBoxLayout(sw)
+        side.setContentsMargins(12, 16, 12, 12)
+        side.setSpacing(1)
+        head = QLabel("✎  Редактор")
+        head.setObjectName("edtitle")
+        side.addWidget(head)
+        side.addSpacing(6)
         self.group = QButtonGroup(self)
         self.btns = {}
-        for key, label, kind, tip in self.MODES:
-            b = QToolButton()
-            b.setText(label)
-            b.setCheckable(True)
-            b.setToolTip(tip)
-            b.setToolButtonStyle(Qt.ToolButtonTextOnly)
-            b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            b.setObjectName("mode")
-            self.group.addButton(b)
-            b.clicked.connect(lambda _=False, k=key: self.set_mode(k))
-            self.btns[key] = b
-            side.addWidget(b)
+        modes = {m[0]: m for m in self.MODES}
+        for gname, keys in self.GROUPS:
+            gl = QLabel(gname.upper())
+            gl.setObjectName("edgroup")
+            side.addWidget(gl)
+            for key in keys:
+                _, label, kind, tip = modes[key]
+                b = QPushButton(f"{self.ICONS.get(key, '•')}   {label}")
+                b.setCheckable(True)
+                b.setToolTip(tip)
+                b.setFocusPolicy(Qt.NoFocus)
+                b.setCursor(Qt.PointingHandCursor)
+                b.setObjectName("edtool")
+                self.group.addButton(b)
+                b.clicked.connect(lambda _=False, k=key: self.set_mode(k))
+                self.btns[key] = b
+                side.addWidget(b)
+            side.addSpacing(6)
         side.addStretch()
-        sw = QWidget()
-        sw.setLayout(side)
-        sw.setFixedWidth(170)
         root.addWidget(sw)
 
         # ---- правая часть
         right = QVBoxLayout()
-        top = QHBoxLayout()
+        right.setContentsMargins(14, 12, 14, 12)
+        right.setSpacing(10)
+        topf = QFrame()
+        topf.setObjectName("edbar")
+        top = QHBoxLayout(topf)
+        top.setContentsMargins(12, 6, 10, 6)
+        top.setSpacing(8)
+        self.hint_icon = QLabel()
+        self.hint_icon.setObjectName("edhinticon")
+        top.addWidget(self.hint_icon)
         self.hint = QLabel()
-        self.hint.setObjectName("hint")
+        self.hint.setObjectName("edhint")
+        self.hint.setWordWrap(True)
         top.addWidget(self.hint, 1)
-        top.addWidget(QLabel("Цвет:"))
+        lc = QLabel("Цвет")
+        lc.setObjectName("edlabel")
+        top.addWidget(lc)
         self.color = ColorButton((0.85, 0.1, 0.1))
         top.addWidget(self.color)
-        top.addWidget(QLabel("Толщина:"))
+        top.addSpacing(6)
+        lw = QLabel("Толщина")
+        lw.setObjectName("edlabel")
+        top.addWidget(lw)
         self.width = QDoubleSpinBox()
         self.width.setRange(0.5, 20)
         self.width.setValue(2)
+        self.width.setFixedWidth(76)
         top.addWidget(self.width)
-        right.addLayout(top)
+        right.addWidget(topf)
 
         self.canvas = PageCanvas()
         self.canvas.rectDone.connect(self.on_rect)
@@ -1152,18 +1191,40 @@ class PageEditor(QDialog):
         right.addWidget(self.scroll, 1)
 
         bottom = QHBoxLayout()
-        self.b_prev = QPushButton("◀ Пред.")
-        self.b_next = QPushButton("След. ▶")
+        bottom.setSpacing(8)
+
+        def pill(*ws):
+            f = QFrame()
+            f.setObjectName("edpill")
+            h = QHBoxLayout(f)
+            h.setContentsMargins(3, 3, 3, 3)
+            h.setSpacing(2)
+            for w in ws:
+                h.addWidget(w)
+            return f
+
+        def pbtn(text, tip):
+            b = QPushButton(text)
+            b.setObjectName("edpillbtn")
+            b.setToolTip(tip)
+            b.setCursor(Qt.PointingHandCursor)
+            return b
+        self.b_prev = pbtn("‹", "Предыдущая страница")
+        self.b_next = pbtn("›", "Следующая страница")
         self.lbl = QLabel()
-        b_zo = QPushButton("−")
-        b_zi = QPushButton("+")
-        b_fit = QPushButton("По ширине")
-        b_undo = QPushButton("Отменить (Ctrl+Z)")
+        self.lbl.setObjectName("edpilltext")
+        b_zo = pbtn("−", "Уменьшить")
+        b_zi = pbtn("+", "Увеличить")
+        self.zoom_lbl = QLabel()
+        self.zoom_lbl.setObjectName("edpilltext")
+        b_fit = pbtn("По ширине", "Вписать страницу по ширине окна")
+        b_fit.setStyleSheet("font-size: 9pt;")
+        b_undo = QPushButton("↶  Отменить")
+        b_undo.setToolTip("Отменить последнее действие (Ctrl+Z)")
         b_close = QPushButton("Готово")
         self.b_close = b_close
         b_close.setObjectName("primary")
-        for b in (b_zo, b_zi):
-            b.setFixedWidth(36)
+        b_close.setMinimumWidth(110)
         self.b_prev.clicked.connect(lambda: self.goto(self.index - 1))
         self.b_next.clicked.connect(lambda: self.goto(self.index + 1))
         b_zo.clicked.connect(lambda: self.set_zoom(self.zoom / 1.2))
@@ -1171,11 +1232,12 @@ class PageEditor(QDialog):
         b_fit.clicked.connect(self.fit_width)
         b_undo.clicked.connect(self.undo)
         b_close.clicked.connect(self.accept)
-        for w in (self.b_prev, self.lbl, self.b_next):
-            bottom.addWidget(w)
+        bottom.addWidget(pill(self.b_prev, self.lbl, self.b_next))
         bottom.addStretch()
-        for w in (b_zo, b_zi, b_fit, b_undo, b_close):
-            bottom.addWidget(w)
+        bottom.addWidget(pill(b_zo, self.zoom_lbl, b_zi, b_fit))
+        bottom.addSpacing(6)
+        bottom.addWidget(b_undo)
+        bottom.addWidget(b_close)
         right.addLayout(bottom)
         root.addLayout(right, 1)
 
@@ -1200,7 +1262,8 @@ class PageEditor(QDialog):
         for k, label, kind, tip in self.MODES:
             if k == key:
                 self.canvas.kind = kind
-                self.hint.setText(tip)
+                self.hint.setText(f"<b>{label}.</b> {tip}")
+                self.hint_icon.setText(self.ICONS.get(k, ""))
                 self.btns[k].setChecked(True)
         if key == "sign" and not self.signature:
             d = SignatureDialog(self)
@@ -1222,6 +1285,8 @@ class PageEditor(QDialog):
         self.canvas.setPixmap(qp)
         self.canvas.resize(int(pix.width / dpr), int(pix.height / dpr))
         self.lbl.setText(f"  Страница {self.index + 1} из {self.doc.page_count}  ")
+        if hasattr(self, "zoom_lbl"):
+            self.zoom_lbl.setText(f" {round(self.zoom / 1.4 * 100)}% ")
         self.b_prev.setEnabled(self.index > 0)
         self.b_next.setEnabled(self.index < self.doc.page_count - 1)
 
@@ -6078,10 +6143,12 @@ QTableWidget, QTableView, QTreeWidget, QTreeView, QListWidget {{ background: {t[
     gridline-color: {t['border']}; border: none; border-radius: 12px; }}
 QTableWidget, QTableView {{ gridline-color: transparent; selection-background-color: {t['accent_soft']}; selection-color: {t['text']}; }}
 QTableWidget::item, QTableView::item {{ border-bottom: 1px solid {t['border']}; padding: 0 4px; }}
-QTreeWidget::item, QTreeView::item {{ padding: 3px 2px; }}
-QTableWidget::item:selected, QTreeWidget::item:selected, QListWidget::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; }}
+QTreeWidget::item, QTreeView::item {{ padding: 5px 4px; border-radius: 7px; }}
+QTreeWidget::item:hover, QTreeView::item:hover, QListWidget::item:hover {{ background: {t['item_hover']}; }}
+QTableWidget::item:selected, QListWidget::item:selected {{ background: {t['accent_soft']}; color: {t['text']}; }}
+QTreeWidget::item:selected, QTreeView::item:selected {{ background: {t['accent_soft']}; color: {A}; font-weight: 600; }}
 QTreeView::branch {{ background: transparent; }}
-QTreeView::branch:selected {{ background: {t['accent_soft']}; }}
+QTreeView::branch:selected {{ background: transparent; }}
 QTreeWidget, QTreeView {{ selection-background-color: {t['accent_soft']}; selection-color: {t['text']}; }}
 QHeaderView {{ background: transparent; border: none; }}
 QHeaderView::section {{ background: {t['panel']}; color: {t['muted']}; border: none; border-bottom: 1px solid {t['border']};
@@ -6206,6 +6273,22 @@ QDialog#tooldlg QLabel#dlgsub {{ color: {t['muted']}; font-size: 9.5pt; }}
 QDialog#tooldlg QLabel#fieldlabel {{ color: {t['muted']}; font-size: 8.5pt; font-weight: 600; }}
 QDialog#tooldlg QLabel#fieldlabel:disabled {{ color: {t['disabled']}; }}
 QFrame#dlgfoot {{ background: {t['alt']}; border-top: 1px solid {t['border']}; }}
+QFrame#edside {{ background: {t['side']}; border-right: 1px solid {t['border']}; }}
+QLabel#edtitle {{ font-family: "{SERIF}"; font-size: 13pt; font-weight: 700; padding: 0 6px; }}
+QLabel#edgroup {{ color: {t['muted']}; font-size: 7.5pt; font-weight: 700; letter-spacing: 1px; padding: 8px 8px 3px 8px; }}
+QPushButton#edtool {{ text-align: left; border: none; border-radius: 8px; padding: 6px 10px; background: transparent;
+    color: {t['text']}; font-size: 9.5pt; }}
+QPushButton#edtool:hover {{ background: {t['side_hover']}; }}
+QPushButton#edtool:checked {{ background: {t['accent_soft']}; color: {t['accent']}; font-weight: 600; }}
+QFrame#edbar {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 12px; }}
+QLabel#edhint {{ color: {t['text']}; font-size: 9.5pt; }}
+QLabel#edhinticon {{ font-size: 14pt; padding: 0 2px; }}
+QLabel#edlabel {{ color: {t['muted']}; font-size: 8.5pt; font-weight: 600; }}
+QFrame#edpill {{ background: {t['panel']}; border: 1px solid {t['border']}; border-radius: 11px; }}
+QPushButton#edpillbtn {{ background: transparent; border-radius: 8px; padding: 5px 11px; font-size: 11pt; color: {t['text']}; }}
+QPushButton#edpillbtn:hover {{ background: {t['fill']}; }}
+QPushButton#edpillbtn:disabled {{ color: {t['disabled']}; background: transparent; }}
+QLabel#edpilltext {{ color: {t['muted']}; font-size: 9pt; }}
 """
 
 

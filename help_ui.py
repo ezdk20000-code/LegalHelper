@@ -49,6 +49,21 @@ def bullets(*items):
     return "<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>"
 
 
+def _mix(c1, c2, a):
+    """Сплошной цвет: c1 поверх c2 с непрозрачностью a (в HTML справки rgba() не работает)."""
+    from PySide6.QtGui import QColor
+    x, y = QColor(c1), QColor(c2)
+    return QColor(round(x.red() * a + y.red() * (1 - a)), round(x.green() * a + y.green() * (1 - a)),
+                  round(x.blue() * a + y.blue() * (1 - a))).name()
+
+
+def _plural(n, one, few, many):
+    n = abs(n) % 100
+    if 11 <= n <= 14:
+        return many
+    return one if n % 10 == 1 else few if 2 <= n % 10 <= 4 else many
+
+
 def tip(text):
     return f'<table class="tip" width="100%" cellpadding="10"><tr><td>{text}</td></tr></table>'
 
@@ -821,28 +836,46 @@ class HelpPage(QWidget):
         self.search.clear()
         self.search.blockSignals(False)
         self._filter(None)
+        t = M.T
         cells = []
         for s in self.secs:
             n = sum(len(i["items"]) if i.get("group") else 1 for i in s["items"])
-            first = [i for i in s["items"] if not i.get("group")][:3] or \
-                [a for g in s["items"] if g.get("group") for a in g["items"]][:3]
-            links = "<br>".join(f"<a href='lh:a/{a['id']}'>{html.escape(a['title'])}</a>" for a in first)
-            cells.append(f"<td width='33%' style='padding:12px'><a href='lh:s/{s['id']}'><b style='font-size:13pt'>"
-                         f"{html.escape(s['title'])}</b></a><br><span style='color:{M.T['muted']}'>{n} стат."
-                         f"</span><br>{links}</td>")
+            title = s["title"]
+            m = re.match(r"^(\W+?)\s+(.*)$", title)
+            emoji, name = (m.group(1), m.group(2)) if m else ("📘", title)
+            cells.append(
+                f"<td width='33%' bgcolor='{t['panel']}' style='padding:14px 16px; border:1px solid {t['border']}'>"
+                f"<a href='lh:s/{s['id']}' style='color:{t['text']}; text-decoration:none'>"
+                f"<span style='font-size:20pt'>{emoji}</span><br>"
+                f"<b style='font-size:12pt'>{html.escape(name)}</b><br>"
+                f"<span style='color:{t['muted']}; font-size:9.5pt'>{n} {_plural(n, 'статья', 'статьи', 'статей')}"
+                f" &nbsp;›</span></a></td>")
+        while len(cells) % 3:
+            cells.append("<td width='33%'></td>")
         rows = "".join("<tr>" + "".join(cells[k:k + 3]) + "</tr>" for k in range(0, len(cells), 3))
+        chips = "".join(
+            f"<a href='lh:a/{k}' style='color:{t['accent']}; text-decoration:none'>"
+            f"<span style='background:{_mix(t['accent'], t['panel'], 0.12)}'>&nbsp;&nbsp;{html.escape(self.by_id[k][2]['title'])}"
+            f"&nbsp;&nbsp;</span></a>&nbsp;&nbsp; "
+            for k in ("tool-merge", "tool-delete", "tool-rotate", "tool-edit", "tool-sign", "tool-compress",
+                      "tool-word2pdf", "tool-pdf2word", "faq-0", "faq-2") if k in self.by_id)
+        hero = (f"<table width='100%' cellpadding='18' cellspacing='0'><tr><td bgcolor='{_mix(t['accent'], t['panel'], 0.12)}'>"
+                f"<span style='font-size:22pt'>🎓</span><br>"
+                f"<b style='font-size:14pt'>Впервые в программе?</b><br>"
+                f"<span style='color:{t['muted']}'>Программа сама покажет, куда нажимать, — со стрелками и "
+                f"подсказками. Это займёт 5 минут.</span><br><br>"
+                f"<a href='lh:tutorial' style='color:white; text-decoration:none'>"
+                f"<span style='background:{t['accent']}; font-weight:bold'>&nbsp;&nbsp;▶ Пройти обучение&nbsp;&nbsp;"
+                f"</span></a>&nbsp;&nbsp;&nbsp;"
+                f"<a href='lh:a/learn-quick' style='color:{t['accent']}; text-decoration:none'>"
+                f"<b>⚡ Быстрый старт — прочитать</b></a></td></tr></table>")
         self._page(
-            "<h1>Справка LegalHelper</h1>"
-            "<p>Здесь описана каждая функция программы — простыми словами, по шагам и с картинками. "
+            f"<h1>Справка</h1>"
+            f"<p style='color:{t['muted']}'>Каждая функция программы — простыми словами, по шагам и с картинками. "
             "Слева — разделы, сверху — поиск: напишите, что хотите сделать («объединить», «подпись», «сжать»).</p>"
-            + tip("<b>Впервые в программе?</b> &nbsp;<a href='lh:tutorial'>▶ Пройдите обучение со стрелками</a> — "
-                  "программа сама покажет, куда нажимать. Или прочитайте "
-                  "<a href='lh:a/learn-quick'>«Быстрый старт за 5 минут»</a>.")
-            + "<h2>Разделы</h2><table class='cards' width='100%' cellspacing='8'>" + rows + "</table>"
-            + "<h2>Чаще всего ищут</h2>" + bullets(*(
-                f"<a href='lh:a/{k}'>{html.escape(self.by_id[k][2]['title'])}</a>"
-                for k in ("tool-merge", "tool-delete", "tool-rotate", "tool-edit", "tool-sign", "tool-compress",
-                          "tool-word2pdf", "tool-pdf2word", "faq-0", "faq-2") if k in self.by_id)))
+            + hero
+            + "<h2>Разделы</h2><table width='100%' cellspacing='10' cellpadding='0'>" + rows + "</table>"
+            + "<h2>Чаще всего ищут</h2><p style='line-height:220%'>" + chips + "</p>")
         self.toc.clearSelection()
 
     def show_section(self, sid):
@@ -850,17 +883,26 @@ class HelpPage(QWidget):
         if not s:
             return
         self.current = None
-        lst = []
+        t = M.T
+
+        def rows(items):
+            out = "".join(
+                f"<tr><td style='padding:11px 14px; border-bottom:1px solid {t['border']}'>"
+                f"<a href='lh:a/{a['id']}' style='color:{t['text']}; text-decoration:none'>"
+                f"{html.escape(a['title'])}</a></td>"
+                f"<td align='right' style='padding:11px 14px; border-bottom:1px solid {t['border']}'>"
+                f"<a href='lh:a/{a['id']}' style='color:{t['muted']}; text-decoration:none'>›</a></td></tr>"
+                for a in items)
+            return (f"<table width='100%' cellspacing='0' cellpadding='0' bgcolor='{t['panel']}' "
+                    f"style='border:1px solid {t['border']}'>{out}</table>")
+        plain = [it for it in s["items"] if not it.get("group")]
+        body = rows(plain) if plain else ""
         for it in s["items"]:
             if it.get("group"):
-                lst.append(f"<h3>{html.escape(it['title'])}</h3>" + bullets(*(
-                    f"<a href='lh:a/{a['id']}'>{html.escape(a['title'])}</a>" for a in it["items"])))
-            else:
-                lst.append(f"<li><a href='lh:a/{it['id']}'>{html.escape(it['title'])}</a></li>")
-        body = "".join(x if x.startswith("<h3>") else "" for x in lst)
-        plain = "".join(x for x in lst if x.startswith("<li>"))
-        self._page(f"<p class='crumbs'><a href='lh:start'>Справка</a></p><h1>{html.escape(s['title'])}</h1>"
-                   + (f"<ul>{plain}</ul>" if plain else "") + body)
+                body += (f"<p style='color:{t['muted']}; font-size:9pt; font-weight:bold; margin-top:18px'>"
+                         f"{html.escape(it['title']).upper()}</p>" + rows(it["items"]))
+        self._page(f"<p class='crumbs'><a href='lh:start'>Справка</a> &nbsp;›</p><h1>{html.escape(s['title'])}</h1>"
+                   + body)
 
     def open_article(self, aid, highlight=None):
         if aid not in self.by_id:

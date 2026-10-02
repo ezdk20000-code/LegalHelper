@@ -6,7 +6,7 @@
 },
 {
 "path": "CHANGELOG.md",
-"size": 77246
+"size": 79075
 },
 {
 "path": "README.md",
@@ -318,7 +318,7 @@
 },
 {
 "path": "help_ui.py",
-"size": 87556
+"size": 89814
 },
 {
 "path": "index.html",
@@ -326,7 +326,7 @@
 },
 {
 "path": "installer.iss",
-"size": 3986
+"size": 3988
 },
 {
 "path": "legal_core.py",
@@ -341,6 +341,10 @@
 "size": 242410
 },
 {
+"path": "modern_ui.py",
+"size": 8492
+},
+{
 "path": "palette.py",
 "size": 14722
 },
@@ -350,7 +354,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 320013
+"size": 324666
 },
 {
 "path": "phone_export.py",
@@ -398,7 +402,7 @@
 },
 {
 "path": "version.json",
-"size": 1053
+"size": 1034
 },
 {
 "path": "word_editor.py",
