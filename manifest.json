@@ -6,7 +6,7 @@
 },
 {
 "path": "CHANGELOG.md",
-"size": 71361
+"size": 72789
 },
 {
 "path": "README.md",
@@ -210,19 +210,19 @@
 },
 {
 "path": "help/img/00_home.png",
-"size": 174527
+"size": 177723
 },
 {
 "path": "help/img/01_main.png",
-"size": 170941
+"size": 170236
 },
 {
 "path": "help/img/02_sidebar.png",
-"size": 52186
+"size": 52865
 },
 {
 "path": "help/img/03_loose.png",
-"size": 120638
+"size": 116526
 },
 {
 "path": "help/img/04_toolbar.png",
@@ -238,7 +238,7 @@
 },
 {
 "path": "help/img/07_f107.png",
-"size": 49282
+"size": 50904
 },
 {
 "path": "help/img/08_anonymize.png",
@@ -258,7 +258,7 @@
 },
 {
 "path": "help/img/12_case.png",
-"size": 164654
+"size": 171186
 },
 {
 "path": "help/img/13_banner.png",
@@ -266,55 +266,55 @@
 },
 {
 "path": "help/img/14_events.png",
-"size": 113857
+"size": 109512
 },
 {
 "path": "help/img/15_docs.png",
-"size": 185253
+"size": 182213
 },
 {
 "path": "help/img/16_prepare.png",
-"size": 180276
+"size": 179373
 },
 {
 "path": "help/img/17_laws.png",
-"size": 127964
+"size": 123698
 },
 {
 "path": "help/img/18_money.png",
-"size": 133765
+"size": 129149
 },
 {
 "path": "help/img/19_board.png",
-"size": 150233
+"size": 145951
 },
 {
 "path": "help/img/20_deadline.png",
-"size": 149906
+"size": 144467
 },
 {
 "path": "help/img/21_duty.png",
-"size": 127908
+"size": 123648
 },
 {
 "path": "help/img/22_interest.png",
-"size": 136694
+"size": 131566
 },
 {
 "path": "help/img/23_dark.png",
-"size": 179253
+"size": 182175
 },
 {
 "path": "help/img/24_groups.png",
-"size": 185253
+"size": 182213
 },
 {
 "path": "help_content.py",
-"size": 32865
+"size": 32901
 },
 {
 "path": "help_ui.py",
-"size": 87351
+"size": 87556
 },
 {
 "path": "index.html",
@@ -322,7 +322,7 @@
 },
 {
 "path": "installer.iss",
-"size": 3773
+"size": 3771
 },
 {
 "path": "legal_core.py",
@@ -334,7 +334,7 @@
 },
 {
 "path": "legal_ui.py",
-"size": 242394
+"size": 242410
 },
 {
 "path": "palette.py",
@@ -346,7 +346,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 306944
+"size": 310470
 },
 {
 "path": "phone_export.py",
@@ -382,7 +382,7 @@
 },
 {
 "path": "tutorial.py",
-"size": 39487
+"size": 39511
 },
 {
 "path": "update.bat",
@@ -394,7 +394,7 @@
 },
 {
 "path": "version.json",
-"size": 925
+"size": 1018
 },
 {
 "path": "word_editor.py",

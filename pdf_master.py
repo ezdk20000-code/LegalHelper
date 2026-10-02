@@ -42,7 +42,7 @@ import palette
 import word_editor as WE
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.1.2"
+APP_VERSION = "3.2"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -2053,6 +2053,8 @@ class MainWindow(QMainWindow):
         bcol.setSpacing(0)
         bcol.addWidget(brand)
         bcol.addWidget(sub)
+        bh.addWidget(self._build_app_menu_button(), 0, Qt.AlignTop)
+        bh.addSpacing(6)
         bh.addLayout(bcol, 1)
         b_fold = QToolButton()
         b_fold.setText("«")
@@ -2322,6 +2324,7 @@ class MainWindow(QMainWindow):
     def refresh_theme(self):
         """Перерисовать миниатюры (подписи номеров рисуются цветом темы)."""
         self.theme_icons()
+        self.tint_title_bar()
         if hasattr(self, "help_page"):
             self.help_page.refresh_theme()
         for i in range(self.tree.topLevelItemCount()):
@@ -2553,7 +2556,7 @@ class MainWindow(QMainWindow):
             box.setText("<b>Не удалось скачать обновление.</b>")
             box.setInformativeText(
                 "Похоже, GitHub сейчас отвечает медленно или соединение прерывается. Можно повторить или скачать "
-                "архив в браузере: сохраните его, затем «Справка → Установить обновление из архива…».")
+                "архив в браузере: сохраните его, затем «☰ → Справка → Установить обновление из архива…».")
             box.setDetailedText(err or "")
             again = box.addButton("Повторить", QMessageBox.AcceptRole)
             web = box.addButton("Скачать в браузере", QMessageBox.ActionRole)
@@ -3613,8 +3616,8 @@ class MainWindow(QMainWindow):
                 d.exec()
         else:
             QMessageBox.warning(self, APP_NAME, "Не получилось отправить дело на телефон. Проверьте, что программа "
-                                "«Яндекс Диск» установлена и вы в неё вошли («Файл → 📱 Дела на телефоне»). "
-                                "Подробности — «Справка → Журнал ошибок».")
+                                "«Яндекс Диск» установлена и вы в неё вошли («☰ → Файл → 📱 Дела на телефоне»). "
+                                "Подробности — «☰ → Справка → Журнал ошибок».")
 
     def restore_backup(self, path):
         if not self.save_all_ws():
@@ -3663,7 +3666,7 @@ class MainWindow(QMainWindow):
         body = quote(f"\n\n—\n{APP_NAME} {APP_VERSION}, {sys.platform}")
         row("✉️", DEV_EMAIL, f"mailto:{DEV_EMAIL}?subject={quote(APP_NAME + ' ' + APP_VERSION)}&body={body}", DEV_EMAIL)
         row("✈️", f"Telegram @{DEV_TELEGRAM}", f"https://t.me/{DEV_TELEGRAM}", f"@{DEV_TELEGRAM}")
-        hint = QLabel("Журнал ошибок для письма: «Справка → Журнал ошибок → Скопировать последние ошибки».")
+        hint = QLabel("Журнал ошибок для письма: «☰ → Справка → Журнал ошибок → Скопировать последние ошибки».")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         v.addWidget(hint)
@@ -4772,6 +4775,63 @@ class MainWindow(QMainWindow):
     def toggle_nav(self):
         self.set_sidebar(not self.side.isVisible() or self.side.maximumWidth() < 300)
 
+    def _build_app_menu_button(self):
+        """Вместо строки меню «Файл · Правка · Вид…» (вид программы из 2000-х) — одна кнопка ☰.
+        Пункты те же; их горячие клавиши работают и без видимой строки меню."""
+        mb = self.menuBar()
+        self.app_menu = QMenu(self)
+        for a in mb.actions():
+            if a.menu():
+                self.app_menu.addMenu(a.menu())
+
+        def walk(menu):
+            for a in menu.actions():
+                if a.menu():
+                    walk(a.menu())
+                elif not a.shortcut().isEmpty():
+                    self.addAction(a)               # иначе сочетания клавиш погаснут вместе со строкой меню
+        walk(self.app_menu)
+        mb.hide()
+        b = QToolButton()
+        b.setText("☰")
+        b.setObjectName("appmenu")
+        b.setCursor(Qt.PointingHandCursor)
+        b.setToolTip("Меню: файл, правка, вид, инструменты, «Юристу», справка")
+        b.setMenu(self.app_menu)
+        b.setPopupMode(QToolButton.InstantPopup)
+        self.app_menu_btn = b
+        return b
+
+    def tint_title_bar(self):
+        """Windows 11: полоса заголовка окна — цвета программы (как у Obsidian), в тёмной теме — тёмная.
+        Окно остаётся «родным»: прилипание к краям экрана, тень и меню кнопки «□» работают как обычно."""
+        if not C.IS_WIN:
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+            hwnd = wintypes.HWND(int(self.winId()))
+            dwm = ctypes.windll.dwmapi
+
+            def setattr_(attr, value):
+                v = ctypes.c_int(value)
+                dwm.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(v), ctypes.sizeof(v))
+
+            def colorref(hexcol):
+                c = QColor(hexcol)
+                return c.red() | (c.green() << 8) | (c.blue() << 16)
+            dark = T.get("name") == "dark" or QColor(T["side"]).lightness() < 128
+            setattr_(20, 1 if dark else 0)          # DWMWA_USE_IMMERSIVE_DARK_MODE
+            setattr_(35, colorref(T["side"]))       # DWMWA_CAPTION_COLOR — как левая панель
+            setattr_(36, colorref(T["text"]))       # DWMWA_TEXT_COLOR
+            setattr_(34, colorref(T["side"]))       # DWMWA_BORDER_COLOR
+        except Exception as e:
+            log_error("Цвет заголовка окна", e)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        QTimer.singleShot(0, self.tint_title_bar)
+
     def _build_rail(self):
         """Свёрнутая левая панель: узкая полоска со значками самых нужных действий."""
         rail = QWidget()
@@ -4792,6 +4852,10 @@ class MainWindow(QMainWindow):
             v.addWidget(b, 0, Qt.AlignHCenter)
             return b
         btn("»", "Развернуть левую панель (Ctrl+B)", lambda: self.set_sidebar(True))
+        mb = btn("☰", "Меню: файл, правка, вид, инструменты, справка", lambda: None)
+        mb.setMenu(self.app_menu)
+        mb.setPopupMode(QToolButton.InstantPopup)
+        mb.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }")
         v.addSpacing(8)
         btn("🔍", "Найти что угодно (Ctrl+K)", lambda: palette.show(self))
         btn("🏠", "Главная", self.show_home)
@@ -5703,6 +5767,10 @@ QMenu::item:disabled {{ color: {t['disabled']}; }}
 QMenu::separator {{ height: 1px; background: {t['border']}; margin: 5px 10px; }}
 
 /* боковая панель — как в iPadOS */
+QToolButton#appmenu {{ border: none; border-radius: 8px; padding: 2px 8px; font-size: 15pt; color: {t['text']};
+    background: transparent; }}
+QToolButton#appmenu:hover, QToolButton#appmenu:pressed {{ background: {t['side_hover']}; }}
+QToolButton#appmenu::menu-indicator {{ image: none; width: 0; }}
 QToolButton#sidefold {{ border: none; border-radius: 8px; padding: 2px 8px; font-size: 15pt; color: {t['muted']};
     background: transparent; }}
 QToolButton#sidefold:hover {{ background: {t['side_hover']}; color: {t['text']}; }}
