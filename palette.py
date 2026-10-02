@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QEvent, QTimer
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QLabel,
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, QListWidget, QListWidgetItem, QLabel,
                                QAbstractItemView, QFrame)
 
 import legal_ui as U
@@ -170,6 +170,9 @@ class Palette(QDialog):
             QLineEdit#palq {{ font-size: 15pt; padding: 10px 14px; border: none; border-radius: 10px;
                               background: {T['win']}; }}
             QListWidget#pallist {{ border: none; background: transparent; outline: none; }}
+            QPushButton#palclose {{ border: none; border-radius: 10px; background: {T['fill']}; color: {T['muted']};
+                                   font-size: 13pt; padding: 0; }}
+            QPushButton#palclose:hover {{ background: {T['fill_hover']}; color: {T['text']}; }}
             QListWidget#pallist::item {{ padding: 6px 10px; border-radius: 8px; }}
             QListWidget#pallist::item:selected {{ background: {T['accent']}; color: white; }}
         """)
@@ -180,7 +183,18 @@ class Palette(QDialog):
         self.q.setObjectName("palq")
         self.q.setPlaceholderText("🔍  Найти: дело, документ, шаблон, срок, «сжать», «пошлина»…")
         self.q.setClearButtonEnabled(True)
-        v.addWidget(self.q)
+        top = QHBoxLayout()
+        top.setSpacing(6)
+        top.addWidget(self.q, 1)
+        x = QPushButton("✕")
+        x.setObjectName("palclose")
+        x.setToolTip("Закрыть (Esc)")
+        x.setCursor(Qt.PointingHandCursor)
+        x.setFixedSize(40, 40)
+        x.setFocusPolicy(Qt.NoFocus)
+        x.clicked.connect(self.reject)
+        top.addWidget(x)
+        v.addLayout(top)
         self.list = QListWidget()
         self.list.setObjectName("pallist")
         self.list.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -190,7 +204,7 @@ class Palette(QDialog):
         self.list.itemActivated.connect(self.activate)
         self.list.itemClicked.connect(self.activate)
         v.addWidget(self.list, 1)
-        hint = QLabel("↑ ↓ — выбрать · Enter — открыть · Esc — закрыть")
+        hint = QLabel("↑ ↓ — выбрать · Enter — открыть · Esc, ✕ или щелчок мимо окна — закрыть")
         hint.setObjectName("hint")
         hint.setAlignment(Qt.AlignCenter)
         v.addWidget(hint)
@@ -210,6 +224,25 @@ class Palette(QDialog):
         self.move(g.x() + (g.width() - w) // 2, g.y() + 70)
         self.refresh("")
         QTimer.singleShot(0, self.q.setFocus)
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance().focusWindowChanged.connect(self._focus_moved)
+
+    def _focus_moved(self, win):
+        """Фокус ушёл в главное окно (щелчок мимо поиска) — закрыть поиск."""
+        try:
+            mine = self.windowHandle()
+            if self.isVisible() and win is not None and win is not mine:
+                QTimer.singleShot(0, self._close_if_inactive)
+        except RuntimeError:
+            pass
+
+    def done(self, r):
+        try:
+            from PySide6.QtWidgets import QApplication
+            QApplication.instance().focusWindowChanged.disconnect(self._focus_moved)
+        except (RuntimeError, TypeError):
+            pass
+        super().done(r)
 
     # ------------------------------------------------------------ список
     def _header(self, text):
@@ -283,6 +316,22 @@ class Palette(QDialog):
                 return True
         return super().eventFilter(obj, ev)
 
+    def event(self, e):
+        # щелчок в любом месте мимо окна (окно перестало быть активным) — закрыть, как обычный поиск
+        if e.type() == QEvent.WindowDeactivate and self.isVisible():
+            QTimer.singleShot(0, self._close_if_inactive)
+        return super().event(e)
+
+    def _close_if_inactive(self):
+        try:
+            from PySide6.QtWidgets import QApplication
+            if self.isVisible() and QApplication.activeWindow() is not self:
+                import time
+                self.main._palette_closed_at = time.monotonic()
+                self.reject()
+        except RuntimeError:
+            pass
+
     def activate(self, it):
         e = it.data(Qt.UserRole) if it else None
         if not isinstance(e, Entry):
@@ -300,7 +349,18 @@ def _run(main, e):
 
 
 def show(main):
+    import time
+    if time.monotonic() - getattr(main, "_palette_closed_at", -9) < 0.4:
+        return None              # щелчок по «Найти…» сам закрыл окно (оно потеряло фокус) — не открывать снова
+    old = getattr(main, "_palette", None)
+    try:
+        if old is not None and old.isVisible():      # повторное Ctrl+K или щелчок по «Найти…» — закрыть
+            old.reject()
+            return None
+    except RuntimeError:
+        pass
     p = Palette(main)
+    main._palette = p
     p.show()
     p.raise_()
     p.activateWindow()

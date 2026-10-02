@@ -5,8 +5,9 @@
 из Windows 98 с «Yes / No». Подключается один раз при запуске (install), остальной код не меняется.
 """
 from PySide6.QtCore import Qt, QRectF, QTimer
-from PySide6.QtGui import QPixmap, QPainter, QColor, QFont
-from PySide6.QtWidgets import QMessageBox, QApplication, QDialogButtonBox, QDialog
+from PySide6.QtGui import QPixmap, QPainter, QColor, QFont, QFontMetrics
+from PySide6.QtWidgets import (QMessageBox, QApplication, QDialogButtonBox, QDialog, QLabel, QPushButton, QVBoxLayout,
+                               QHBoxLayout, QFrame, QPlainTextEdit)
 
 _theme = {"accent": "#007aff", "danger": "#ff3b30"}
 
@@ -20,6 +21,19 @@ BUTTON_RU = {
 DIALOG_RU = {QDialogButtonBox.Ok: "ОК", QDialogButtonBox.Cancel: "Отмена", QDialogButtonBox.Yes: "Да",
              QDialogButtonBox.No: "Нет", QDialogButtonBox.Close: "Закрыть", QDialogButtonBox.Save: "Сохранить",
              QDialogButtonBox.Apply: "Применить", QDialogButtonBox.Discard: "Не сохранять"}
+
+
+def fit_primary(root):
+    """Главные кнопки (жирный текст): ширина по жирному шрифту — иначе Qt считает ширину по обычному
+    и конец надписи обрезается («Добавить файлы в конец..»)."""
+    from PySide6.QtWidgets import QPushButton
+    for b in root.findChildren(QPushButton):
+        if b.text() and (b.objectName() == "primary" or b.isDefault()):
+            f = QFont(b.font())
+            f.setBold(True)
+            need = QFontMetrics(f).horizontalAdvance(b.text().replace("&", "")) + 40
+            if b.minimumWidth() < need and b.maximumWidth() >= need:
+                b.setMinimumWidth(need)
 
 
 def _appear(dlg):
@@ -159,6 +173,9 @@ def stylesheet(t):
     A = t["accent"]
     return f"""
 QMessageBox#mbox {{ background: {t['panel']}; }}
+QDialog#tooldlg QLabel#mbhead {{ font-size: 11.5pt; font-weight: 600; }}
+QDialog#tooldlg QLabel#mbtext {{ font-size: 10.5pt; }}
+QDialog#tooldlg QLabel#mbinfo {{ color: {t['muted']}; font-size: 9.5pt; }}
 QMessageBox#mbox QLabel#qt_msgbox_label {{ font-size: 10.5pt; min-width: 320px; padding: 4px 6px 2px 4px; }}
 QMessageBox#mbox[split="true"] QLabel#qt_msgbox_label {{ font-size: 11.5pt; font-weight: 600; }}
 QMessageBox#mbox QLabel#qt_msgbox_informativelabel {{ color: {t['muted']}; font-size: 9.5pt; padding: 0 6px 6px 4px; }}
@@ -195,12 +212,12 @@ def install(theme=None):
 
     def exec_(self, *a):
         modernize(self)
-        _appear(self)
-        return orig_exec(self, *a)
+        return ModernBox(self).run()
     QMessageBox.exec = exec_
     orig_dexec = QDialog.exec
 
     def dexec(self, *a):
+        fit_primary(self)
         _appear(self)
         return orig_dexec(self, *a)
     QDialog.exec = dexec
@@ -215,3 +232,140 @@ def install(theme=None):
         modernize(box)
         box.exec()
     QMessageBox.about = staticmethod(about)
+
+
+class ModernBox(QDialog):
+    """Окно сообщения нашей вёрстки вместо стандартного QMessageBox. Стандартное окно на Windows считало
+    ширину до того, как применялся шрифт оформления, и длинный текст обрезался справа. Здесь текст всегда
+    переносится по ширине окна. Кнопки — те же, что у исходного окна: нажатие передаётся ему, поэтому
+    box.clickedButton() и всё остальное работают как раньше."""
+    MAXW = 520
+
+    def __init__(self, box):
+        super().__init__(box.parentWidget())
+        self.box = box
+        self.chosen = None
+        t = _theme
+        self.setWindowTitle(box.windowTitle() or "LegalHelper")
+        self.setObjectName("tooldlg")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        top = QHBoxLayout()
+        top.setContentsMargins(22, 20, 24, 16)
+        top.setSpacing(14)
+        pm = box.iconPixmap()
+        if pm is not None and not pm.isNull():
+            ic = QLabel()
+            ic.setPixmap(pm)
+            ic.setFixedSize(int(pm.width() / max(1.0, pm.devicePixelRatio())) + 2,
+                            int(pm.height() / max(1.0, pm.devicePixelRatio())) + 2)
+            top.addWidget(ic, 0, Qt.AlignTop)
+        col = QVBoxLayout()
+        col.setSpacing(6)
+        info = box.informativeText()
+        head = QLabel(box.text())
+        head.setObjectName("mbhead" if info else "mbtext")
+        head.setTextFormat(box.textFormat())
+        col.addWidget(head)
+        labels = [head]
+        if info:
+            sub = QLabel(info)
+            sub.setObjectName("mbinfo")
+            sub.setTextFormat(box.textFormat())
+            col.addWidget(sub)
+            labels.append(sub)
+        fm = head.fontMetrics()
+        longest = max((fm.horizontalAdvance(line) for lab in labels for line in lab.text().splitlines()), default=0)
+        width = max(300, min(self.MAXW, longest + 30))
+        for lab in labels:
+            lab.setWordWrap(True)
+            lab.setFixedWidth(width)
+            lab.setOpenExternalLinks(True)
+            lab.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
+        details = box.detailedText()
+        if details:
+            self.det = QPlainTextEdit(details)
+            self.det.setReadOnly(True)
+            self.det.setFixedSize(width, 160)
+            self.det.hide()
+            col.addWidget(self.det)
+        top.addLayout(col, 1)
+        lay.addLayout(top)
+        foot = QFrame()
+        foot.setObjectName("dlgfoot")
+        row = QHBoxLayout(foot)
+        row.setContentsMargins(22, 12, 22, 14)
+        row.setSpacing(8)
+        if details:
+            more = QPushButton("Подробнее")
+            more.setCursor(Qt.PointingHandCursor)
+            more.clicked.connect(lambda: (self.det.setVisible(not self.det.isVisible()), self.adjustSize()))
+            row.addWidget(more)
+        row.addStretch(1)
+        # своя кнопка «Подробнее» уже есть; служебную «Show Details…» стандартного окна не показываем
+        src = [b for b in box.buttons() if not (details and box.buttonRole(b) == QMessageBox.ActionRole
+                                                and "detail" in b.text().lower().replace("&", ""))]
+        if details and not src:
+            src = [box.addButton(QMessageBox.Ok)]
+            src[0].setText("ОК")
+        default = box.defaultButton()
+        if default is None:
+            for role in (QMessageBox.AcceptRole, QMessageBox.YesRole, QMessageBox.ApplyRole):
+                default = next((b for b in src if box.buttonRole(b) == role), None)
+                if default:
+                    break
+        if default is None and len(src) == 1:
+            default = src[0]
+        esc = box.escapeButton()
+        if esc is None:
+            for role in (QMessageBox.RejectRole, QMessageBox.NoRole):
+                esc = next((b for b in src if box.buttonRole(b) == role), None)
+                if esc:
+                    break
+        if esc is None and len(src) == 1:
+            esc = src[0]
+        self.esc = esc
+        order = [b for b in src if b is not default] + ([default] if default is not None else [])
+        for b in order:
+            pb = QPushButton(b.text().replace("&", ""))
+            pb.setCursor(Qt.PointingHandCursor)
+            bf = QFont(pb.font())
+            bf.setBold(True)                     # ширина — по жирному шрифту, чтобы текст не обрезался
+            pb.setMinimumWidth(max(96, QFontMetrics(bf).horizontalAdvance(pb.text()) + 44))
+            if b is default:
+                pb.setObjectName("primary")
+                pb.setDefault(True)
+                pb.setAutoDefault(True)
+            else:
+                pb.setAutoDefault(False)
+            pb.clicked.connect(lambda _=False, b=b: self._pick(b))
+            row.addWidget(pb)
+        lay.addWidget(foot)
+        if not src:                       # окно без кнопок (бывает у QMessageBox) — дать хотя бы «ОК»
+            pb = QPushButton("ОК")
+            pb.setObjectName("primary")
+            pb.clicked.connect(self.accept)
+            row.addWidget(pb)
+
+    def _pick(self, b):
+        self.chosen = b
+        self.accept()
+
+    def reject(self):
+        if self.chosen is None:
+            self.chosen = self.esc
+        super().reject()
+
+    def run(self):
+        QDialog.exec(self)                        # с мягким появлением (обёртка _appear)
+        b = self.chosen
+        box = self.box
+        if b is None:
+            return 0
+        sb = box.standardButton(b)
+        try:
+            b.click()                             # исходное окно запоминает нажатую кнопку
+        except RuntimeError:
+            pass
+        return int(sb) if sb != QMessageBox.NoButton else box.buttons().index(b) if b in box.buttons() else 0

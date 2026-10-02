@@ -111,7 +111,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.4.1"
+APP_VERSION = "3.4.2"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -6420,6 +6420,7 @@ def polish_ui(root):
             b.setProperty("danger", True)
             b.style().unpolish(b)
             b.style().polish(b)
+    modern_ui.fit_primary(root)
     for t in root.findChildren(QTableWidget):
         t.setShowGrid(False)
     for bar in root.findChildren(QTabBar):
