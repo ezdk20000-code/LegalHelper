@@ -37,6 +37,8 @@ import anim
 import timer_widget as TW
 import extwatch
 import tutorial
+import rename_ui
+import zoom_ui
 import phone_export as PHX
 import palette
 import app_menu
@@ -114,7 +116,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.5.1"
+APP_VERSION = "3.6"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -1969,9 +1971,17 @@ class MainWindow(QMainWindow):
         self.update_title()
         self.reminders = U.Reminders(self)
         polish_ui(self)
-        sec = int(settings().value("section", 0) or 0)
-        if sec in (1, 2):
-            QTimer.singleShot(0, lambda: self.show_section(sec))
+        try:                                     # размер и положение окна — как в прошлый раз
+            g = settings().value("win_geometry")
+            if g:
+                self.restoreGeometry(g)
+                scr = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+                if not self.isMaximized() and (self.width() > scr.width() or self.height() > scr.height()
+                                               or not scr.intersects(self.frameGeometry())):
+                    self.resize(min(self.width(), int(scr.width() * 0.92)), min(self.height(), int(scr.height() * 0.9)))
+                    self.move(scr.center() - self.rect().center())
+        except Exception:
+            pass
         self.updateChecked.connect(self._on_update_checked)
         self.updateProgress.connect(self._on_update_progress)
         self.updateDownloaded.connect(self._on_update_downloaded)
@@ -1986,6 +1996,7 @@ class MainWindow(QMainWindow):
         self.tutor = None
         QTimer.singleShot(2500, lambda: tutorial.offer(self))
         self.extwatch = extwatch.ExtWatch(self)
+        rename_ui.install(self)
         self.extwatch.changed.connect(self.on_external_changed)
         self.case_sync_timer = QTimer(self)
         self.case_sync_timer.setInterval(3 * 60 * 1000)      # сведения о деле — в его папку
@@ -2094,6 +2105,14 @@ class MainWindow(QMainWindow):
             a.setChecked(key == cur)
             grp.addAction(a)
             a.triggered.connect(lambda _=False, k=key: self.set_theme(k))
+        z = zoom_ui.get_zoom(settings)
+        self.a_zoom = mv.addAction(f"🔍 Масштаб программы… (сейчас {z}%)", lambda: self.zoom_dialog())
+        self.a_zoom.setShortcut("Ctrl+Shift+=")
+        for seq, d in (("Ctrl+Shift++", 1), ("Ctrl+Shift+-", -1), ("Ctrl+Shift+_", -1)):
+            az = QAction(self)
+            az.setShortcut(seq)
+            az.triggered.connect(lambda _=False, d=d: self.zoom_dialog(d))
+            self.addAction(az)
         mv.addSeparator()
         for i, (name, key) in enumerate((("Обзор дела", "overview"), ("Документы", "docs"),
                                          ("Создать документ", "prepare"), ("Сроки", "events"),
@@ -2917,6 +2936,10 @@ class MainWindow(QMainWindow):
 
     def toast_undo(self, text, on_undo, ms=10000):
         """Плашка внизу окна: «Удалено. [Отменить]» — вместо вопросов «Вы уверены?» перед удалением."""
+        return self.toast_actions(text, [("Отменить", on_undo)], ms)
+
+    def toast_actions(self, text, actions, ms=10000, closable=False):
+        """Плашка внизу окна с кнопками [(подпись, действие)]; нажатие любой кнопки убирает плашку."""
         old = getattr(self, "_undo_bar", None)
         if old is not None:
             try:
@@ -2929,31 +2952,55 @@ class MainWindow(QMainWindow):
         bar.setStyleSheet(f"QFrame#undobar {{ background: {T['text']}; border-radius: 12px; }}"
                           f"QLabel {{ color: {T['panel']}; font-weight: 600; background: transparent; }}"
                           f"QPushButton {{ color: {T['accent']}; background: {T['panel']}; border: none; "
-                          "border-radius: 8px; padding: 5px 14px; font-weight: 700; }")
-        h = QHBoxLayout(bar)
-        h.setContentsMargins(16, 8, 8, 8)
-        h.setSpacing(14)
+                          "border-radius: 8px; padding: 5px 14px; font-weight: 700; }"
+                          f"QPushButton#barx {{ color: {T['panel']}; background: transparent; padding: 5px 8px; }}")
         lab = QLabel(text)
         lab.setWordWrap(True)
-        lab.setMinimumWidth(min(lab.fontMetrics().horizontalAdvance(text) + 12, 440))
-        h.addWidget(lab, 1)
-        b = QPushButton("Отменить")
-        b.setCursor(Qt.PointingHandCursor)
-        h.addWidget(b)
+        if len(actions) < 2:                         # «Удалено. [Отменить]» — в одну строку
+            width = 620
+            h = QHBoxLayout(bar)
+            h.setContentsMargins(16, 8, 8, 8)
+            h.setSpacing(10)
+            lab.setMinimumWidth(min(lab.fontMetrics().horizontalAdvance(text) + 12, 440))
+            h.addWidget(lab, 1)
+        else:                                        # несколько кнопок — текст сверху, кнопки под ним
+            width = 640
+            col = QVBoxLayout(bar)
+            col.setContentsMargins(18, 12, 10, 10)
+            col.setSpacing(10)
+            col.addWidget(lab)
+            lab.setMinimumWidth(min(max(lab.fontMetrics().horizontalAdvance(ln) for ln in text.splitlines()) + 12,
+                                    width - 40))
+            h = QHBoxLayout()
+            h.setSpacing(8)
+            h.addStretch(1)
+            col.addLayout(h)
         done = []
 
-        def undo():
+        def run(fn):
             if done:
                 return
             done.append(1)
             bar.hide()
             bar.deleteLater()
             try:
-                on_undo()
+                if fn:
+                    fn()
             except Exception as e:
-                self.error("Не удалось отменить", e)
-        b.clicked.connect(undo)
-        bar.setMaximumWidth(min(620, self.width() - 40))
+                self.error("Не удалось выполнить действие", e)
+        for label, fn in actions:
+            b = QPushButton(label)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, f=fn: run(f))
+            h.addWidget(b)
+        if closable:
+            x = QPushButton("✕")
+            x.setObjectName("barx")
+            x.setToolTip("Закрыть")
+            x.setCursor(Qt.PointingHandCursor)
+            x.clicked.connect(lambda: run(None))
+            h.addWidget(x)
+        bar.setMaximumWidth(min(width, self.width() - 40))
         bar.adjustSize()
         bar.move((self.width() - bar.width()) // 2, self.height() - bar.height() - 44)
         bar.show()
@@ -2961,6 +3008,76 @@ class MainWindow(QMainWindow):
         anim.slide_in(bar, dx=0, dy=18, ms=240)
         QTimer.singleShot(ms, lambda: (not done) and _safe_delete(bar))
         return bar
+
+    def rename_doc_file(self, old, new):
+        """Переименовать файл документа на диске и везде, где программа его помнит: открытые документы,
+        страницы в «PDF дела» (они знают, из какого файла пришли), список документов, комплекты. True — вышло."""
+        norm = lambda p: os.path.normcase(os.path.abspath(p))
+        key = norm(old)
+        if key == norm(new):
+            return True
+        self._store_ws()
+        for w in self.ws:                    # открытый файл держать в памяти, а не на диске — иначе Windows не даст
+            if w["path"] and norm(w["path"]) == key:
+                try:
+                    w["doc"] = fitz.open("pdf", w["doc"].tobytes())
+                except Exception:
+                    pass
+        try:
+            os.rename(old, new)
+        except OSError as e:
+            self._load_ws(self.cur_ws)
+            QMessageBox.warning(self, "Переименование", f"Не удалось переименовать «{Path(old).name}».\n\n{e}\n\n"
+                                "Возможно, файл открыт в другой программе (Word, просмотрщик PDF) — закройте её "
+                                "и попробуйте ещё раз.")
+            return False
+        name, src = Path(new).name, fitz.get_pdf_str(os.path.abspath(new))
+        old_names = {Path(old).name, Path(old).stem}
+        touched_cur, saved = False, set()
+
+        def retag(d):
+            hit = False
+            for k in range(d.page_count):
+                s_ = _pdf_key(d, k, "LHSrc")
+                if s_ and norm(s_) == key:
+                    x = d[k].xref
+                    d.xref_set_key(x, "LHSrc", src)
+                    if (_pdf_key(d, k, "LHName") or "") in old_names:
+                        d.xref_set_key(x, "LHName", fitz.get_pdf_str(name))
+                    hit = True
+            return hit
+        for i, w in enumerate(self.ws):
+            if w["path"] and norm(w["path"]) == key:
+                w["path"] = new
+                touched_cur |= i == self.cur_ws
+            if retag(w["doc"]):
+                touched_cur |= i == self.cur_ws
+                if w.get("main") and w.get("case_id") and not w["modified"] and self._save_case_ws(i):
+                    saved.add(w["case_id"])
+        cids = U.db().rename_path(old, new)
+        for cid in cids - saved:             # PDF дела этих дел на диске (не открыт или с несохранёнными правками)
+            try:
+                p = self.case_pdf(cid)
+                if os.path.exists(p):
+                    d = fitz.open("pdf", Path(p).read_bytes())
+                    if retag(d):
+                        C.save_pdf(d, p)
+                        self.extwatch.refresh(p)
+            except Exception as e:
+                log_error("Переименование: PDF дела", e)
+        if self.extwatch.is_watched(old):
+            self.extwatch.unwatch(old)
+            self.extwatch.watch(new)
+        if touched_cur:
+            self._load_ws(self.cur_ws)
+        for cid in cids:
+            try:
+                U.sync_case_file(cid)
+            except Exception:
+                pass
+            self.cases_page.refresh_docs_if(cid)
+        self.refresh_loose_list()
+        return True
 
     def ask_save_path(self, title, suffix, flt, name_suffix=""):
         default = os.path.join(self.default_dir(), f"{self.base_name()}{name_suffix}{suffix}")
@@ -3703,7 +3820,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e):
         if self.save_all_ws():
             self._shutdown_data()
-            U.M.settings().setValue("section", self.stack.currentIndex())
+            self.save_place()
             e.accept()
         else:
             e.ignore()
@@ -4613,8 +4730,75 @@ class MainWindow(QMainWindow):
         cur = self.ws[self.cur_ws]
         if cur["doc"].page_count:                # открыли программу файлом — сразу к нему
             self.show_section(0)
-        else:
+        elif not self.restore_place():
             self.show_home()
+
+    def zoom_dialog(self, d=0):
+        cur = zoom_ui.get_zoom(settings)
+        dlg = zoom_ui.ZoomDialog(self, cur, zoom_ui.step(cur, d) if d else cur)
+        if dlg.exec() == QDialog.Accepted and dlg.value != cur:
+            self.set_zoom(dlg.value)
+
+    def set_zoom(self, z):
+        """Новый масштаб: сохранить всё, запомнить место и перезапуститься (масштаб Qt задаётся при запуске)."""
+        if not self.save_all_ws():
+            return
+        self._shutdown_data()
+        self.save_place()
+        st = settings()
+        st.setValue(zoom_ui.KEY, z)
+        st.sync()
+        restart_app()
+
+    def save_place(self):
+        """Где остановились: дело и вкладка, папка, «Без дела» или Главная — чтобы открыться там же."""
+        import json
+        st = self.stack.currentWidget()
+        place = {"view": "home"}
+        try:
+            if st is self.cases_page and self.mode_cid:
+                i = self.cases_page.tabs.currentIndex()
+                key = next((k for k, v in self.case_tab_keys.items() if v == i and k != "calc"), None)
+                place = {"view": "case", "cid": self.mode_cid, "tab": key,
+                         "money": self.money_seg.currentIndex() if hasattr(self, "money_seg") else 0}
+            elif st is self.folder_page and self.folder_page.fid:
+                place = {"view": "folder", "fid": self.folder_page.fid}
+            elif st is self.loose_page:
+                place = {"view": "loose", "tab": self.loose_tabs.currentIndex()}
+            settings().setValue("place", json.dumps(place))
+            settings().setValue("win_geometry", self.saveGeometry())
+        except Exception as ex:
+            log_error("Запомнить место", ex)
+
+    def restore_place(self):
+        import json
+        try:
+            place = json.loads(settings().value("place", "") or "{}")
+        except Exception:
+            return False
+        try:
+            v = place.get("view")
+            if v == "case" and place.get("cid") and U.db().case(place["cid"]):
+                c = U.db().case(place["cid"])
+                if c.get("archived"):
+                    self.cases_page.show_arch.setChecked(True)
+                self.enter_case(place["cid"])
+                key = place.get("tab")
+                if key in self.case_tab_keys:
+                    self.cases_page.tabs.setCurrentIndex(self.case_tab_keys[key])
+                    if key == "money" and hasattr(self, "money_seg"):
+                        self.money_seg.setCurrentIndex(int(place.get("money") or 0))
+                return self.mode_cid == place["cid"]
+            if v == "folder" and place.get("fid") and U.db().folder(place["fid"]):
+                self.show_folder(place["fid"])
+                return True
+            if v == "loose":
+                self.enter_loose()
+                self.loose_tabs.setCurrentIndex(int(place.get("tab") or 0))
+                return True
+        except Exception as ex:
+            log_error("Открыть там же, где остановились", ex)
+        return False
 
     def show_home(self):
         """Главная — сводка по всей работе."""
@@ -6580,6 +6764,10 @@ def main():
     sys.excepthook = hook
     from PySide6.QtCore import QCoreApplication
     QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)   # нужно для встроенной карты дела (WebEngine)
+    try:
+        zoom_ui.apply_env(settings)               # масштаб программы (☰ → Вид → Масштаб) — до создания окна
+    except Exception as ex:
+        log_error("Масштаб программы", ex)
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     from PySide6.QtCore import QLocale

@@ -1013,6 +1013,18 @@ class DocsTable(QTableWidget):
         rows = self.selected_rows()
         return rows[0] if len(rows) == 1 else None
 
+    def _court_name(self, did, path):
+        import rename_ui as R, doc_names as N
+        if not path or not os.path.isfile(path):
+            return self.page.main.toast("Файла нет на диске")
+        sg = N.suggest(path)
+        stem = sg["stem"] if sg else Path(path).stem
+        R.open_dialog(self.page.main, [dict(cid=self.page.cid, did=did, path=path, stem=stem,
+                                            kind=sg["kind"] if sg else "не понял по тексту — впишите сами")],
+                      note="Новое имя можно поправить — двойной щелчок по нему." if sg else
+                      "По тексту не удалось понять, что это за документ (возможно, это скан без распознанного "
+                      "текста). Впишите имя сами — двойной щелчок по нему.")
+
     def rename_current(self):
         r = self._current()
         if r is not None:
@@ -1054,6 +1066,7 @@ class DocsTable(QTableWidget):
         m.addAction("Показать в PDF дела (справа)", lambda: self.page.openFile.emit(path, 0))
         m.addAction("Открыть в своей программе (Word, Acrobat…)", lambda: self.page.main.open_in_app(path))
         m.addAction("Переименовать", lambda: self.editItem(self.item(r, 1)))
+        m.addAction("🏷  Назвать как в суде…", lambda: self._court_name(did, path))
         m.addAction("Выбрать значок…", lambda: self.on_click(r, 0))
         m.addAction("Отметить отправку…", lambda: self.edit_sent(r))
         m.addAction("Отправлен сейчас", lambda: (db().update_doc(did, sent=dt.datetime.now().isoformat(timespec="minutes")),
@@ -1429,9 +1442,19 @@ class InstancesEditor(QWidget):
         it = next((i for i in inst if i["id"] == iid), None)
         if QMessageBox.question(self, M.APP_NAME, f"Удалить инстанцию «{it['court'] or it['level']}»?") != QMessageBox.Yes:
             return
+        snap = db().snapshot(("instances", "id=?", (iid,)))
         db().delete_instance(iid)
         self.reload()
         self.changed()
+        cid = self.cid
+
+        def undo():
+            db().restore(snap)
+            db().sync_instance(cid)
+            if self.cid == cid:
+                self.reload()
+                self.changed()
+        self.page.main.toast_undo(f"Инстанция «{it['court'] or it['level']}» удалена", undo)
 
     def changed(self):
         """Текущая инстанция поменялась — обновить стадию в форме, заголовок и обзор."""
@@ -2238,7 +2261,12 @@ class CasesPage(QWidget):
         left.setObjectName("sidepanel")
         lv = QVBoxLayout(left)
         lv.setContentsMargins(14, 14, 14, 14)
-        lv.addLayout(title_row("Дела", "cases", big=True))
+        head = title_row("Дела", "cases", big=True)
+        self.show_arch = QCheckBox("Архив")
+        self.show_arch.setToolTip("Показать дела в архиве")
+        self.show_arch.toggled.connect(self.reload)
+        head.addWidget(self.show_arch)
+        lv.addLayout(head)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Фильтр дел: номер, доверитель, суд…")
         self.search.textChanged.connect(self.reload)
@@ -2258,12 +2286,9 @@ class CasesPage(QWidget):
         b_fold.setToolTip("Папка для дел одного доверителя (можно и подпапки). Дела перетаскиваются в папку мышью.")
         b_fold.clicked.connect(lambda: FU.new_folder(self, self.cur_fid if self._folder_selected() else None))
         self.b_folder = b_fold
-        self.show_arch = QCheckBox("Архив")
-        self.show_arch.toggled.connect(self.reload)
-        rb.addWidget(b_new)
+        rb.setSpacing(8)
+        rb.addWidget(b_new, 1)
         rb.addWidget(b_fold)
-        rb.addStretch(1)
-        rb.addWidget(self.show_arch)
         lv.addLayout(rb)
         self.upcoming_lbl = QLabel("Ближайшие 14 дней")
         lv.addWidget(self.upcoming_lbl)
@@ -2460,6 +2485,7 @@ class CasesPage(QWidget):
         mm.addAction("📚 Собрать PDF дела из всех документов", lambda: self.main.build_case_pdf(self.cid))
         mm.addAction("📂 Показать PDF дела в папке", lambda: self.main.show_in_folder(self.main.case_pdf(self.cid)))
         mm.addSeparator()
+        mm.addAction("🏷  Назвать документы как в суде…", lambda: __import__("rename_ui").tidy_case(self.main, self.cid))
         mm.addAction("Пакет в суд из выбранных", self.package_from_docs)
         mm.addAction("Поиск по документам", self.search_docs)
         mm.addSeparator()
@@ -3045,8 +3071,17 @@ class CasesPage(QWidget):
     def _del_row(self, table, fn):
         i = self._cur_id(table)
         if i:
+            tbl, what = ("payments", "Оплата") if table is getattr(self, "t_pay", None) else ("time_entries", "Работа")
+            snap = db().snapshot((tbl, "id=?", (i,)))
             fn(i)
             self.load_money()
+            cid = self.cid
+
+            def undo():
+                db().restore(snap)
+                if self.cid == cid:
+                    self.load_money()
+            self.main.toast_undo(f"{what} удалена", undo)
 
     def add_time(self):
         dlg = QDialog(self)
@@ -3145,9 +3180,20 @@ class CasesPage(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(p))
 
     def del_quote(self):
-        for it in self.l_quotes.selectedItems():
-            db().delete_quote(it.data(Qt.UserRole))
+        ids = [it.data(Qt.UserRole) for it in self.l_quotes.selectedItems()]
+        if not ids:
+            return
+        snap = db().snapshot(("quotes", f"id IN ({','.join('?' * len(ids))})", ids))
+        for q in ids:
+            db().delete_quote(q)
         self.load_quotes()
+        cid = self.cid
+
+        def undo():
+            db().restore(snap)
+            if self.cid == cid:
+                self.load_quotes()
+        self.main.toast_undo("Выписка удалена" if len(ids) == 1 else f"Удалено выписок: {len(ids)}", undo)
 
 
 # =============================================================================

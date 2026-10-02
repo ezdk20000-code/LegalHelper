@@ -102,6 +102,9 @@ CASE_FIELDS = [("title", "Название"), ("number", "Номер дела"),
                ("folder", "Папка с документами"), ("notes", "Заметки")]
 
 
+DOC_ADDED_HOOKS = []      # fn(cid, did, path) — вызывается после добавления документа в дело
+
+
 def norm_path(p):
     """Путь для сравнения: одинаковые разделители, без «./» и «..», без учёта регистра в Windows."""
     return os.path.normcase(os.path.normpath(os.path.abspath(p))) if p else ""
@@ -486,9 +489,64 @@ class CaseDB:
         if not path or self._doc_ids(path, cid):
             return None
         path = os.path.normpath(path)
-        return self._exec("INSERT INTO docs(case_id,path,title,added) VALUES (?,?,?,?)",
-                          (cid, path, title or os.path.splitext(os.path.basename(path))[0],
-                           dt.datetime.now().isoformat(timespec="seconds")))
+        did = self._exec("INSERT INTO docs(case_id,path,title,added) VALUES (?,?,?,?)",
+                         (cid, path, title or os.path.splitext(os.path.basename(path))[0],
+                          dt.datetime.now().isoformat(timespec="seconds")))
+        for fn in DOC_ADDED_HOOKS:                 # окно программы предложит назвать документ «как в суде»
+            try:
+                fn(cid, did, path)
+            except Exception:
+                pass
+        return did
+
+    def snapshot(self, *specs):
+        """Запомнить строки перед удалением — для «Отменить» на плашке. specs: (таблица, условие, параметры[, поля])."""
+        out = []
+        for spec in specs:
+            table, where, args = spec[:3]
+            rows = self._rows(table, where, args)
+            if len(spec) > 3:
+                rows = [{k: r[k] for k in ("id",) + tuple(spec[3])} for r in rows]
+            out.append((table, rows))
+        return out
+
+    def restore(self, snap):
+        """Вернуть запомненное: удалённые строки — обратно с теми же номерами, изменённые поля — как были."""
+        for table, rows in snap:
+            for r in rows:
+                if self._one(f"SELECT id FROM {table} WHERE id=?", (r["id"],)):
+                    keys = [k for k in r if k != "id"]
+                    if keys:
+                        self.con.execute(f"UPDATE {table} SET {','.join(k + '=?' for k in keys)} WHERE id=?",
+                                         [r[k] for k in keys] + [r["id"]])
+                else:
+                    self.con.execute(f"INSERT INTO {table} ({','.join(r)}) VALUES ({','.join('?' * len(r))})",
+                                     list(r.values()))
+        self.con.commit()
+
+    def law_subtree(self, lid):
+        ids, todo = [], [lid]
+        while todo:
+            x = todo.pop()
+            ids.append(x)
+            todo += [r["id"] for r in self._all("SELECT id FROM laws WHERE parent_id=?", (x,))]
+        return ids
+
+    def rename_path(self, old, new):
+        """Файл переименован на диске: новый путь во всех делах и комплектах; название в программе — по файлу
+        (если его не меняли вручную или меняем через «как в суде»). Возвращает id затронутых дел."""
+        key, new = norm_path(old), os.path.normpath(new)
+        old_stem, new_stem = os.path.splitext(os.path.basename(old))[0], os.path.splitext(os.path.basename(new))[0]
+        cids = set()
+        for r in self._all("SELECT id, case_id, path, title FROM docs"):
+            if norm_path(r["path"]) == key:
+                self._exec("UPDATE docs SET path=?, title=? WHERE id=?", (new, new_stem, r["id"]))
+                cids.add(r["case_id"])
+        for r in self._all("SELECT id, path, title FROM pack_items"):
+            if r["path"] and norm_path(r["path"]) == key:
+                title = new_stem if (r["title"] or "") in ("", old_stem) else r["title"]
+                self._exec("UPDATE pack_items SET path=?, title=? WHERE id=?", (new, title, r["id"]))
+        return cids
 
     def dedupe_docs(self):
         """Убрать повторы одного файла в деле (оставить запись с отметкой «Отправлен», значком, иначе первую)."""

@@ -254,9 +254,16 @@ def delete_folder(page, fid):
     if QMessageBox.question(page, "Удалить папку", f"Удалить папку «{f['name']}»?\n\nДела ({n}) и подпапки не "
                             "удаляются — они переместятся на уровень выше.") != QMessageBox.Yes:
         return
+    snap = db().snapshot(("folders", "id=?", (fid,)), ("folders", "parent_id=?", (fid,), ("parent_id",)),
+                         ("cases", "folder_id=?", (fid,), ("folder_id",)))
     db().delete_folder(fid)
     page.cur_fid = None
     page.reload()
+
+    def undo():
+        db().restore(snap)
+        page.reload()
+    page.main.toast_undo(f"Папка «{f['name']}» удалена (дела на месте)", undo)
     if hasattr(page.main, "show_home") and getattr(page.main, "folder_page", None) and \
             page.main.stack.currentWidget() is page.main.folder_page:
         page.main.show_home()

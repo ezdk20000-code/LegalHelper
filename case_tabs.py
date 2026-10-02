@@ -558,8 +558,14 @@ class SubmissionTab(QWidget):
         it = self.item_row(self.t.currentRow())
         if it and QMessageBox.question(self, U.M.APP_NAME, f"Убрать из комплекта «{it['title']}»?\n"
                                        "Сам файл на диске не удаляется.") == QMessageBox.Yes:
+            snap = db().snapshot(("pack_items", "id=?", (it["id"],)))
             db().delete_pack_item(it["id"])
             self.reload()
+
+            def undo():
+                db().restore(snap)
+                self.reload()
+            self.main.toast_undo(f"«{it['title']}» убрано из комплекта", undo)
 
     def open_in_editor(self):
         it = self.item_row(self.t.currentRow())
@@ -588,8 +594,17 @@ class SubmissionTab(QWidget):
     def delete_pack(self):
         if self.pid and QMessageBox.question(self, U.M.APP_NAME, f"Удалить комплект «{self.packs.currentText()}»?\n"
                                              "Файлы на диске не удаляются.") == QMessageBox.Yes:
-            db().delete_pack(self.pid)
-            self.set_case(self.cid)
+            pid, cid, name = self.pid, self.cid, self.packs.currentText()
+            snap = db().snapshot(("packs", "id=?", (pid,)), ("pack_items", "pack_id=?", (pid,)))
+            db().delete_pack(pid)
+            self.set_case(cid)
+
+            def undo():
+                db().restore(snap)
+                U.M.settings().setValue(f"pack_{cid}", pid)
+                if self.cid == cid:
+                    self.set_case(cid)
+            self.main.toast_undo(f"Комплект «{name}» удалён", undo)
 
     def build(self):
         items = [i for i in self.rows() if i["path"] and os.path.exists(i["path"])]
@@ -1456,9 +1471,20 @@ class LawsTab(QWidget):
         extra = " вместе со всем вложенным" if it.childCount() else ""
         if QMessageBox.question(self, U.M.APP_NAME, f"Удалить «{it.text(0).strip()}»{extra}?") == QMessageBox.Yes:
             self.save_timer.stop()
-            db().delete_law(it.data(0, Qt.UserRole))
+            self.save_now()
+            lid, cid = it.data(0, Qt.UserRole), self.cid
+            name = next((r["title"] for r in db().laws(cid) if r["id"] == lid), "") or it.text(0).strip()
+            ids = db().law_subtree(lid)
+            snap = db().snapshot(("laws", f"id IN ({','.join('?' * len(ids))})", ids))
+            db().delete_law(lid)
             self.cur = None
             self.reload()
+
+            def undo():
+                db().restore(snap)
+                if self.cid == cid:
+                    self.reload(select=lid)
+            self.main.toast_undo(f"«{name}» удалено", undo)
 
     def apply_filter(self, *_):
         q = self.filter.text().strip().lower()
