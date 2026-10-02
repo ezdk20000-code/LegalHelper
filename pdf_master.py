@@ -42,7 +42,7 @@ import palette
 import word_editor as WE
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.2"
+APP_VERSION = "3.2.1"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -2462,6 +2462,9 @@ class MainWindow(QMainWindow):
                 info = UPD.fetch_info()
                 if UPD.is_newer(info["version"], APP_VERSION):
                     info["changes"] = UPD.fetch_changelog(APP_VERSION)
+                    if self._setup_updates():           # установленная программа: обновляемся готовым установщиком
+                        info["setup"] = UPD.setup_available(info["version"])
+                        info["pending"] = not info["setup"]
                 self.updateChecked.emit(info, "", silent)
             except Exception as e:
                 self.updateChecked.emit(None, str(e), silent)
@@ -2479,6 +2482,13 @@ class MainWindow(QMainWindow):
             if not silent:
                 QMessageBox.information(self, APP_NAME, f"У вас последняя версия — {APP_VERSION}.")
             return
+        if info.get("pending"):                     # версия вышла, а установщик GitHub ещё собирает
+            if not silent:
+                QMessageBox.information(self, APP_NAME, f"Вышла версия {info['version']}, её установщик сейчас "
+                                        "готовится на сервере (10–15 минут). Проверьте ещё раз чуть позже — или "
+                                        "программа сама предложит обновиться при следующем запуске.")
+            QTimer.singleShot(20 * 60 * 1000, lambda: self.check_updates(silent=True))
+            return
         self._update_info = info
         self.update_lbl.setText(f"Доступна новая версия {APP_NAME} {info['version']} (у вас {APP_VERSION}).")
         anim.slide_down(self.update_bar)
@@ -2493,20 +2503,30 @@ class MainWindow(QMainWindow):
         if dlg.exec() == QDialog.Accepted:
             self.download_update()
 
+    @staticmethod
+    def _setup_updates():
+        """Обновлять готовым установщиком — у собранной программы под Windows (у запуска из исходников —
+        по-старому, архивом и update.bat)."""
+        return C.IS_WIN and bool(getattr(sys, "frozen", False))
+
     def download_update(self, ask=True):
         info = self._update_info
         if not info or self._update_dlg:
             return
-        if ask and QMessageBox.question(
-                self, APP_NAME, f"Установить версию {info['version']}?\n\nПрограмма скачает обновление, "
-                                "закроется, в отдельном окне соберёт и установит новую версию (обычно 2–4 минуты, "
-                                "в первый раз дольше) и откроется снова. Дела, шаблоны и настройки сохранятся."
-        ) != QMessageBox.Yes:
+        setup = bool(info.get("setup"))
+        text = (f"Установить версию {info['version']}?\n\nПрограмма скачает обновление (около 230 МБ), закроется, "
+                "установит новую версию — появится обычное окно установки с полоской — и откроется снова "
+                "(обычно 1–3 минуты). Дела, шаблоны и настройки сохранятся.") if setup else (
+                f"Установить версию {info['version']}?\n\nПрограмма скачает обновление, закроется, в отдельном окне "
+                "соберёт и установит новую версию (обычно 2–4 минуты, в первый раз дольше) и откроется снова. "
+                "Дела, шаблоны и настройки сохранятся.")
+        if ask and QMessageBox.question(self, APP_NAME, text) != QMessageBox.Yes:
             return
         if not self.maybe_save():
             return
         import threading, time
-        dest = os.path.join(tempfile.gettempdir(), f"LegalHelper_{info['version']}_{int(time.time())}.zip")
+        dest = os.path.join(tempfile.gettempdir(), f"LegalHelper_{info['version']}_{int(time.time())}"
+                            + (".exe" if setup else ".zip"))
         dlg = QProgressDialog("Соединяюсь с GitHub…", "Отмена", 0, 0, self)
         dlg.setWindowTitle(APP_NAME)
         dlg.setWindowModality(Qt.WindowModal)
@@ -2520,8 +2540,11 @@ class MainWindow(QMainWindow):
 
         def work():
             try:
-                UPD.download(info["zip"], dest, progress=lambda got, total: self.updateProgress.emit(got, total),
-                             cancelled=lambda: self._update_cancel)
+                prog = lambda got, total: self.updateProgress.emit(got, total)
+                if setup:
+                    UPD.download_setup(info["version"], dest, progress=prog, cancelled=lambda: self._update_cancel)
+                else:
+                    UPD.download(info["zip"], dest, progress=prog, cancelled=lambda: self._update_cancel)
                 self.updateDownloaded.emit(dest, "")
             except Exception as e:
                 self.updateDownloaded.emit("", str(e))
@@ -2565,9 +2588,50 @@ class MainWindow(QMainWindow):
             if box.clickedButton() is again:
                 QTimer.singleShot(0, lambda: self.download_update(ask=False))
             elif box.clickedButton() is web:
-                QDesktopServices.openUrl(QUrl(UPD.ZIP_URLS[0]))
+                info = self._update_info or {}
+                QDesktopServices.openUrl(QUrl(UPD.setup_url(info["version"]) if info.get("setup")
+                                              else UPD.ZIP_URLS[0]))
             return
-        self.install_update(path, ask=False)
+        if path.lower().endswith(".exe"):
+            self.run_setup(path)
+        else:
+            self.install_update(path, ask=False)
+
+    def run_setup(self, path):
+        """Поставить скачанный установщик: программа закрывается, установщик работает с обычной полоской
+        (без вопросов и без командной строки) и сам открывает программу снова."""
+        self._shutdown_data()
+        try:                                     # страховка: копия данных и номер версии для отката
+            BK.make_backup(data_dir(), "update", APP_VERSION)
+            with open(os.path.join(data_dir(), "previous_version.txt"), "w", encoding="utf-8") as f:
+                f.write(APP_VERSION)
+        except Exception as e:
+            log_error("Резервная копия перед обновлением", e)
+        self._keep_previous()
+        log = os.path.join(tempfile.gettempdir(), "LegalHelper_setup_log.txt")
+        try:
+            subprocess.Popen([path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS",
+                              "/NOCANCEL", "/SP-", f"/LOG={log}"], creationflags=0x00000008)   # DETACHED_PROCESS
+        except Exception as e:
+            return self.error("Не удалось запустить установщик обновления", e)
+        self.modified = False
+        QApplication.quit()
+
+    def _keep_previous(self):
+        """Копия нынешней программы для «Вернуть предыдущую версию» (раньше её делал update.bat)."""
+        import shutil
+        prev = os.path.join(os.environ.get("LOCALAPPDATA", ""), "PDFMaster-build", "previous")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.msg("Сохраняю копию нынешней версии на случай отката…")
+        QApplication.processEvents()
+        try:
+            shutil.rmtree(prev, ignore_errors=True)
+            shutil.copytree(os.path.dirname(sys.executable), prev,
+                            ignore=shutil.ignore_patterns("unins*.*"))
+        except Exception as e:
+            log_error("Копия программы перед обновлением", e)
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def show_error_log(self):
         p = log_path()
@@ -3693,7 +3757,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, APP_NAME, "Ярлык «LegalHelper» создан на рабочем столе.")
 
     def rollback_program(self):
-        """Вернуть программу, которая стояла до последнего обновления (update.bat сохраняет её копию)."""
+        """Вернуть программу, которая стояла до последнего обновления (копию сохраняет обновление)."""
         work = os.path.join(os.environ.get("LOCALAPPDATA", ""), "PDFMaster-build")
         prev = os.path.join(work, "previous")
         exe = next((n for n in ("LegalHelper.exe", "PDFMaster.exe") if os.path.exists(os.path.join(prev, n))), None)

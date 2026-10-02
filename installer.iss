@@ -1,7 +1,7 @@
 ﻿; Скрипт установщика Inno Setup 6 для «LegalHelper» (до версии 1.6 — «PDF Мастер»)
 #define MyAppName "LegalHelper"
 #ifndef MyAppVersion
-  #define MyAppVersion "3.2"
+  #define MyAppVersion "3.2.1"
 #endif
 #define MyAppExe "LegalHelper.exe"
 
@@ -69,3 +69,5 @@ Root: HKA; Subkey: "Software\Classes\PDFMaster.pdf\shell\open\command"; ValueTyp
 
 [Run]
 Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+; обновление из программы (тихая установка /SILENT) — сразу открыть программу снова
+Filename: "{app}\{#MyAppExe}"; Flags: nowait; Check: WizardSilent

@@ -3,8 +3,10 @@
 Проверка и загрузка обновлений LegalHelper с GitHub (без интерфейса).
 
 Ветка main — всегда выпущенная версия (работа идёт в других ветках и попадает в main при выпуске).
-Программа читает version.json из main и, если версия там новее установленной, скачивает архив
-ветки main — в нём есть update.bat, который собирает и ставит программу.
+Программа читает version.json из main и, если версия там новее установленной, скачивает готовый
+установщик этой версии (LegalHelper-Setup.exe, его собирает GitHub при выпуске — .github/workflows/release.yml)
+и ставит его тихо, с обычной полоской установки. Запасной путь (запуск из исходников, установщик ещё
+не собран) — архив ветки main с update.bat, который собирает программу на месте.
 """
 import json
 import os
@@ -149,6 +151,47 @@ def download(url, dest, progress=None, cancelled=None, timeout=60):
     except Exception as e:
         errors.append(f"по файлам: {e}")
     raise ConnectionError("Не удалось скачать обновление ни одним способом:\n" + "\n".join(errors[-4:]))
+
+
+SETUP_URL = "https://github.com/" + REPO + "/releases/download/v{ver}/LegalHelper-Setup.exe"
+SETUP_MIN_SIZE = 20 * 1048576               # меньше — это не установщик (страница ошибки и т. п.)
+
+
+def setup_url(ver):
+    return SETUP_URL.format(ver=ver)
+
+
+def setup_available(ver, timeout=15):
+    """Готов ли установщик этой версии. GitHub собирает его 10–15 минут после выпуска."""
+    try:
+        # HEAD к GitHub нельзя: ссылка на файл подписана для GET. Берём первые 2 байта и смотрим полный размер
+        req = urllib.request.Request(setup_url(ver), headers={"User-Agent": USER_AGENT, "Range": "bytes=0-1"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            head = r.read(2)
+            size = (r.headers.get("Content-Range") or "").rpartition("/")[2]
+            size = int(size) if size.isdigit() else int(r.headers.get("Content-Length") or 0)
+            return r.status in (200, 206) and head == b"MZ" and size >= SETUP_MIN_SIZE
+    except Exception:
+        return False
+
+
+def download_setup(ver, dest, progress=None, cancelled=None, timeout=60):
+    """Скачать установщик версии ver в dest (с повторами). Проверяет, что это действительно программа Windows."""
+    errors = []
+    for attempt in range(ATTEMPTS):
+        try:
+            _fetch(setup_url(ver), dest, progress, cancelled, timeout)
+            with open(dest, "rb") as f:
+                head = f.read(2)
+            if head == b"MZ" and os.path.getsize(dest) >= SETUP_MIN_SIZE:
+                return dest
+            errors.append("получен не установщик")
+        except InterruptedError:
+            raise
+        except Exception as e:
+            errors.append(str(e))
+        time.sleep(2 * (attempt + 1))
+    raise ConnectionError("Не удалось скачать установщик:\n" + "\n".join(errors[-3:]))
 
 
 CHANGELOG_URL = f"https://raw.githubusercontent.com/{REPO}/main/CHANGELOG.md"
