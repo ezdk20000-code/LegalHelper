@@ -160,7 +160,8 @@ def _help(m):
 
 class Palette(QDialog):
     def __init__(self, main):
-        super().__init__(main, Qt.FramelessWindowHint | Qt.Dialog)
+        # всплывающее окно (как меню ☰): клавиатура сразу в поле поиска, Esc и щелчок мимо закрывают его
+        super().__init__(main, Qt.Popup | Qt.FramelessWindowHint)
         self.main = main
         self.setAttribute(Qt.WA_DeleteOnClose)
         T = U.M.T
@@ -204,7 +205,7 @@ class Palette(QDialog):
         self.list.itemActivated.connect(self.activate)
         self.list.itemClicked.connect(self.activate)
         v.addWidget(self.list, 1)
-        hint = QLabel("↑ ↓ — выбрать · Enter — открыть · Esc, ✕ или щелчок мимо окна — закрыть")
+        hint = QLabel("↑ ↓ — выбрать · Enter — открыть · Esc, ✕ или щелчок мимо — закрыть")
         hint.setObjectName("hint")
         hint.setAlignment(Qt.AlignCenter)
         v.addWidget(hint)
@@ -224,25 +225,21 @@ class Palette(QDialog):
         self.move(g.x() + (g.width() - w) // 2, g.y() + 70)
         self.refresh("")
         QTimer.singleShot(0, self.q.setFocus)
-        from PySide6.QtWidgets import QApplication
-        QApplication.instance().focusWindowChanged.connect(self._focus_moved)
 
-    def _focus_moved(self, win):
-        """Фокус ушёл в главное окно (щелчок мимо поиска) — закрыть поиск."""
-        try:
-            mine = self.windowHandle()
-            if self.isVisible() and win is not None and win is not mine:
-                QTimer.singleShot(0, self._close_if_inactive)
-        except RuntimeError:
-            pass
+    def closeEvent(self, e):
+        # закрылось само — щелчком мимо окна. Если этот щелчок пришёлся на «Найти…», не открывать окно снова
+        if not getattr(self, "_explicit", False):
+            import time
+            self.main._palette_closed_at = time.monotonic()
+        super().closeEvent(e)
 
-    def done(self, r):
-        try:
-            from PySide6.QtWidgets import QApplication
-            QApplication.instance().focusWindowChanged.disconnect(self._focus_moved)
-        except (RuntimeError, TypeError):
-            pass
-        super().done(r)
+    def reject(self):
+        self._explicit = True
+        super().reject()
+
+    def accept(self):
+        self._explicit = True
+        super().accept()
 
     # ------------------------------------------------------------ список
     def _header(self, text):
@@ -311,26 +308,20 @@ class Palette(QDialog):
             if k in (Qt.Key_Return, Qt.Key_Enter):
                 self.activate(self.list.currentItem())
                 return True
-            if k == Qt.Key_Escape:
+            if k == Qt.Key_Escape or (k == Qt.Key_K and ev.modifiers() & Qt.ControlModifier):
                 self.reject()
                 return True
         return super().eventFilter(obj, ev)
 
-    def event(self, e):
-        # щелчок в любом месте мимо окна (окно перестало быть активным) — закрыть, как обычный поиск
-        if e.type() == QEvent.WindowDeactivate and self.isVisible():
-            QTimer.singleShot(0, self._close_if_inactive)
-        return super().event(e)
-
-    def _close_if_inactive(self):
-        try:
-            from PySide6.QtWidgets import QApplication
-            if self.isVisible() and QApplication.activeWindow() is not self:
-                import time
-                self.main._palette_closed_at = time.monotonic()
-                self.reject()
-        except RuntimeError:
-            pass
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Escape or (e.key() == Qt.Key_K and e.modifiers() & Qt.ControlModifier):
+            self.reject()
+            return
+        if e.text() and e.text().isprintable() and not self.q.hasFocus():
+            self.q.setFocus()                      # начали печатать — текст сразу в поле поиска
+            self.q.insert(e.text())
+            return
+        super().keyPressEvent(e)
 
     def activate(self, it):
         e = it.data(Qt.UserRole) if it else None
@@ -350,8 +341,8 @@ def _run(main, e):
 
 def show(main):
     import time
-    if time.monotonic() - getattr(main, "_palette_closed_at", -9) < 0.4:
-        return None              # щелчок по «Найти…» сам закрыл окно (оно потеряло фокус) — не открывать снова
+    if time.monotonic() - getattr(main, "_palette_closed_at", -9) < 0.3:
+        return None              # щелчок по «Найти…» сам закрыл всплывающее окно — не открывать его снова
     old = getattr(main, "_palette", None)
     try:
         if old is not None and old.isVisible():      # повторное Ctrl+K или щелчок по «Найти…» — закрыть
@@ -364,4 +355,5 @@ def show(main):
     p.show()
     p.raise_()
     p.activateWindow()
+    p.q.setFocus()
     return p

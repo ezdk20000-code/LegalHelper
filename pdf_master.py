@@ -58,6 +58,9 @@ class _LazyModule:
 
 
 WE = _LazyModule("word_editor")
+# новый вид окон сообщений ставится сразу при загрузке: пробный запуск (--selftest) и проверки, которые
+# потом подменяют окна сообщений своими заглушками, должны оставаться главными
+modern_ui.install()
 
 class _Spilled:
     """Старый шаг отмены, вынесенный из памяти во временный файл (до 25 шагов «Отменить» — это до 25 копий
@@ -111,7 +114,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.4.2"
+APP_VERSION = "3.4.3"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -6338,7 +6341,6 @@ def apply_theme(app, choice=None):
         pal.setColor(QPalette.Disabled, role, QColor(t["disabled"]))
     app.setPalette(pal)
     app.setStyleSheet(make_style(t) + modern_ui.stylesheet(t) + dialog_style(t))
-    modern_ui.install(t)
     modern_ui.set_theme(t)
     return name
 
