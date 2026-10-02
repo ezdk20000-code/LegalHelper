@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QLineEdit, QDialog, QDialogButtonBox, QSpinBox, QDoubleSpinBox, QComboBox,
     QCheckBox, QPlainTextEdit, QColorDialog, QProgressDialog, QTreeWidget, QTreeWidgetItem, QSplitter,
     QScrollArea, QMenu, QSlider, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QToolButton,
-    QSizePolicy, QStyle, QFrame, QRadioButton, QButtonGroup, QStackedWidget, QTabBar, QTextBrowser)
+    QSizePolicy, QStyle, QFrame, QGridLayout, QRadioButton, QButtonGroup, QStackedWidget, QTabBar, QTextBrowser)
 
 import pdf_core as C
 import legal_core as L
@@ -40,10 +40,11 @@ import tutorial
 import phone_export as PHX
 import palette
 import app_menu
+import modern_ui
 import word_editor as WE
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.2.2"
+APP_VERSION = "3.3"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -497,39 +498,92 @@ class GrowEdit(QPlainTextEdit):
         return QSize(260, self.height())
 
 
-class OptionsDialog(QDialog):
-    """Универсальный диалог параметров.
-    fields: (ключ, подпись, тип, значение_по_умолчанию, доп)"""
+TOOL_EMOJI = {"Разделить PDF": "✂️", "Повернуть страницы": "🔄", "Удалить страницы": "🗑", "Извлечь страницы": "📤",
+              "Вставить пустую страницу": "📄", "Размер страниц": "📐", "Сжать PDF": "🗜", "OCR": "🔤",
+              "Картинки в PDF": "🖼", "HTML в PDF": "🌐", "PDF в изображения": "🖼", "Водяной знак": "💧",
+              "Номера страниц": "🔢", "Обрезка PDF": "✂️", "Скрыть данные": "⬛", "Найти и выделить": "🖍",
+              "Свойства документа": "ℹ️", "Защитить паролем": "🔒", "Сравнение редакций": "⚖️",
+              "Нумерация листов дела": "🔢", "Штамп заверения": "🖃"}
 
-    def __init__(self, parent, title, fields, note=None, ok_text="Выполнить", depends=None, help=None):
+
+class OptionsDialog(QDialog):
+    """Универсальный диалог параметров — карточка: значок и название сверху, поля с подписями над ними
+    (короткие — по два в ряд), внизу «Отмена» и главная кнопка.
+    fields: (ключ, подпись, тип, значение_по_умолчанию, доп)"""
+    NARROW = ("int", "float", "color", "combo", "ecombo", "font")
+
+    def __init__(self, parent, title, fields, note=None, ok_text="Выполнить", depends=None, help=None, icon=None):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setMinimumWidth(460)
+        self.setObjectName("tooldlg")
+        self.setMinimumWidth(520)
         self.w = {}
+        self.lbls = {}
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        head = QHBoxLayout()
+        head.setContentsMargins(24, 22, 24, 12)
+        head.setSpacing(14)
+        emoji = icon or next((e for k, e in TOOL_EMOJI.items() if title.startswith(k)), "⚙️")
+        ic = QLabel()
+        ic.setPixmap(modern_ui.emoji_tile(emoji, T["accent"], 48))
+        ic.setFixedSize(48, 48)
+        head.addWidget(ic, 0, Qt.AlignTop)
+        col = QVBoxLayout()
+        col.setSpacing(3)
+        t = QLabel(title)
+        t.setObjectName("dlgtitle")
+        col.addWidget(t)
         if note:
             lab = QLabel(note)
             lab.setWordWrap(True)
-            lab.setObjectName("note")
-            lay.addWidget(lab)
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight)
-        lay.addLayout(form)
-        for f in fields:
+            lab.setObjectName("dlgsub")
+            col.addWidget(lab)
+        col.addStretch(1)
+        head.addLayout(col, 1)
+        lay.addLayout(head)
+        grid = QGridLayout()
+        grid.setContentsMargins(24, 6, 24, 16)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(10)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        r = c = 0
+        kinds = [f[2] for f in fields]
+        for i, f in enumerate(fields):
             key, label, kind = f[0], f[1], f[2]
             default = f[3] if len(f) > 3 else None
             extra = f[4] if len(f) > 4 else None
             w = self._make(kind, label, default, extra)
             self.w[key] = (kind, w)
-            if kind == "check":
-                form.addRow("", w)
+            cell = QVBoxLayout()
+            cell.setSpacing(5)
+            if kind != "check":
+                lb = QLabel(label)
+                lb.setObjectName("fieldlabel")
+                lb.setBuddy(w)
+                self.lbls[key] = lb
+                cell.addWidget(lb)
+            cell.addWidget(w)
+            pair = kind in self.NARROW and (c == 1 or (i + 1 < len(kinds) and kinds[i + 1] in self.NARROW))
+            if pair:                                # короткое поле — по два в ряд, одинокое — на всю ширину
+                grid.addLayout(cell, r, c)
+                c += 1
+                if c == 2:
+                    r, c = r + 1, 0
             else:
-                form.addRow(label + ":", w)
+                if c:
+                    r, c = r + 1, 0
+                grid.addLayout(cell, r, 0, 1, 2)
+                r += 1
+        lay.addLayout(grid)
+        lay.addStretch(1)
         # depends: {поле: (управляющее_поле, функция(значение) -> bool)} — включать поле по условию
         for dep, (ctrl, cond) in (depends or {}).items():
             cw = self.w[ctrl][1]
             dw = self.w[dep][1]
-            lbl = form.labelForField(dw)
+            lbl = self.lbls.get(dep)
 
             def upd(*_, cw=cw, dw=dw, lbl=lbl, cond=cond):
                 on = bool(cond(cw.currentText() if isinstance(cw, QComboBox) else
@@ -542,19 +596,25 @@ class OptionsDialog(QDialog):
             elif isinstance(cw, QCheckBox):
                 cw.toggled.connect(upd)
             upd()
+        foot = QFrame()
+        foot.setObjectName("dlgfoot")
+        row = QHBoxLayout(foot)
+        row.setContentsMargins(24, 12, 24, 14)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Ok).setText(ok_text)
         bb.button(QDialogButtonBox.Cancel).setText("Отмена")
+        for b in bb.buttons():
+            b.setCursor(Qt.PointingHandCursor)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         if help:                                   # кнопка «?» с подсказкой к функции
-            row = QHBoxLayout()
             row.addWidget(U.HelpButton(help))
-            row.addStretch(1)
-            row.addWidget(bb)
-            lay.addLayout(row)
-        else:
-            lay.addWidget(bb)
+            hl = QLabel("Как это работает")
+            hl.setObjectName("hint")
+            row.addWidget(hl)
+        row.addStretch(1)
+        row.addWidget(bb)
+        lay.addWidget(foot)
 
     def _make(self, kind, label, default, extra):
         if kind == "int":
@@ -622,8 +682,8 @@ class OptionsDialog(QDialog):
         return v
 
     @staticmethod
-    def ask(parent, title, fields, note=None, ok_text="Выполнить", depends=None, help=None):
-        d = OptionsDialog(parent, title, fields, note, ok_text, depends, help)
+    def ask(parent, title, fields, note=None, ok_text="Выполнить", depends=None, help=None, icon=None):
+        d = OptionsDialog(parent, title, fields, note, ok_text, depends, help, icon)
         return d.values() if d.exec() == QDialog.Accepted else None
 
 
@@ -6131,8 +6191,22 @@ def apply_theme(app, choice=None):
     for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
         pal.setColor(QPalette.Disabled, role, QColor(t["disabled"]))
     app.setPalette(pal)
-    app.setStyleSheet(make_style(t))
+    app.setStyleSheet(make_style(t) + modern_ui.stylesheet(t) + dialog_style(t))
+    modern_ui.install(t)
+    modern_ui.set_theme(t)
     return name
+
+
+def dialog_style(t):
+    """Окна инструментов (OptionsDialog): карточка со значком, подписи над полями, нижняя полоса с кнопками."""
+    return f"""
+QDialog#tooldlg {{ background: {t['panel']}; }}
+QDialog#tooldlg QLabel#dlgtitle {{ font-family: "{SERIF}"; font-size: 15pt; font-weight: 700; }}
+QDialog#tooldlg QLabel#dlgsub {{ color: {t['muted']}; font-size: 9.5pt; }}
+QDialog#tooldlg QLabel#fieldlabel {{ color: {t['muted']}; font-size: 8.5pt; font-weight: 600; }}
+QDialog#tooldlg QLabel#fieldlabel:disabled {{ color: {t['disabled']}; }}
+QFrame#dlgfoot {{ background: {t['alt']}; border-top: 1px solid {t['border']}; }}
+"""
 
 
 def restart_app():
@@ -6279,6 +6353,13 @@ def main():
     app.setApplicationName(APP_NAME)
     from PySide6.QtCore import QLocale
     QLocale.setDefault(QLocale(QLocale.Russian, QLocale.Russia))
+    try:                                    # системные надписи Qt по-русски («Копировать», «Вставить», «Да»…)
+        from PySide6.QtCore import QTranslator, QLibraryInfo
+        tr = QTranslator(app)
+        if tr.load("qtbase_ru", QLibraryInfo.path(QLibraryInfo.TranslationsPath)):
+            app.installTranslator(tr)
+    except Exception:
+        pass
     app.setStyle("Fusion")
     f = app.font()
     fams = set(QFontDatabase.families())

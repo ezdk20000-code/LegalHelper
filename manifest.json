@@ -2,11 +2,11 @@
 "files": [
 {
 "path": ".github/workflows/release.yml",
-"size": 10383
+"size": 10409
 },
 {
 "path": "CHANGELOG.md",
-"size": 75620
+"size": 77246
 },
 {
 "path": "README.md",
@@ -19,6 +19,10 @@
 {
 "path": "app.ico",
 "size": 38663
+},
+{
+"path": "app_menu.py",
+"size": 25475
 },
 {
 "path": "backup.py",
@@ -322,7 +326,7 @@
 },
 {
 "path": "installer.iss",
-"size": 3988
+"size": 3986
 },
 {
 "path": "legal_core.py",
@@ -346,7 +350,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 315612
+"size": 320013
 },
 {
 "path": "phone_export.py",
@@ -386,7 +390,7 @@
 },
 {
 "path": "update.bat",
-"size": 13756
+"size": 13782
 },
 {
 "path": "updater.py",
@@ -394,7 +398,7 @@
 },
 {
 "path": "version.json",
-"size": 1086
+"size": 1053
 },
 {
 "path": "word_editor.py",
