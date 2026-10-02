@@ -6,7 +6,7 @@
 },
 {
 "path": "CHANGELOG.md",
-"size": 81423
+"size": 83750
 },
 {
 "path": "README.md",
@@ -14,7 +14,7 @@
 },
 {
 "path": "anim.py",
-"size": 8290
+"size": 11551
 },
 {
 "path": "app.ico",
@@ -22,7 +22,7 @@
 },
 {
 "path": "app_menu.py",
-"size": 25475
+"size": 25670
 },
 {
 "path": "backup.py",
@@ -34,7 +34,7 @@
 },
 {
 "path": "case_tabs.py",
-"size": 69975
+"size": 71537
 },
 {
 "path": "casefile.py",
@@ -326,7 +326,7 @@
 },
 {
 "path": "installer.iss",
-"size": 3996
+"size": 3994
 },
 {
 "path": "legal_core.py",
@@ -342,7 +342,7 @@
 },
 {
 "path": "modern_ui.py",
-"size": 8492
+"size": 9368
 },
 {
 "path": "palette.py",
@@ -354,7 +354,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 327087
+"size": 330492
 },
 {
 "path": "phone_export.py",
@@ -402,7 +402,7 @@
 },
 {
 "path": "version.json",
-"size": 966
+"size": 948
 },
 {
 "path": "word_editor.py",

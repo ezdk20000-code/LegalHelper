@@ -5,7 +5,8 @@
 в покое на компьютер ничего не нагружает. Встроенный браузер (карта дела) не анимируется — эффекты
 прозрачности с ним несовместимы. Выключаются в «Вид → Анимации».
 """
-from PySide6.QtCore import Qt, QElapsedTimer, QEasingCurve, QPropertyAnimation, QTimer, QEventLoop, QRectF, QPointF
+from PySide6.QtCore import (Qt, QElapsedTimer, QEasingCurve, QPropertyAnimation, QParallelAnimationGroup, QTimer,
+                            QEventLoop, QRectF, QPointF, QPoint)
 from PySide6.QtGui import QPainter, QColor, QFont, QPixmap, QLinearGradient
 from PySide6.QtWidgets import QWidget, QGraphicsOpacityEffect, QApplication
 
@@ -14,10 +15,11 @@ _running = {}          # id(виджета) -> анимация (чтобы не
 
 
 def _has_webview(w):
-    try:
-        from PySide6.QtWebEngineWidgets import QWebEngineView
-    except Exception:
-        return False
+    import sys
+    mod = sys.modules.get("PySide6.QtWebEngineWidgets")
+    if mod is None:                 # встроенный браузер ещё не загружали — значит, его и нет на экране
+        return False                # (не загружать его ради проверки: это 0,3 с на запуске)
+    QWebEngineView = mod.QWebEngineView
     return isinstance(w, QWebEngineView) or w.findChild(QWebEngineView) is not None
 
 
@@ -41,6 +43,91 @@ def fade_in(w, ms=180):
     a.finished.connect(done)
     _running[id(w)] = a
     a.start(QPropertyAnimation.DeleteWhenStopped)
+
+
+def slide_in(w, dx=0, dy=14, ms=240):
+    """Переход: содержимое проявляется и чуть «подъезжает» на место (снизу или сбоку), как в современных
+    программах. Сдвиг небольшой (10–20 точек), длится четверть секунды."""
+    if not ENABLED or w is None or not w.isVisible() or w.graphicsEffect() is not None or _has_webview(w):
+        return
+    old = _running.pop(id(w), None)
+    if old is not None:
+        try:
+            old.stop()
+        except RuntimeError:
+            pass
+    end = w.pos()
+    eff = QGraphicsOpacityEffect(w)
+    eff.setOpacity(0.0)
+    w.setGraphicsEffect(eff)
+    grp = QParallelAnimationGroup(w)
+    fa = QPropertyAnimation(eff, b"opacity", grp)
+    fa.setDuration(ms)
+    fa.setStartValue(0.0)
+    fa.setEndValue(1.0)
+    fa.setEasingCurve(QEasingCurve.OutCubic)
+    ma = QPropertyAnimation(w, b"pos", grp)
+    ma.setDuration(ms)
+    ma.setStartValue(end + QPoint(dx, dy))
+    ma.setEndValue(end)
+    ma.setEasingCurve(QEasingCurve.OutCubic)
+    grp.addAnimation(fa)
+    grp.addAnimation(ma)
+
+    def done():
+        _running.pop(id(w), None)
+        try:
+            if w.graphicsEffect() is eff:
+                w.setGraphicsEffect(None)
+            if w.pos() != end:
+                w.move(end)
+        except RuntimeError:
+            pass
+    grp.finished.connect(done)
+    _running[id(w)] = grp
+    grp.start(QParallelAnimationGroup.DeleteWhenStopped)
+
+
+def pop_in(win, dy=10, ms=200):
+    """Окно (диалог, меню) появляется мягко: проявляется и слегка «всплывает» на место."""
+    if not ENABLED or win is None:
+        return
+    end = win.pos()
+    win.setWindowOpacity(0.0)
+    grp = QParallelAnimationGroup(win)
+    fa = QPropertyAnimation(win, b"windowOpacity", grp)
+    fa.setDuration(ms)
+    fa.setStartValue(0.0)
+    fa.setEndValue(1.0)
+    fa.setEasingCurve(QEasingCurve.OutCubic)
+    grp.addAnimation(fa)
+    if dy:
+        ma = QPropertyAnimation(win, b"pos", grp)
+        ma.setDuration(ms)
+        ma.setStartValue(end + QPoint(0, dy))
+        ma.setEndValue(end)
+        ma.setEasingCurve(QEasingCurve.OutCubic)
+        grp.addAnimation(ma)
+
+    def done():
+        _running.pop(id(win), None)
+        try:
+            win.setWindowOpacity(1.0)
+        except RuntimeError:
+            pass
+    grp.finished.connect(done)
+    _running[id(win)] = grp
+    grp.start(QParallelAnimationGroup.DeleteWhenStopped)
+    # страховка: окно ни при каких условиях не остаётся прозрачным
+    QTimer.singleShot(ms + 400, lambda: _safe_opaque(win))
+
+
+def _safe_opaque(win):
+    try:
+        if win.windowOpacity() < 1.0 and id(win) not in _running:
+            win.setWindowOpacity(1.0)
+    except RuntimeError:
+        pass
 
 
 def slide_down(w, ms=240):
@@ -112,7 +199,7 @@ class Splash(QWidget):
             self.move(g.center().x() - self.width() // 2, g.center().y() - self.height() // 2)
 
     def _tick(self):
-        t = min(1.0, self.clock.elapsed() / 420.0)
+        t = min(1.0, self.clock.elapsed() / 220.0)
         self.phase = t
         self.progress = 0.9 * (1 - (1 - t) ** 3)          # плавное замедление к концу
         self.update()

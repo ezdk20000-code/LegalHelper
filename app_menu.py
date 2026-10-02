@@ -486,6 +486,11 @@ class AppMenu(QFrame):
             x, y = p.x(), min(max(p.y(), scr.top()), scr.bottom() - self.height())
         self.move(x, y)
         self.show()
+        try:
+            import anim
+            anim.pop_in(self, dy=-8, ms=180)          # меню мягко «выпадает» из кнопки
+        except Exception:
+            pass
         self.search.setFocus()
 
 

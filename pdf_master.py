@@ -41,10 +41,77 @@ import phone_export as PHX
 import palette
 import app_menu
 import modern_ui
-import word_editor as WE
+
+
+class _LazyModule:
+    """Модуль, который загружается при первом обращении (редактор Word тянет python-docx — это время
+    на запуске, а нужен он только когда открывают документ Word)."""
+
+    def __init__(self, name):
+        self._name, self._mod = name, None
+
+    def __getattr__(self, attr):
+        if self._mod is None:
+            import importlib
+            self._mod = importlib.import_module(self._name)
+        return getattr(self._mod, attr)
+
+
+WE = _LazyModule("word_editor")
+
+class _Spilled:
+    """Старый шаг отмены, вынесенный из памяти во временный файл (до 25 шагов «Отменить» — это до 25 копий
+    документа; у большого дела в памяти они занимали гигабайт). Файл удаляется, когда шаг больше не нужен."""
+    __slots__ = ("path",)
+
+    def __init__(self, data):
+        d = os.path.join(tempfile.gettempdir(), "LegalHelper_undo")
+        os.makedirs(d, exist_ok=True)
+        fd, self.path = tempfile.mkstemp(prefix="undo_", suffix=".pdf", dir=d)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+
+    def read(self):
+        with open(self.path, "rb") as f:
+            return f.read()
+
+    def __del__(self):
+        try:
+            os.remove(self.path)
+        except (OSError, TypeError, AttributeError):
+            pass
+
+
+def spill_old(stack, keep=3, min_size=1 << 20):
+    """В памяти — последние keep шагов, более старые крупные копии — во временные файлы."""
+    for i in range(max(0, len(stack) - keep)):
+        d = stack[i]
+        if isinstance(d, (bytes, bytearray)) and len(d) >= min_size:
+            try:
+                stack[i] = _Spilled(d)
+            except OSError:
+                return
+
+
+def undo_data(d):
+    return d.read() if isinstance(d, _Spilled) else d
+
+
+def cleanup_undo_files(max_age=24 * 3600):
+    """Удалить временные файлы отмены, оставшиеся после аварийного закрытия программы."""
+    import time
+    d = os.path.join(tempfile.gettempdir(), "LegalHelper_undo")
+    try:
+        for n in os.listdir(d):
+            p = os.path.join(d, n)
+            if time.time() - os.path.getmtime(p) > max_age:
+                os.remove(p)
+    except OSError:
+        pass
+
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.3.3"
+APP_VERSION = "3.4"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -1885,7 +1952,17 @@ class MainWindow(QMainWindow):
         self.ws = [self._blank_ws()]      # открытые документы (рабочие области)
         self.cur_ws = 0
         U.bind(globals())
-        self._build()
+        # Окно собирается вдвое быстрее, если стили программы применить один раз в конце: иначе Qt заново
+        # пересчитывает оформление при добавлении каждого из сотен элементов.
+        app = QApplication.instance()
+        qss = app.styleSheet() if app else ""
+        if qss:
+            app.setStyleSheet("")
+        try:
+            self._build()
+        finally:
+            if qss:
+                app.setStyleSheet(qss)
         self.update_title()
         self.reminders = U.Reminders(self)
         polish_ui(self)
@@ -2342,7 +2419,7 @@ class MainWindow(QMainWindow):
         self.home_page = U.HomePage(self)
         for w in (self.cases_page, self.loose_page, self.help_page, self.home_page):
             self.stack.addWidget(w)
-        self.stack.currentChanged.connect(lambda *_: anim.fade_in(self.stack.currentWidget()))
+        self.stack.currentChanged.connect(lambda *_: anim.slide_in(self.stack.currentWidget(), dy=16, ms=260))
 
         self.banner = QPushButton()
         self.banner.setObjectName("banner")
@@ -2970,10 +3047,12 @@ class MainWindow(QMainWindow):
         data = self.doc.tobytes() if self.doc.page_count else None
         self.undo_stack.append(data)
         del self.undo_stack[:-25]
+        spill_old(self.undo_stack)
         self.redo_stack.clear()
         self.modified = True
 
     def _restore(self, data):
+        data = undo_data(data)
         self.doc = fitz.open("pdf", data) if data else fitz.open()
 
     def undo(self):
@@ -2981,6 +3060,7 @@ class MainWindow(QMainWindow):
             self.msg("Нечего отменять")
             return False
         self.redo_stack.append(self.doc.tobytes() if self.doc.page_count else None)
+        spill_old(self.redo_stack)
         self._restore(self.undo_stack.pop())
         self.modified = True
         self.refresh_all()
@@ -2991,6 +3071,7 @@ class MainWindow(QMainWindow):
         if not self.redo_stack:
             return
         self.undo_stack.append(self.doc.tobytes() if self.doc.page_count else None)
+        spill_old(self.undo_stack)
         self._restore(self.redo_stack.pop())
         self.refresh_all()
 
@@ -3654,6 +3735,7 @@ class MainWindow(QMainWindow):
         import threading
 
         def work():
+            cleanup_undo_files()
             try:
                 cleanup_junk()
             except Exception as ex:
@@ -4419,7 +4501,7 @@ class MainWindow(QMainWindow):
         self.docs_mode.addWidget(cp.sub_tab)
         self.docs_mode.setCurrentIndex(0)          # видна только одна панель — переключатель сам показывает нужную
         seg.currentChanged.connect(self.docs_mode.setCurrentIndex)
-        seg.currentChanged.connect(lambda *_: anim.fade_in(self.docs_mode.currentWidget()))
+        seg.currentChanged.connect(lambda *_: anim.slide_in(self.docs_mode.currentWidget(), dx=14, dy=0, ms=220))
         self.docs_seg = seg
         lv.addWidget(self.docs_mode, 1)
         dl = left
@@ -4453,7 +4535,7 @@ class MainWindow(QMainWindow):
         self.money_stack.addWidget(by_name.get("Время и оплата"))
         self.money_stack.addWidget(self.case_calc_slot)
         mseg.currentChanged.connect(self.money_stack.setCurrentIndex)
-        mseg.currentChanged.connect(lambda *_: anim.fade_in(self.money_stack.currentWidget()))
+        mseg.currentChanged.connect(lambda *_: anim.slide_in(self.money_stack.currentWidget(), dx=14, dy=0, ms=220))
         self.money_seg = mseg
         mv.addWidget(self.money_stack, 1)
         # понятные названия; редкое — в «Ещё ▾»
@@ -4493,7 +4575,7 @@ class MainWindow(QMainWindow):
         tabs.setCornerWidget(more, Qt.TopRightCorner)
         cp._restoring = False
         tabs.currentChanged.connect(self._on_case_tab)
-        tabs.currentChanged.connect(lambda *_: anim.fade_in(tabs.currentWidget()))
+        tabs.currentChanged.connect(lambda *_: anim.slide_in(tabs.currentWidget(), dx=14, dy=0, ms=220))
 
     def _on_case_tab(self, i):
         tabs = self.cases_page.tabs
@@ -4573,7 +4655,7 @@ class MainWindow(QMainWindow):
             self._mount_parts()
             self.overview.set_case(cid)
             if changed:                                    # другое дело — мягко проявить содержимое
-                anim.fade_in(self.cases_page.tabs.currentWidget())
+                anim.slide_in(self.cases_page.tabs.currentWidget(), dx=14, dy=0, ms=220)
         finally:
             self._entering = False
 
@@ -4851,6 +4933,7 @@ class MainWindow(QMainWindow):
             w = self.ws[i]
             w["undo"].append(w["doc"].tobytes())
             del w["undo"][:-25]
+            spill_old(w["undo"])
             w["redo"].clear()
             if replace_source_pages(w["doc"], path, new):
                 w["modified"] = True
@@ -6487,7 +6570,7 @@ def main():
         splash = anim.Splash(QIcon(resource("app.ico")).pixmap(256, 256), APP_NAME, APP_VERSION,
                              dark=T.get("name") == "dark")
         splash.start()
-        anim.wait(420)                          # дать заставке спокойно проявиться
+        anim.wait(220)                          # дать заставке проявиться (раньше 0,42 с — лишнее ожидание)
         splash.hold()
     w = MainWindow()
     if splash:

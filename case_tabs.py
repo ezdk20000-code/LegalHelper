@@ -962,6 +962,38 @@ class BoardTab(QWidget):
         self.timer = QTimer(self)
         self.timer.setInterval(2000)
         self.timer.timeout.connect(self.autosave)
+        # встроенный браузер занимает сотни мегабайт памяти: если карту не открывали несколько минут,
+        # он сохраняет карту и закрывается; при возврате на вкладку открывается снова сам
+        self.release_timer = QTimer(self)
+        self.release_timer.setSingleShot(True)
+        self.release_timer.setInterval(self.RELEASE_MS)
+        self.release_timer.timeout.connect(self.release)
+
+    RELEASE_MS = 3 * 60 * 1000
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        if self.view is not None:
+            self.release_timer.start()
+
+    def release(self):
+        """Освободить память встроенного браузера (карта сначала сохраняется)."""
+        if self.view is None or self.isVisible() or getattr(self, "win", None) is not None:
+            return
+        self.flush()
+        self.timer.stop()
+        view, self.view = self.view, None
+        self.ready = False
+        self.pending = self.cid
+        self.loaded = None
+        try:
+            view.loadFinished.disconnect(self.on_loaded)
+        except (RuntimeError, TypeError):
+            pass
+        view.setParent(None)
+        view.deleteLater()
+        self.placeholder.setText("Карта загружается…")
+        self.placeholder.show()
 
     def _ensure_view(self):
         if self.view is not None:
@@ -1010,6 +1042,7 @@ class BoardTab(QWidget):
 
     def showEvent(self, e):
         super().showEvent(e)
+        self.release_timer.stop()
         QTimer.singleShot(60, self.activate)       # сначала показать «Карта загружается…»
 
     def activate(self):
@@ -1094,6 +1127,8 @@ class BoardTab(QWidget):
                 tab.view.show()
                 tab.b_win.setEnabled(True)
                 tab.win = None
+                if not tab.isVisible():
+                    tab.release_timer.start()
                 e.accept()
 
         self.win = BoardWindow()

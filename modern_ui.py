@@ -4,9 +4,9 @@
 крупным заголовком, пояснением ниже и кнопками по-русски («Да», «Нет», «Отмена»), а не серое окно
 из Windows 98 с «Yes / No». Подключается один раз при запуске (install), остальной код не меняется.
 """
-from PySide6.QtCore import Qt, QRectF
+from PySide6.QtCore import Qt, QRectF, QTimer
 from PySide6.QtGui import QPixmap, QPainter, QColor, QFont
-from PySide6.QtWidgets import QMessageBox, QApplication, QDialogButtonBox
+from PySide6.QtWidgets import QMessageBox, QApplication, QDialogButtonBox, QDialog
 
 _theme = {"accent": "#007aff", "danger": "#ff3b30"}
 
@@ -20,6 +20,28 @@ BUTTON_RU = {
 DIALOG_RU = {QDialogButtonBox.Ok: "ОК", QDialogButtonBox.Cancel: "Отмена", QDialogButtonBox.Yes: "Да",
              QDialogButtonBox.No: "Нет", QDialogButtonBox.Close: "Закрыть", QDialogButtonBox.Save: "Сохранить",
              QDialogButtonBox.Apply: "Применить", QDialogButtonBox.Discard: "Не сохранять"}
+
+
+def _appear(dlg):
+    """Окна появляются мягко (проявление и лёгкое «всплытие»), если анимации включены."""
+    try:
+        import anim
+    except Exception:
+        return
+    if not anim.ENABLED or dlg.property("noanim"):
+        return
+    dlg.setWindowOpacity(0.0)
+    QTimer.singleShot(0, lambda: anim.pop_in(dlg, dy=8, ms=180) if dlg.isVisible() else dlg.setWindowOpacity(1.0))
+    QTimer.singleShot(700, lambda: _opaque(dlg))
+
+
+def _opaque(dlg):
+    try:
+        import anim
+        if dlg.windowOpacity() < 1.0 and id(dlg) not in anim._running:
+            dlg.setWindowOpacity(1.0)
+    except RuntimeError:
+        pass
 
 
 def set_theme(t):
@@ -173,8 +195,15 @@ def install(theme=None):
 
     def exec_(self, *a):
         modernize(self)
+        _appear(self)
         return orig_exec(self, *a)
     QMessageBox.exec = exec_
+    orig_dexec = QDialog.exec
+
+    def dexec(self, *a):
+        _appear(self)
+        return orig_dexec(self, *a)
+    QDialog.exec = dexec
     QMessageBox.information = _static(QMessageBox.Information, QMessageBox.Ok)
     QMessageBox.warning = _static(QMessageBox.Warning, QMessageBox.Ok)
     QMessageBox.critical = _static(QMessageBox.Critical, QMessageBox.Ok)
