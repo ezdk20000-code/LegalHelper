@@ -2,11 +2,11 @@
 "files": [
 {
 "path": ".github/workflows/release.yml",
-"size": 15330
+"size": 15356
 },
 {
 "path": "CHANGELOG.md",
-"size": 90272
+"size": 91864
 },
 {
 "path": "README.md",
@@ -34,7 +34,7 @@
 },
 {
 "path": "case_tabs.py",
-"size": 71537
+"size": 84811
 },
 {
 "path": "casefile.py",
@@ -318,7 +318,7 @@
 },
 {
 "path": "help_content.py",
-"size": 34753
+"size": 35465
 },
 {
 "path": "help_ui.py",
@@ -330,7 +330,11 @@
 },
 {
 "path": "installer.iss",
-"size": 3994
+"size": 3996
+},
+{
+"path": "laws_auto.py",
+"size": 14330
 },
 {
 "path": "legal_core.py",
@@ -342,7 +346,7 @@
 },
 {
 "path": "legal_ui.py",
-"size": 252221
+"size": 253373
 },
 {
 "path": "modern_ui.py",
@@ -358,7 +362,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 333328
+"size": 333330
 },
 {
 "path": "phone_export.py",
@@ -398,7 +402,7 @@
 },
 {
 "path": "update.bat",
-"size": 13809
+"size": 13835
 },
 {
 "path": "updater.py",
@@ -406,7 +410,7 @@
 },
 {
 "path": "version.json",
-"size": 930
+"size": 955
 },
 {
 "path": "word_editor.py",

@@ -14,9 +14,10 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton, QToolButton, QComboBox, QLineEdit,
     QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QSpinBox, QSplitter,
     QScrollArea, QFrame, QMenu, QInputDialog, QMessageBox, QFileDialog, QTreeWidget, QTreeWidgetItem,
-    QProgressBar, QApplication, QStackedWidget, QDialog)
+    QProgressBar, QApplication, QStackedWidget, QDialog, QListWidget, QListWidgetItem, QCompleter, QDialogButtonBox)
 
 import pdf_core as C
+import laws_auto as LA
 
 U = None          # legal_ui (задаётся при импорте из legal_ui)
 
@@ -1209,6 +1210,19 @@ class LawsTab(QWidget):
         ex.setMenu(em)
         top.addWidget(ex)
         v.addLayout(top)
+        # быстрое добавление: ссылка как в иске → акт и статья сами
+        quick = QHBoxLayout()
+        self.quick = QLineEdit()
+        self.quick.setPlaceholderText("➕  Добавить нормы: напишите или вставьте «п. 1 ст. 395 ГК РФ, ст. 110 АПК РФ» и нажмите Enter")
+        self.quick.returnPressed.connect(self.quick_add)
+        self._completer_model = None
+        quick.addWidget(self.quick, 1)
+        quick.addWidget(_btn("Добавить", self.quick_add, primary=True))
+        quick.addWidget(_btn("🔎 Найти в документах дела", self.find_in_docs,
+                             tip="Программа просмотрит иск, решения и другие документы дела и найдёт все ссылки на статьи"))
+        quick.addWidget(_btn("📚 Мои нормы", self.pick_library,
+                             tip="Нормы, которые вы уже добавляли в другие дела (с текстом и комментарием), и частые статьи"))
+        v.addLayout(quick)
         split = QSplitter()
         split.setHandleWidth(1)
         left = QWidget()
@@ -1547,6 +1561,161 @@ class LawsTab(QWidget):
         d.save(p)
         QDesktopServices.openUrl(QUrl.fromLocalFile(p))
 
+    # ---------------------------------------------------------------- автоматическое добавление
+    def _library(self):
+        return LA.library(db())
+
+    def _refresh_completer(self):
+        lib = self._library()
+        self._lib = {f"{e['label']} {LA.short_act(e['act'])}": e for e in lib if e["act"]}
+        labels = []
+        for k, e in self._lib.items():
+            about = e.get("about") or (e["body"][:60].replace("\n", " ") if e["body"] else "")
+            uses = f" · в {e['uses']} {U.L.plural(e['uses'], 'деле', 'делах', 'делах')}" if e["uses"] else ""
+            labels.append(k + (f" — {about}" if about else "") + uses)
+        self._lib_labels = dict(zip(labels, self._lib.values()))
+        comp = QCompleter(labels, self.quick)
+        comp.setCaseSensitivity(Qt.CaseInsensitive)
+        comp.setFilterMode(Qt.MatchContains)
+        comp.setMaxVisibleItems(12)
+        comp.activated.connect(lambda text: QTimer.singleShot(0, lambda: self._add_from_label(text)))
+        self.quick.setCompleter(comp)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        QTimer.singleShot(0, self._refresh_completer)
+
+    def _add_from_label(self, text):
+        e = self._lib_labels.get(text)
+        if e:
+            self.quick.clear()
+            self.add_entries([e])
+
+    def quick_add(self):
+        text = self.quick.text().strip()
+        if not text or not self.cid:
+            return
+        if text in getattr(self, "_lib_labels", {}):
+            return self._add_from_label(text)
+        cites = LA.parse(text)
+        if not cites:
+            QMessageBox.information(self, "Нормы права", "Не нашёл ссылок на статьи. Пишите так же, как в иске: "
+                                    "«п. 1 ст. 395 ГК РФ», «ст. 110 АПК РФ», «ст. 13 Закона о защите прав "
+                                    "потребителей», «п. 75 постановления Пленума ВС РФ от 24.03.2016 № 7».")
+            return
+        self.quick.clear()
+        self.add_entries([{"act": c["act"], "label": c["label"]} for c in cites])
+
+    def _target_group(self):
+        """Куда класть акты: в выбранное направление (или направление выбранной нормы), иначе — в корень."""
+        it = self.tree.currentItem()
+        while it is not None and it.data(0, Qt.UserRole + 1) != "group":
+            it = it.parent()
+        return it.data(0, Qt.UserRole) if it is not None else 0
+
+    def add_entries(self, entries):
+        """Добавить нормы: акт находится или создаётся сам, повторы не добавляются. Текст и комментарий
+        подставляются из «моих норм» (если эту статью уже добавляли в другое дело)."""
+        if not self.cid:
+            return
+        self.save_now()
+        lib = {LA.norm_key(e["act"], e["label"]): e for e in self._library()}
+        group = self._target_group()
+        added, last = 0, None
+        for e in entries:
+            act, label = LA.canon_act(e["act"]), LA.canon_label(e["label"])
+            ka, kl = LA.norm_key(act, label)
+            rows = db().laws(self.cid)
+            acts = [r for r in rows if r["kind"] == "act" and LA.canon_act(r["title"]).lower() == ka]
+            act_row = next((r for r in acts if r["parent_id"] == group), None) or (acts[0] if acts else None)
+            if act_row is None:
+                aid = db().add_law(self.cid, group, "act", act, "", "", LA.url_for(act))
+            else:
+                aid = act_row["id"]
+            dup = next((r["id"] for r in rows if r["kind"] == "norm" and r["parent_id"] in {x["id"] for x in acts}
+                        and LA.canon_label(r["title"]).lower() == kl), None)
+            if dup:
+                last = last or dup
+                continue
+            known = lib.get((ka, kl)) or {}
+            body = e.get("body") or known.get("body", "")
+            note = e.get("note") or known.get("note", "")
+            url = e.get("url") or known.get("url") or LA.url_for(act, label)
+            last = db().add_law(self.cid, aid, "norm", label, body, note, url)
+            added += 1
+        self.reload(select=last)
+        self._refresh_completer()
+        if added:
+            self.main.toast(f"✓  Добавлено норм: {added}" + ("" if added == len(entries) else
+                                                              f" (ещё {len(entries) - added} уже были)"))
+        else:
+            self.main.toast("Эти нормы уже есть в деле")
+
+    def find_in_docs(self):
+        if not self.cid:
+            return
+        docs = [d for d in db().docs(self.cid) if d["path"] and os.path.exists(d["path"])]
+        if not docs:
+            return QMessageBox.information(self, "Нормы права", "В деле пока нет документов — добавьте иск, решения "
+                                           "и другие документы во вкладке «Документы».")
+        pages = []
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            for d in docs:
+                name = d["title"] or Path(d["path"]).name
+                ext = Path(d["path"]).suffix.lower()
+                try:
+                    if ext == ".pdf":
+                        with fitz.open(d["path"]) as doc:
+                            for i, pg in enumerate(doc):
+                                pages.append((name, i + 1, pg.get_text()))
+                    elif ext in (".docx", ".txt", ".md"):
+                        pages.append((name, None, U.L.extract_text_any(d["path"])))
+                    else:
+                        conv = C.cached_pdf(d["path"]) if hasattr(C, "cached_pdf") else None
+                        if conv and os.path.exists(conv):
+                            with fitz.open(conv) as doc:
+                                for i, pg in enumerate(doc):
+                                    pages.append((name, i + 1, pg.get_text()))
+                except Exception as ex:
+                    U.M.log_error(f"Поиск норм в {name}", ex)
+            found = LA.find_in_pages(pages)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not found:
+            return QMessageBox.information(self, "Нормы права", "В текстах документов дела ссылок на статьи не нашлось. "
+                                           "Сканы без распознанного текста программа прочитать не может — "
+                                           "сначала распознайте текст (OCR).")
+        have = self._have()
+        d = NormPicker(self, "Нормы в документах дела",
+                       f"Найдено ссылок: {len(found)}. Отметьте нужные — акты и статьи создадутся сами.",
+                       [dict(c, where_text=_where(c["where"]),
+                             exists=LA.norm_key(c["act"], c["label"]) in have) for c in found])
+        if d.exec() == QDialog.Accepted:
+            self.add_entries(d.chosen())
+
+    def _have(self):
+        """Пары (акт, статья), которые уже есть в деле — в нижнем регистре."""
+        if not self.cid:
+            return set()
+        rows = db().laws(self.cid)
+        acts = {r["id"]: r["title"] for r in rows if r["kind"] == "act"}
+        return {LA.norm_key(acts[r["parent_id"]], r["title"]) for r in rows
+                if r["kind"] == "norm" and r["parent_id"] in acts}
+
+    def pick_library(self):
+        lib = [e for e in self._library() if e["act"]]
+        if not lib:
+            return QMessageBox.information(self, "Мои нормы", "Пока пусто.")
+        have = self._have()
+        d = NormPicker(self, "Мои нормы", "Нормы из ваших дел (с текстом и комментарием) и частые статьи. "
+                       "Отметьте нужные.", [dict(e, where_text=(f"в {e['uses']} {U.L.plural(e['uses'], 'деле', 'делах', 'делах')}"
+                                                              if e["uses"] else e.get("about", "")),
+                                                  exists=LA.norm_key(e["act"], e["label"]) in have)
+                                            for e in lib], checked=False, search=True)
+        if d.exec() == QDialog.Accepted:
+            self.add_entries(d.chosen())
+
     def import_from_case(self):
         others = [c for c in db().cases() if c["id"] != self.cid]
         others += [c for c in db().cases(archived=True) if c["id"] != self.cid]
@@ -1559,3 +1728,73 @@ class LawsTab(QWidget):
             n = db().copy_laws(others[labels.index(s)]["id"], self.cid)
             self.reload()
             self.main.msg(f"Скопировано разделов: {n}")
+
+
+def _where(where):
+    parts = []
+    for doc, page in where[:4]:
+        parts.append(f"{doc}" + (f", стр. {page}" if page else ""))
+    more = f" и ещё {len(where) - 4}" if len(where) > 4 else ""
+    return "; ".join(parts) + more
+
+
+class NormPicker(QDialog):
+    """Список найденных или своих норм с галочками: «Добавить отмеченные»."""
+
+    def __init__(self, parent, title, note, entries, checked=True, search=False):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(720, 560)
+        self.entries = entries
+        v = QVBoxLayout(self)
+        lab = QLabel(note)
+        lab.setWordWrap(True)
+        lab.setObjectName("hint")
+        v.addWidget(lab)
+        if search:
+            self.q = QLineEdit()
+            self.q.setPlaceholderText("Поиск: 395, неустойка, АПК…")
+            self.q.textChanged.connect(self._filter)
+            v.addWidget(self.q)
+        self.list = QListWidget()
+        self.list.setWordWrap(True)
+        self.list.setStyleSheet("QListWidget::item { padding: 7px 6px; }")
+        for idx, e in enumerate(entries):
+            extra = [x for x in (e.get("where_text"), "уже есть в деле" if e.get("exists") else "") if x]
+            it = QListWidgetItem(f"{e['label']} {LA.short_act(e['act'])}" + ("   —   " + " · ".join(extra) if extra else ""))
+            if e.get("exists"):
+                it.setForeground(QBrush(QColor(140, 140, 150)))
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if checked and not e.get("exists") else Qt.Unchecked)
+            it.setToolTip((e.get("body") or e.get("raw") or "")[:500])
+            it.setData(Qt.UserRole, idx)
+            self.list.addItem(it)
+        v.addWidget(self.list, 1)
+        row = QHBoxLayout()
+        row.addWidget(_btn("Отметить все", lambda: self._all(True)))
+        row.addWidget(_btn("Снять все", lambda: self._all(False)))
+        row.addStretch(1)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("Добавить отмеченные")
+        bb.button(QDialogButtonBox.Cancel).setText("Отмена")
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        row.addWidget(bb)
+        v.addLayout(row)
+
+    def _filter(self, text):
+        words = text.lower().split()
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            e = self.entries[it.data(Qt.UserRole)]
+            hay = f"{e['label']} {e['act']} {LA.short_act(e['act'])} {e.get('about', '')} {e.get('body', '')}".lower()
+            it.setHidden(not all(w in hay for w in words))
+
+    def _all(self, on):
+        for i in range(self.list.count()):
+            if not self.list.item(i).isHidden():
+                self.list.item(i).setCheckState(Qt.Checked if on else Qt.Unchecked)
+
+    def chosen(self):
+        return [self.entries[self.list.item(i).data(Qt.UserRole)] for i in range(self.list.count())
+                if self.list.item(i).checkState() == Qt.Checked]
