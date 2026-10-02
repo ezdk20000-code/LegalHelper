@@ -39,10 +39,11 @@ import extwatch
 import tutorial
 import phone_export as PHX
 import palette
+import app_menu
 import word_editor as WE
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.2.1"
+APP_VERSION = "3.2.2"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -4861,10 +4862,21 @@ class MainWindow(QMainWindow):
         b.setObjectName("appmenu")
         b.setCursor(Qt.PointingHandCursor)
         b.setToolTip("Меню: файл, правка, вид, инструменты, «Юристу», справка")
-        b.setMenu(self.app_menu)
-        b.setPopupMode(QToolButton.InstantPopup)
+        b.clicked.connect(lambda: self.show_app_menu(b))
         self.app_menu_btn = b
         return b
+
+    def show_app_menu(self, anchor):
+        """Панель-меню: разделы слева, команды крупно справа, поиск, темы — цветными кружками."""
+        names = {v: k for k, v in THEME_NAMES.items()}
+
+        def swatch(text):
+            key = names.get(text)
+            if key == "system":
+                return (THEMES["light"]["win"], THEMES["dark"]["win"], THEMES["light"]["accent"])
+            th = THEMES.get(key)
+            return (th["win"], th["accent"]) if th else None
+        app_menu.show(self, anchor, self.app_menu, T, swatch, f"{APP_NAME} {APP_VERSION}")
 
     def tint_title_bar(self):
         """Windows 11: полоса заголовка окна — цвета программы (как у Obsidian), в тёмной теме — тёмная.
@@ -4916,10 +4928,7 @@ class MainWindow(QMainWindow):
             v.addWidget(b, 0, Qt.AlignHCenter)
             return b
         btn("»", "Развернуть левую панель (Ctrl+B)", lambda: self.set_sidebar(True))
-        mb = btn("☰", "Меню: файл, правка, вид, инструменты, справка", lambda: None)
-        mb.setMenu(self.app_menu)
-        mb.setPopupMode(QToolButton.InstantPopup)
-        mb.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }")
+        mb = btn("☰", "Меню: файл, правка, вид, инструменты, справка", lambda: self.show_app_menu(mb))
         v.addSpacing(8)
         btn("🔍", "Найти что угодно (Ctrl+K)", lambda: palette.show(self))
         btn("🏠", "Главная", self.show_home)

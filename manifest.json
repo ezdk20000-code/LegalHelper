@@ -2,11 +2,11 @@
 "files": [
 {
 "path": ".github/workflows/release.yml",
-"size": 10358
+"size": 10383
 },
 {
 "path": "CHANGELOG.md",
-"size": 74053
+"size": 75620
 },
 {
 "path": "README.md",
@@ -346,7 +346,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 315135
+"size": 315612
 },
 {
 "path": "phone_export.py",
@@ -386,7 +386,7 @@
 },
 {
 "path": "update.bat",
-"size": 13731
+"size": 13756
 },
 {
 "path": "updater.py",
@@ -394,7 +394,7 @@
 },
 {
 "path": "version.json",
-"size": 996
+"size": 1086
 },
 {
 "path": "word_editor.py",
