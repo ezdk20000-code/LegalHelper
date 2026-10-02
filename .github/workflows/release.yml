@@ -111,6 +111,31 @@ jobs:
           python -c "import pefile,sys; d=[e.dll.decode() for e in pefile.PE(sys.argv[1]).DIRECTORY_ENTRY_IMPORT]; print(d); sys.exit(1 if any('COMCTL' in x.upper() for x in d) else 0)" "$dist\LegalHelper.exe"
           if ($LASTEXITCODE -ne 0) { throw "LegalHelper.exe всё ещё требует COMCTL32" }
 
+      - name: Убрать из сборки то, чем программа не пользуется
+        shell: pwsh
+        run: |
+          # Ничего из функций программы не убирается — только файлы, которые она никогда не открывает:
+          # инструменты разработчика встроенного браузера, отладочные файлы, переводы Qt и браузера
+          # на ~100 языков (оставляем русский и английский), модуль видео из OpenCV (нужен только для видео).
+          $int = "dist\LegalHelper\_internal"
+          $before = (Get-ChildItem dist\LegalHelper -Recurse -File | Measure-Object Length -Sum).Sum
+          $rm = @()
+          $rm += Get-ChildItem "$int\PySide6\resources" -File -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Name -like "*devtools*" -or $_.Name -like "*.debug.*" }
+          $rm += Get-ChildItem "$int\PySide6\translations\qtwebengine_locales" -File -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Name -notin @("ru.pak", "en-US.pak") }
+          $rm += Get-ChildItem "$int\PySide6\translations" -File -Filter *.qm -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Name -notlike "*_ru.qm" }
+          $rm += Get-ChildItem "$int\cv2" -File -Filter "opencv_videoio_ffmpeg*.dll" -ErrorAction SilentlyContinue
+          $rm | ForEach-Object { Write-Host ("убираю {0,8:N1} МБ  {1}" -f ($_.Length / 1MB), $_.FullName) ; Remove-Item $_.FullName -Force }
+          if (-not (Test-Path "$int\PySide6\translations\qtwebengine_locales\ru.pak")) { Write-Host "нет ru.pak" }
+          if (-not (Test-Path "$int\PySide6\translations\qtbase_ru.qm")) { Write-Host "нет qtbase_ru.qm — меню полей ввода будет по-английски" }
+          $after = (Get-ChildItem dist\LegalHelper -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host ("Размер программы: было {0:N0} МБ, стало {1:N0} МБ" -f ($before / 1MB), ($after / 1MB))
+          Write-Host "Самые большие файлы:"
+          Get-ChildItem dist\LegalHelper -Recurse -File | Sort-Object Length -Descending | Select-Object -First 25 |
+            ForEach-Object { Write-Host ("{0,8:N1} МБ  {1}" -f ($_.Length / 1MB), $_.FullName.Replace((Resolve-Path dist).Path, "")) }
+
       - name: Проверка сборки
         shell: pwsh
         run: |

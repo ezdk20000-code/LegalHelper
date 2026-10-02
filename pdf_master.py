@@ -44,7 +44,7 @@ import modern_ui
 import word_editor as WE
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.3.1"
+APP_VERSION = "3.3.2"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -6362,6 +6362,23 @@ def _selftest(say):
             except Exception as e:
                 say("IMPORT FAILED", mod, repr(e))
                 code = 2
+        try:                                 # встроенный браузер («Карта дела») действительно открывает страницу
+            from PySide6.QtWebEngineWidgets import QWebEngineView
+            import time as _t
+            view = QWebEngineView()
+            done = []
+            view.loadFinished.connect(done.append)
+            view.setHtml("<html><body><p id='x'>Проверка</p></body></html>")
+            t0 = _t.time()
+            while not done and _t.time() - t0 < 40:
+                QApplication.processEvents()
+                _t.sleep(0.05)
+            say("webengine load:", done[:1] or "нет ответа за 40 с")
+            if done and not done[0]:
+                code = 4
+        except Exception as e:
+            say("WEBENGINE FAILED", repr(e))
+            code = 4
         w.hide()
     except Exception:
         say("FAILED:\n" + traceback.format_exc())
@@ -6481,7 +6498,37 @@ def main():
     files = [a for a in sys.argv[1:] if os.path.isfile(a)]
     if files:
         QTimer.singleShot(100, lambda: w.open_paths(files, replace=True))
+    QTimer.singleShot(90_000, tidy_old_build)
     sys.exit(app.exec())
+
+
+def tidy_old_build():
+    """Убрать остатки старого способа обновления (до 3.2.1 программа собиралась прямо на компьютере):
+    в %LOCALAPPDATA%\\PDFMaster-build лежали Python со всеми библиотеками и черновики сборки — часто больше
+    гигабайта. Теперь обновление ставится готовым установщиком, и они не нужны. Копия прошлой версии
+    для «Вернуть предыдущую версию» (previous) остаётся."""
+    if not (C.IS_WIN and getattr(sys, "frozen", False)):
+        return
+    work = os.path.join(os.environ.get("LOCALAPPDATA", ""), "PDFMaster-build")
+    if not os.path.isdir(work) or os.path.abspath(sys.executable).lower().startswith(os.path.abspath(work).lower()):
+        return
+    keep = {"previous", "rollback.cmd", "update.log"}
+
+    def work_():
+        import shutil
+        for name in os.listdir(work):
+            if name.lower() in keep:
+                continue
+            p = os.path.join(work, name)
+            try:
+                if os.path.isdir(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    os.remove(p)
+            except OSError:
+                pass
+    import threading
+    threading.Thread(target=work_, daemon=True).start()
 
 
 if __name__ == "__main__":
