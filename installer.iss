@@ -1,7 +1,7 @@
 ﻿; Скрипт установщика Inno Setup 6 для «LegalHelper» (до версии 1.6 — «PDF Мастер»)
 #define MyAppName "LegalHelper"
 #ifndef MyAppVersion
-  #define MyAppVersion "3.4.3"
+  #define MyAppVersion "3.5"
 #endif
 #define MyAppExe "LegalHelper.exe"
 

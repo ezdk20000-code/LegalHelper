@@ -18,7 +18,12 @@ import urllib.request
 import zipfile
 
 REPO = "ezdk20000-code/LegalHelper"
+# Открытое место только для готовых установщиков (без исходного кода): репозиторий сайта и сам сайт.
+# Старые адреса (репозиторий с кодом) — запасные, пока код не закрыт.
+PUBLIC_REPO = "LegalHelper/legalhelper.github.io"
+SITE = "https://legalhelper.github.io/"
 VERSION_URL = f"https://raw.githubusercontent.com/{REPO}/main/version.json"
+VERSION_URLS = [SITE + "version.json", VERSION_URL]
 USER_AGENT = "LegalHelper-updater"
 
 
@@ -54,17 +59,23 @@ ATTEMPTS = 3
 
 def fetch_info(timeout=15):
     """Сведения о последней версии: {'version', 'notes': [...], 'zip'}. Бросает исключение без интернета."""
-    last = None
+    last, found = None, []
     for attempt in range(ATTEMPTS):
-        try:
-            with _open(VERSION_URL, timeout) as r:
-                info = json.loads(r.read().decode("utf-8-sig"))
+        for url in VERSION_URLS:               # из всех мест берём самую новую версию
+            try:
+                with _open(url, timeout) as r:
+                    found.append(json.loads(r.read().decode("utf-8-sig")))
+            except Exception as e:             # сеть моргнула или файла там нет — ещё раз / другое место
+                last = e
+        if found:
             break
-        except Exception as e:                 # сеть моргнула — ещё раз
-            last = e
-            time.sleep(1 + attempt)
+        time.sleep(1 + attempt)
     else:
         raise last
+    info = found[0]
+    for other in found[1:]:
+        if is_newer(str(other.get("version", "")), str(info.get("version", ""))):
+            info = other
     ver = str(info.get("version", "")).strip()
     if not ver:
         raise ValueError("В version.json на GitHub не указана версия.")
@@ -153,19 +164,24 @@ def download(url, dest, progress=None, cancelled=None, timeout=60):
     raise ConnectionError("Не удалось скачать обновление ни одним способом:\n" + "\n".join(errors[-4:]))
 
 
-SETUP_URL = "https://github.com/" + REPO + "/releases/download/v{ver}/LegalHelper-Setup.exe"
+SETUP_URLS = ["https://github.com/" + PUBLIC_REPO + "/releases/download/v{ver}/LegalHelper-Setup.exe",
+              "https://github.com/" + REPO + "/releases/download/v{ver}/LegalHelper-Setup.exe"]
+SETUP_URL = SETUP_URLS[-1]
 SETUP_MIN_SIZE = 20 * 1048576               # меньше — это не установщик (страница ошибки и т. п.)
 
 
 def setup_url(ver):
-    return SETUP_URL.format(ver=ver)
+    """Адрес установщика: первое место, где он уже выложен (иначе — основное)."""
+    for u in SETUP_URLS:
+        if _setup_ok(u.format(ver=ver)):
+            return u.format(ver=ver)
+    return SETUP_URLS[0].format(ver=ver)
 
 
-def setup_available(ver, timeout=15):
-    """Готов ли установщик этой версии. GitHub собирает его 10–15 минут после выпуска."""
+def _setup_ok(url, timeout=15):
     try:
         # HEAD к GitHub нельзя: ссылка на файл подписана для GET. Берём первые 2 байта и смотрим полный размер
-        req = urllib.request.Request(setup_url(ver), headers={"User-Agent": USER_AGENT, "Range": "bytes=0-1"})
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Range": "bytes=0-1"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             head = r.read(2)
             size = (r.headers.get("Content-Range") or "").rpartition("/")[2]
@@ -175,12 +191,18 @@ def setup_available(ver, timeout=15):
         return False
 
 
+def setup_available(ver, timeout=15):
+    """Готов ли установщик этой версии (в любом из мест). GitHub собирает его 10–15 минут после выпуска."""
+    return any(_setup_ok(u.format(ver=ver), timeout) for u in SETUP_URLS)
+
+
 def download_setup(ver, dest, progress=None, cancelled=None, timeout=60):
     """Скачать установщик версии ver в dest (с повторами). Проверяет, что это действительно программа Windows."""
     errors = []
+    url = setup_url(ver)
     for attempt in range(ATTEMPTS):
         try:
-            _fetch(setup_url(ver), dest, progress, cancelled, timeout)
+            _fetch(url, dest, progress, cancelled, timeout)
             with open(dest, "rb") as f:
                 head = f.read(2)
             if head == b"MZ" and os.path.getsize(dest) >= SETUP_MIN_SIZE:
@@ -195,6 +217,7 @@ def download_setup(ver, dest, progress=None, cancelled=None, timeout=60):
 
 
 CHANGELOG_URL = f"https://raw.githubusercontent.com/{REPO}/main/CHANGELOG.md"
+CHANGELOG_URLS = [SITE + "CHANGELOG.md", CHANGELOG_URL]
 
 
 def parse_changelog(text, since=None):
@@ -222,8 +245,13 @@ def parse_changelog(text, since=None):
 
 def fetch_changelog(since, timeout=15):
     """Подробные описания всех версий новее установленной (пусто, если не удалось скачать)."""
-    try:
-        with _open(CHANGELOG_URL, timeout) as r:
-            return parse_changelog(r.read().decode("utf-8-sig"), since)
-    except Exception:
-        return []
+    best = []
+    for url in CHANGELOG_URLS:                 # берём самый полный список из доступных мест
+        try:
+            with _open(url, timeout) as r:
+                got = parse_changelog(r.read().decode("utf-8-sig"), since)
+            if len(got) > len(best):
+                best = got
+        except Exception:
+            pass
+    return best

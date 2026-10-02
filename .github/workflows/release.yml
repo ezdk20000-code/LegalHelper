@@ -85,7 +85,7 @@ jobs:
           --hidden-import legal_ui --hidden-import legal_core --hidden-import cases --hidden-import legal_data
           --hidden-import templates_lib --hidden-import help_ui --hidden-import updater --hidden-import timecheck
           --hidden-import backup --hidden-import casefile --hidden-import anim --hidden-import timer_widget
-          --hidden-import extwatch --hidden-import tutorial --hidden-import help_content --hidden-import phone_export --hidden-import palette --hidden-import app_menu --hidden-import modern_ui --hidden-import word_editor
+          --hidden-import extwatch --hidden-import tutorial --hidden-import help_content --hidden-import phone_export --hidden-import palette --hidden-import app_menu --hidden-import modern_ui --hidden-import folders_ui --hidden-import word_editor
           --exclude-module onnxruntime --exclude-module pymupdf.layout --exclude-module pymupdf4llm
           pdf_master.py
 
@@ -179,3 +179,38 @@ jobs:
             gh release create $tag installer_output\LegalHelper-Setup.exe --title "LegalHelper $v" --notes $notes --target $env:GITHUB_SHA --latest
           }
           if ($LASTEXITCODE -ne 0) { throw "Не удалось выложить установщик" }
+
+      - name: Выпуск в открытом месте для скачивания (без исходного кода)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          # Установщик, version.json и CHANGELOG.md — в репозиторий сайта LegalHelper/legalhelper.github.io.
+          # Оттуда их берут программа и сайт, и исходный код можно держать закрытым.
+          # Нужен секрет RELEASES_TOKEN (ключ с правом записи в репозиторий сайта); без него шаг пропускается.
+          if (-not $env:GH_TOKEN) { Write-Host "::warning::Нет секрета RELEASES_TOKEN — установщик выложен только в старое место"; exit 0 }
+          $v = "${{ steps.ver.outputs.version }}"
+          $tag = "v$v"
+          $repo = "LegalHelper/legalhelper.github.io"
+          $notes = "Установщик LegalHelper $v для Windows 10 и 11. Скачайте LegalHelper-Setup.exe, откройте его и нажимайте «Далее»."
+          gh release view $tag --repo $repo *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag installer_output\LegalHelper-Setup.exe --clobber --repo $repo
+          } else {
+            gh release create $tag installer_output\LegalHelper-Setup.exe --repo $repo --title "LegalHelper $v" --notes $notes --latest
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Не удалось выложить установщик в $repo" }
+          git clone --depth 1 "https://x-access-token:$($env:GH_TOKEN)@github.com/$repo.git" site
+          if ($LASTEXITCODE -ne 0) { throw "Не удалось открыть репозиторий сайта" }
+          Copy-Item version.json, CHANGELOG.md site\ -Force
+          Push-Location site
+          git config user.name "LegalHelper release"
+          git config user.email "release@legalhelper.local"
+          git add version.json CHANGELOG.md
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "LegalHelper $v"
+            git push
+            if ($LASTEXITCODE -ne 0) { throw "Не удалось обновить version.json на сайте" }
+          }
+          Pop-Location

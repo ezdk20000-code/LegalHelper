@@ -28,6 +28,7 @@ import case_tabs as CT
 import backup as BK
 import casefile as CF
 import anim
+import folders_ui as FU
 CT.U = _sys.modules[__name__]
 
 M = None          # пространство имён главного модуля (bind)
@@ -1636,7 +1637,7 @@ class OverviewTab(QWidget):
         self.facts.setWordWrap(True)
         self.facts.setTextFormat(Qt.RichText)
         self.facts.setOpenExternalLinks(False)
-        self.facts.linkActivated.connect(lambda _l: self.main.open_case_tab("info"))
+        self.facts.linkActivated.connect(self._fact_link)
         v.addWidget(self.facts)
         crow = QHBoxLayout()
         self.b_court = QPushButton("🌐  Дело на сайте суда")
@@ -1790,6 +1791,26 @@ class OverviewTab(QWidget):
         ]))
         v.addStretch(1)
 
+    def _fact_link(self, href):
+        if href.startswith("case:"):
+            self.main.enter_case(int(href[5:]))
+            self.main.open_case_tab("overview")
+        elif href.startswith("folder:"):
+            self.main.show_folder(int(href[7:]))
+        elif href == "link":
+            allc = db().cases(False) + db().cases(True)
+            if len(allc) < 2:
+                QMessageBox.information(self, "Связать дела", "Для связи нужно хотя бы два дела.")
+                return
+            d = FU.LinkDialog(self, allc, self.cid)
+            if d.exec() == QDialog.Accepted:
+                a, b, note = d.value()
+                if a != b and db().add_link(a, b, note) is None:
+                    self.main.toast("Эти дела уже связаны")
+                self.set_case(self.cid)
+        else:
+            self.main.open_case_tab("info")
+
     def set_case(self, cid):
         if self.notes_timer.isActive() and self.cid:
             self.notes_timer.stop()
@@ -1827,8 +1848,24 @@ class OverviewTab(QWidget):
                                   if i["number"] else "") for i in inst)
             t += f'<tr><td colspan="3" style="padding:6px 0 0 0"><span style="color:{M.T["muted"]}">Путь дела</span><br>{steps}</td></tr>'
         claim = html.escape(c.get("claim") or "")
-        self.facts.setText(f'<table>{t}</table>' + (f'<p style="margin-top:6px">{claim}</p>' if claim else "") +
-                           f'<p><a href="info" style="color:{M.T["accent"]}">Изменить сведения о деле</a></p>')
+        A = M.T["accent"]
+        extra = ""
+        f = db().folder(c.get("folder_id")) if c.get("folder_id") else None
+        if f:
+            extra += (f'<p style="margin-top:6px"><span style="color:{M.T["muted"]}">Папка</span> '
+                      f'<a href="folder:{f["id"]}" style="color:{A}">📁 {html.escape(f["name"])}</a> '
+                      f'<span style="color:{M.T["muted"]}">— сводка по всем делам доверителя</span></p>')
+        links = db().links(cid)
+        if links:
+            items = []
+            for l in links:
+                o = db().case(l["other"]) or {}
+                items.append(f'<a href="case:{l["other"]}" style="color:{A}">🔗 {html.escape(o.get("title", "?"))}</a>'
+                             + (f' <span style="color:{M.T["muted"]}">({html.escape(l["note"])})</span>' if l["note"] else ""))
+            extra += f'<p><span style="color:{M.T["muted"]}">Связанные дела</span><br>{"<br>".join(items)}</p>'
+        self.facts.setText(f'<table>{t}</table>' + (f'<p style="margin-top:6px">{claim}</p>' if claim else "") + extra +
+                           f'<p><a href="info" style="color:{A}">Изменить сведения о деле</a> &nbsp;·&nbsp; '
+                           f'<a href="link" style="color:{A}">🔗 Связать с другим делом</a></p>')
         # сроки
         self.l_events.clear()
         today = dt.date.today()
@@ -2202,14 +2239,22 @@ class CasesPage(QWidget):
         self.list = QListWidget()
         self.list.setObjectName("caselist")
         self.list.currentItemChanged.connect(self.on_select)
+        self.cur_fid = None                           # открытая папка (доверитель)
+        FU.bind(_sys.modules[__name__])
+        FU.setup_list(self)
         lv.addWidget(self.list, 1)
         rb = QHBoxLayout()
         b_new = QPushButton("+ Новое дело")
         b_new.setObjectName("primary")
-        b_new.clicked.connect(self.new_case)
+        b_new.clicked.connect(lambda: self.new_case())
+        b_fold = QPushButton("+ Папка")
+        b_fold.setToolTip("Папка для дел одного доверителя (можно и подпапки). Дела перетаскиваются в папку мышью.")
+        b_fold.clicked.connect(lambda: FU.new_folder(self, self.cur_fid if self._folder_selected() else None))
+        self.b_folder = b_fold
         self.show_arch = QCheckBox("Архив")
         self.show_arch.toggled.connect(self.reload)
         rb.addWidget(b_new)
+        rb.addWidget(b_fold)
         rb.addStretch(1)
         rb.addWidget(self.show_arch)
         lv.addLayout(rb)
@@ -2484,13 +2529,22 @@ class CasesPage(QWidget):
         cur = self.cid
         self.list.blockSignals(True)
         self.list.clear()
-        for c in db().cases(self.show_arch.isChecked(), self.search.text()):
-            sub = " · ".join(x for x in (c["number"], c["client"], c["stage"]) if x)
-            it = QListWidgetItem(c["title"] + (f"\n{sub}" if sub else ""))
-            it.setData(Qt.UserRole, c["id"])
-            self.list.addItem(it)
-            if c["id"] == cur:
-                self.list.setCurrentItem(it)
+        cases = db().cases(self.show_arch.isChecked(), self.search.text())
+        if not self.search.text().strip():            # обычный вид — папки доверителей и дела в них
+            sel = FU.fill(self, cases, cur, self.cur_fid)
+            if sel is not None:
+                self.list.setCurrentItem(sel)
+        else:                                         # поиск — плоский список, папка видна в подписи
+            names = {f["id"]: f["name"] for f in db().folders()}
+            for c in cases:
+                sub = " · ".join(x for x in (c["number"], c["client"], c["stage"]) if x)
+                if names.get(c.get("folder_id")):
+                    sub = f"📁 {names[c['folder_id']]}" + (f" · {sub}" if sub else "")
+                it = QListWidgetItem(c["title"] + (f"\n{sub}" if sub else ""))
+                it.setData(Qt.UserRole, c["id"])
+                self.list.addItem(it)
+                if c["id"] == cur:
+                    self.list.setCurrentItem(it)
         if not self.list.count():                     # пустой список — подсказать, что делать
             text = ("Ничего не найдено" if self.search.text().strip() else
                     "В архиве пусто" if self.show_arch.isChecked() else
@@ -2502,9 +2556,28 @@ class CasesPage(QWidget):
             self.list.addItem(it)
         self.list.blockSignals(False)
         self.reload_upcoming()
-        if self.list.currentItem() is None:
+        if self.list.currentItem() is None or not self.list.currentItem().data(Qt.UserRole):
             self.cid = None
             self.stack.setCurrentIndex(0)
+
+    def _folder_selected(self):
+        it = self.list.currentItem()
+        return it is not None and it.data(FU.FOLDER_ROLE) is not None
+
+    def expand_to(self, cid):
+        """Развернуть папки, в которых лежит дело (чтобы его строка была видна в списке)."""
+        c = db().case(cid) or {}
+        fid, seen, changed = c.get("folder_id"), set(), False
+        while fid and fid not in seen:
+            seen.add(fid)
+            f = db().folder(fid)
+            if not f:
+                break
+            if not f["expanded"]:
+                db().update_folder(fid, expanded=1)
+                changed = True
+            fid = f["parent_id"]
+        return changed
 
     def reload_upcoming(self):
         self.upcoming.clear()
@@ -2530,6 +2603,8 @@ class CasesPage(QWidget):
             self.tabs.setCurrentWidget(self.events_tab)
 
     def select_case(self, cid):
+        if self.expand_to(cid):
+            self.reload()
         for i in range(self.list.count()):
             if self.list.item(i).data(Qt.UserRole) == cid:
                 self.list.setCurrentRow(i)
@@ -2570,6 +2645,11 @@ class CasesPage(QWidget):
             self.save_info()
         self.laws_tab.save_now()
         self.board_tab.flush()
+        if it is not None and (it.data(FU.FOLDER_ROLE) is not None or it.data(FU.HINT_ROLE)):
+            self.cid = None                           # папка или подсказка — сводку покажет главное окно
+            if it.data(FU.FOLDER_ROLE) is not None:
+                self.cur_fid = it.data(FU.FOLDER_ROLE)
+            return
         self.cid = it.data(Qt.UserRole) if it else None
         if self.cid:
             M.settings().setValue("last_case", self.cid)
@@ -2641,10 +2721,24 @@ class CasesPage(QWidget):
             sub = " · ".join(x for x in (c.get("number"), vals.get("client"), vals.get("stage")) if x)
             it.setText(vals["title"] + (f"\n{sub}" if sub else ""))
 
-    def new_case(self):
-        name, ok = QInputDialog.getText(self, "Новое дело", "Название (например, «ООО Ромашка — взыскание долга»):")
+    def new_case(self, folder_id=None):
+        """Новое дело. Открыта папка (или дело в папке) — дело создаётся в этой папке, доверитель
+        подставляется из названия папки."""
+        if folder_id is None:
+            it = self.list.currentItem()
+            if it is not None and it.data(FU.FOLDER_ROLE) is not None:
+                folder_id = it.data(FU.FOLDER_ROLE)
+            elif self.cid:
+                folder_id = (db().case(self.cid) or {}).get("folder_id")
+        f = db().folder(folder_id) if folder_id else None
+        where = f"\n\nДело появится в папке «{f['name']}»." if f else ""
+        name, ok = QInputDialog.getText(self, "Новое дело", "Название (например, «ООО Ромашка — взыскание долга»):"
+                                        + where)
         if ok and name.strip():
-            cid = db().add_case(title=name.strip(), stage=D.CASE_STAGES[1])
+            cid = db().add_case(title=name.strip(), stage=D.CASE_STAGES[1], **({"client": f["name"]} if f else {}))
+            if f:
+                db().set_case_folder(cid, f["id"])
+                db().update_folder(f["id"], expanded=1)
             self.cid = cid
             sync_case_file(cid)                       # своя папка дела с файлом сведений — сразу
             self.show_arch.setChecked(False)

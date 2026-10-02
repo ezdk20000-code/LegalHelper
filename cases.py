@@ -38,6 +38,11 @@ CREATE TABLE IF NOT EXISTS boards(
 CREATE TABLE IF NOT EXISTS trash(
     id INTEGER PRIMARY KEY, kind TEXT, title TEXT DEFAULT '', case_id INTEGER DEFAULT 0,
     case_title TEXT DEFAULT '', deleted TEXT, data TEXT);
+CREATE TABLE IF NOT EXISTS folders(
+    id INTEGER PRIMARY KEY, name TEXT DEFAULT '', parent_id INTEGER, notes TEXT DEFAULT '',
+    contacts TEXT DEFAULT '', expanded INTEGER DEFAULT 1, created TEXT);
+CREATE TABLE IF NOT EXISTS case_links(
+    id INTEGER PRIMARY KEY, a INTEGER, b INTEGER, note TEXT DEFAULT '', created TEXT);
 CREATE TABLE IF NOT EXISTS instances(
     id INTEGER PRIMARY KEY, case_id INTEGER, pos INTEGER DEFAULT 0, level TEXT DEFAULT '', court TEXT DEFAULT '',
     number TEXT DEFAULT '', judge TEXT DEFAULT '', url TEXT DEFAULT '', result TEXT DEFAULT '');
@@ -144,6 +149,8 @@ class CaseDB:
             self.con.execute("ALTER TABLE cases ADD COLUMN pdf TEXT DEFAULT ''")
         if "brief" not in cols:                 # «Главное к заседанию» — коротко, для телефона
             self.con.execute("ALTER TABLE cases ADD COLUMN brief TEXT DEFAULT ''")
+        if "folder_id" not in cols:             # папка в списке дел (доверитель, его процессы)
+            self.con.execute("ALTER TABLE cases ADD COLUMN folder_id INTEGER")
         import uuid
         for (cid,) in self.con.execute("SELECT id FROM cases WHERE uid IS NULL OR uid=''").fetchall():
             self.con.execute("UPDATE cases SET uid=? WHERE id=?", (uuid.uuid4().hex, cid))
@@ -238,7 +245,7 @@ class CaseDB:
                           f"({','.join('?' * len(keys))},?,?,?)", [kw[k] for k in keys] + [uuid.uuid4().hex, now, now])
 
     def update_case(self, cid, **kw):
-        keys = [k for k in kw if k in dict(CASE_FIELDS) or k in ("archived", "pdf", "brief")]
+        keys = [k for k in kw if k in dict(CASE_FIELDS) or k in ("archived", "pdf", "brief", "folder_id")]
         if not keys:
             return
         now = dt.datetime.now().isoformat(timespec="seconds")
@@ -339,9 +346,92 @@ class CaseDB:
     def delete_case(self, cid):
         for t in ("events", "docs", "time_entries", "payments", "quotes", "laws", "boards", "instances"):
             self.con.execute(f"DELETE FROM {t} WHERE case_id=?", (cid,))
+        self.con.execute("DELETE FROM case_links WHERE a=? OR b=?", (cid, cid))
         for p in self.packs(cid):
             self.delete_pack(p["id"])
         self._exec("DELETE FROM cases WHERE id=?", (cid,))
+
+    # ---------------------------------------------------------------- папки (доверители)
+    # Папки и подпапки в списке дел: один доверитель — одна папка, внутри все его процессы.
+    def folders(self):
+        return self._all("SELECT * FROM folders ORDER BY name COLLATE NOCASE")
+
+    def folder(self, fid):
+        return self._one("SELECT * FROM folders WHERE id=?", (fid,)) if fid else None
+
+    def add_folder(self, name, parent_id=None):
+        now = dt.datetime.now().isoformat(timespec="seconds")
+        return self._exec("INSERT INTO folders(name, parent_id, created) VALUES (?,?,?)",
+                          (name.strip() or "Новая папка", parent_id, now))
+
+    def update_folder(self, fid, **kw):
+        keys = [k for k in kw if k in ("name", "parent_id", "notes", "contacts", "expanded")]
+        if keys:
+            self._exec(f"UPDATE folders SET {','.join(k + '=?' for k in keys)} WHERE id=?",
+                       [kw[k] for k in keys] + [fid])
+
+    def subfolder_ids(self, fid):
+        """Номера папки и всех её подпапок (на любую глубину)."""
+        allf = self.folders()
+        out, todo = [], [fid]
+        while todo:
+            f = todo.pop()
+            if f in out:
+                continue
+            out.append(f)
+            todo += [x["id"] for x in allf if x["parent_id"] == f]
+        return out
+
+    def folder_cases(self, fid, archived=None):
+        """Дела в папке и во всех её подпапках."""
+        ids = self.subfolder_ids(fid)
+        q = f"SELECT * FROM cases WHERE folder_id IN ({','.join('?' * len(ids))})"
+        args = list(ids)
+        if archived is not None:
+            q += " AND archived=?"
+            args.append(1 if archived else 0)
+        return self._all(q + " ORDER BY updated DESC", args)
+
+    def move_folder(self, fid, parent_id):
+        """Перенести папку в другую (нельзя в саму себя и в свою подпапку)."""
+        if parent_id and parent_id in self.subfolder_ids(fid):
+            return False
+        self.update_folder(fid, parent_id=parent_id)
+        return True
+
+    def delete_folder(self, fid):
+        """Удалить папку. Дела и подпапки не удаляются — переходят на уровень выше."""
+        f = self.folder(fid)
+        if not f:
+            return
+        up = f["parent_id"]
+        self.con.execute("UPDATE cases SET folder_id=? WHERE folder_id=?", (up, fid))
+        self.con.execute("UPDATE folders SET parent_id=? WHERE parent_id=?", (up, fid))
+        self._exec("DELETE FROM folders WHERE id=?", (fid,))
+
+    def set_case_folder(self, cid, fid):
+        self._exec("UPDATE cases SET folder_id=? WHERE id=?", (fid, cid))
+
+    # ---------------------------------------------------------------- связанные дела
+    def links(self, cid=None):
+        """Связи между делами (апелляция по тому же спору, встречный иск…). [{id, a, b, note, other}]"""
+        if cid is None:
+            return self._all("SELECT * FROM case_links ORDER BY id")
+        rows = self._all("SELECT * FROM case_links WHERE a=? OR b=? ORDER BY id", (cid, cid))
+        for r in rows:
+            r["other"] = r["b"] if r["a"] == cid else r["a"]
+        return rows
+
+    def add_link(self, a, b, note=""):
+        if not a or not b or a == b:
+            return None
+        if self._one("SELECT id FROM case_links WHERE (a=? AND b=?) OR (a=? AND b=?)", (a, b, b, a)):
+            return None
+        now = dt.datetime.now().isoformat(timespec="seconds")
+        return self._exec("INSERT INTO case_links(a, b, note, created) VALUES (?,?,?,?)", (a, b, note, now))
+
+    def delete_link(self, lid):
+        self._exec("DELETE FROM case_links WHERE id=?", (lid,))
 
     # ---------------------------------------------------------------- события
     def events(self, cid=None, upcoming_days=None, include_done=True):

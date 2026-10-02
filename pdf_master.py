@@ -114,7 +114,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.4.3"
+APP_VERSION = "3.5"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -2318,8 +2318,9 @@ class MainWindow(QMainWindow):
             lst.setTextElideMode(Qt.ElideRight)
         sv.addWidget(left, 1)
         self.cases_page.list.currentItemChanged.connect(self._on_case_selected)
-        # щелчок по уже выбранному делу (например, из справки) тоже возвращает к делу
-        self.cases_page.list.itemClicked.connect(self._on_case_selected)
+        # щелчок по уже выбранному делу (например, из справки) тоже возвращает к делу;
+        # повторный щелчок по открытой папке сворачивает её
+        self.cases_page.list.itemClicked.connect(self._on_case_clicked)
         b_help = QPushButton("?   Справка — как пользоваться")
         self.b_help_link = b_help
         b_help.setObjectName("sidelink")
@@ -2420,7 +2421,8 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.home_page = U.HomePage(self)
-        for w in (self.cases_page, self.loose_page, self.help_page, self.home_page):
+        self.folder_page = U.FU.FolderPage(self)
+        for w in (self.cases_page, self.loose_page, self.help_page, self.home_page, self.folder_page):
             self.stack.addWidget(w)
         self.stack.currentChanged.connect(lambda *_: anim.slide_in(self.stack.currentWidget(), dy=16, ms=260))
 
@@ -4629,11 +4631,57 @@ class MainWindow(QMainWindow):
         self.home_page.refresh()                 # уже на экране — числа в карточках «отсчитываются»
 
     def _on_case_selected(self, it, _prev=None):
-        if self._entering:
+        if self._entering or it is None:
             return
-        cid = it.data(Qt.UserRole) if it else None
+        if it.data(U.FU.HINT_ROLE):                       # подсказка «собрать дела доверителя в папку»
+            client = it.data(U.FU.HINT_ROLE)
+            QTimer.singleShot(0, lambda: U.FU.apply_hint(self.cases_page, client))
+            return
+        fid = it.data(U.FU.FOLDER_ROLE)
+        if fid is not None:
+            import time
+            self._folder_sel_t = time.monotonic()
+            QTimer.singleShot(0, lambda: self.show_folder(fid))   # список перестраивается — не внутри его сигнала
+            return
+        cid = it.data(Qt.UserRole)
         if cid:
             self.enter_case(cid)
+
+    def _on_case_clicked(self, it):
+        if it is None:
+            return
+        fid = it.data(U.FU.FOLDER_ROLE)
+        if fid is None:
+            if not it.data(U.FU.HINT_ROLE):
+                self._on_case_selected(it)
+            return
+        import time
+        if time.monotonic() - getattr(self, "_folder_sel_t", 0) < 0.6:
+            return                                   # этот же щелчок только что открыл папку
+        same = self.stack.currentWidget() is self.folder_page and self.folder_page.fid == fid
+        self.show_folder(fid, toggle=same)
+
+    def show_folder(self, fid, toggle=False):
+        """Папка доверителя: развернуть её в списке и показать справа общую сводку по всем его делам.
+        Повторный щелчок по уже открытой папке сворачивает её."""
+        f = U.db().folder(fid)
+        if not f:
+            return
+        if toggle:
+            U.db().update_folder(fid, expanded=0 if f["expanded"] else 1)
+        elif not f["expanded"]:
+            U.db().update_folder(fid, expanded=1)
+        if self.mode_cid:
+            U.sync_case_file(self.mode_cid)
+        self.mode_cid = None
+        cp = self.cases_page
+        cp.cid = None
+        cp.cur_fid = fid
+        cp.reload()
+        self.b_loose.setChecked(False)
+        self.b_home.setChecked(False)
+        self.folder_page.set_folder(fid)
+        self.stack.setCurrentWidget(self.folder_page)
 
     def enter_case(self, cid):
         if self._entering:
