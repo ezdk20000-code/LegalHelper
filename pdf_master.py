@@ -111,7 +111,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.4"
+APP_VERSION = "3.4.1"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -2905,19 +2905,7 @@ class MainWindow(QMainWindow):
                 old.deleteLater()
             except RuntimeError:
                 pass
-        lab = QLabel(text, host)
-        self._toast = lab
-        lab.setObjectName("toast")
-        lab.setWordWrap(True)
-        lab.setAlignment(Qt.AlignCenter)
-        lab.setStyleSheet(f"background: {T['text']}; color: {T['panel']}; border-radius: 12px; padding: 10px 18px;"
-                          "font-weight: 600;")
-        lab.setMaximumWidth(max(200, host.width() - 40))
-        lab.adjustSize()
-        lab.move(max(10, (host.width() - lab.width()) // 2), max(10, host.height() - lab.height() - 28))
-        lab.show()
-        lab.raise_()
-        QTimer.singleShot(ms, lab.deleteLater)
+        self._toast = anim.Toast(host, text, T["text"], T["panel"], T["accent"], ms)
 
     def show_trash(self):
         U.TrashDialog(self).exec()
@@ -2965,7 +2953,7 @@ class MainWindow(QMainWindow):
         bar.move((self.width() - bar.width()) // 2, self.height() - bar.height() - 44)
         bar.show()
         bar.raise_()
-        anim.fade_in(bar, 160)
+        anim.slide_in(bar, dx=0, dy=18, ms=240)
         QTimer.singleShot(ms, lambda: (not done) and _safe_delete(bar))
         return bar
 
@@ -3163,9 +3151,17 @@ class MainWindow(QMainWindow):
             p.setPen(Qt.NoPen)
         if img is not None:
             p.drawImage(QRectF(x, y, w, h), img)
-        else:
+        else:                                   # страница ещё рисуется — заготовка с серыми «строчками»
             p.setBrush(QColor("#ffffff"))
             p.drawRect(QRectF(x, y, w, h))
+            p.setBrush(QColor(0, 0, 0, 18))
+            lx, ly, lw = x + w * 0.12, y + h * 0.1, w * 0.76
+            p.drawRoundedRect(QRectF(lx + lw * 0.2, ly, lw * 0.6, h * 0.035), 2, 2)
+            ly += h * 0.09
+            for k in range(9):
+                frac = 0.62 if k in (3, 8) else 1.0
+                p.drawRoundedRect(QRectF(lx, ly, lw * frac, h * 0.022), 1.5, 1.5)
+                ly += h * 0.055
         acc = QColor(T["accent"])
         if selected:
             p.setPen(QPen(acc, 2.2))
@@ -4626,8 +4622,8 @@ class MainWindow(QMainWindow):
         self.cases_page.list.setCurrentItem(None)
         self.cases_page.list.clearSelection()
         self.cases_page.list.blockSignals(False)
-        self.home_page.refresh()
         self.stack.setCurrentWidget(self.home_page)
+        self.home_page.refresh()                 # уже на экране — числа в карточках «отсчитываются»
 
     def _on_case_selected(self, it, _prev=None):
         if self._entering:

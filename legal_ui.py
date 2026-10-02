@@ -2,6 +2,7 @@
 """Интерфейс юридических функций: калькуляторы, дела, пакет в суд, ф. 107, проверка, обезличивание,
 поиск по делу, шаблоны, выписки, справка «?»."""
 import os
+import re
 import json
 import datetime as dt
 import html
@@ -26,6 +27,7 @@ import sys as _sys
 import case_tabs as CT
 import backup as BK
 import casefile as CF
+import anim
 CT.U = _sys.modules[__name__]
 
 M = None          # пространство имён главного модуля (bind)
@@ -1141,6 +1143,7 @@ class ActionCard(QPushButton):
         if help_key:
             h.addWidget(HelpButton(help_key), 0, Qt.AlignTop)
         self.clicked.connect(slot)
+        anim.hover_lift(self)
 
 
 def card_grid(cards, cols=3):
@@ -4782,10 +4785,29 @@ class StatTile(QPushButton):
         v.addWidget(cap)
         h.addLayout(v, 1)
         self.clicked.connect(slot)
+        anim.hover_lift(self)
 
     def set(self, text, color=None):
-        self.value.setText(text)
+        """Число в карточке «отсчитывается» до нового значения (если оно изменилось)."""
         self.value.setStyleSheet(f"color: {color};" if color else "")
+        m = re.match(r"^(\d(?:[\d  ]*\d)?)(.*)$", text)
+        if not m:
+            self.value.setText(text)
+            self._num = None
+            return
+        new = int(re.sub(r"\D", "", m.group(1)) or 0)
+        tail = m.group(2)
+        sep = " " if " " in m.group(1) else " "
+
+        def render(n):
+            return f"{n:,}".replace(",", sep) + tail
+        if not self.value.isVisible() and not getattr(self, "_seen", False):
+            self.value.setText(render(new))         # Главную ещё не показывали — отсчёт будет при показе
+            return
+        self._seen = True
+        prev = getattr(self, "_num", None)
+        self._num = new
+        anim.count_up(self.value, 0 if prev is None else prev, new, render)
 
 
 def greeting(h):
