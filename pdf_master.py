@@ -42,7 +42,7 @@ import palette
 import word_editor as WE
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.1.1"
+APP_VERSION = "3.1.2"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)

@@ -6,7 +6,7 @@
 },
 {
 "path": "CHANGELOG.md",
-"size": 70333
+"size": 71361
 },
 {
 "path": "README.md",
@@ -314,7 +314,7 @@
 },
 {
 "path": "help_ui.py",
-"size": 87215
+"size": 87351
 },
 {
 "path": "index.html",
@@ -326,7 +326,7 @@
 },
 {
 "path": "legal_core.py",
-"size": 63857
+"size": 66099
 },
 {
 "path": "legal_data.py",
@@ -334,7 +334,7 @@
 },
 {
 "path": "legal_ui.py",
-"size": 242212
+"size": 242394
 },
 {
 "path": "palette.py",
@@ -394,7 +394,7 @@
 },
 {
 "path": "version.json",
-"size": 888
+"size": 925
 },
 {
 "path": "word_editor.py",

@@ -828,6 +828,30 @@ class _F107Writer:
             self.text(x0, first + i * lh, line, sz)
 
 
+def _wrap_full(w, s, room, size):
+    """Разбить на строки по ширине room без потерь: слово длиннее строки режется по буквам."""
+    lines, cur = [], ""
+    for wd in s.split():
+        while w.width(wd, size) > room:              # очень длинное слово (номер, адрес сайта…)
+            k = len(wd)
+            while k > 1 and w.width(wd[:k], size) > room:
+                k -= 1
+            if cur:
+                lines.append(cur)
+                cur = ""
+            lines.append(wd[:k])
+            wd = wd[k:]
+        t = (cur + " " + wd).strip()
+        if not cur or w.width(t, size) <= room:
+            cur = t
+        else:
+            lines.append(cur)
+            cur = wd
+    if cur:
+        lines.append(cur)
+    return lines or [""]
+
+
 def _wrap_to(w, s, room, size, max_lines):
     words, lines, cur = s.split(), [], ""
     for wd in words:
@@ -857,8 +881,8 @@ def _f107_value(v):
 def f107_pdf(items, sender="", spi="", out=None, **_old):
     """Опись вложения ф. 107 на официальном бланке Почты России.
     items — [(наименование, количество, ценность руб. или None)]; sender — отправитель (ФИО или организация);
-    spi — номер почтового идентификатора (14 цифр, необязательно). Больше 14 предметов — несколько листов,
-    нумерация сквозная, общий итог — на последнем листе."""
+    spi — номер почтового идентификатора (14 цифр, необязательно). На листе 14 строк; длинное наименование
+    занимает несколько строк подряд. Не поместилось — следующий лист, нумерация сквозная, итог — на последнем."""
     blank = os.path.join(_forms_dir(), "f107_blank.pdf")
     if not os.path.exists(blank):
         raise FileNotFoundError("Не найден бланк описи (forms/f107_blank.pdf).")
@@ -867,23 +891,44 @@ def f107_pdf(items, sender="", spi="", out=None, **_old):
     tot_q = sum(q for _n, q, _v in items)
     vals = [float(v) for _n, _q, v in items if v not in (None, "")]
     tot_v = _f107_value(sum(vals)) if vals else "0"
-    chunks = [items[i:i + F107_ROWS] for i in range(0, len(items), F107_ROWS)] or [[]]
     spi = "".join(ch for ch in str(spi or "") if not ch.isspace())[:14]
+    # раскладка по строкам бланка: короткое название — одна строка, длинное переносится на следующие строки
+    # (как в описях, которые делает сайт Почты), ничего не обрезается; пункт не разрывается между листами
+    probe = _F107Writer(fitz.open().new_page(), ff)
+    room = F107_COLS[2] - (F107_COLS[1] + 2.8) - 3
+    sheets, cur, free = [], [], F107_ROWS
+    for no, (name, q, v) in enumerate(items, 1):
+        size = next((sz for sz in (F107_SIZE, 8.5, 8) if probe.width(name, sz) <= room), None)
+        lines = [name] if size else _wrap_full(probe, name, room, 8)
+        size = size or 8
+        parts = [lines[i:i + F107_ROWS] for i in range(0, len(lines), F107_ROWS)]   # больше листа — по листам
+        for k, part in enumerate(parts):
+            if len(part) > free:
+                sheets.append(cur)
+                cur, free = [], F107_ROWS
+            cur.append((F107_ROWS - free, no if k == 0 else None, part, size, q if k == 0 else None,
+                        v if k == 0 else None))
+            free -= len(part)
+    sheets.append(cur)
     doc = fitz.open()
     tpl = fitz.open(blank)
-    for n, chunk in enumerate(chunks):
+    for n, placed in enumerate(sheets):
         doc.insert_pdf(tpl)
         w = _F107Writer(doc[-1], ff)
-        last = n == len(chunks) - 1
+        last = n == len(sheets) - 1
         for dx in (0, F107_COPY_DX):
             c = [x + dx for x in F107_COLS]
-            for i, (name, q, v) in enumerate(chunk):
-                ty = F107_TEXT_TOP + i * F107_PITCH
-                top, bot = ty - 2.3, ty + 12.1                   # «ячейка» строки для длинных названий
-                w.at((c[0] + c[1]) / 2, ty, str(n * F107_ROWS + i + 1))
-                w.left(c[1] + 2.8, c[2], top, bot, name)
-                w.at((c[2] + c[3]) / 2, ty, str(q))
-                w.at((c[3] + c[4]) / 2, ty, _f107_value(v))
+            for row, no, lines, size, q, v in placed:
+                ty = F107_TEXT_TOP + row * F107_PITCH
+                if no is not None:
+                    w.at((c[0] + c[1]) / 2, ty, str(no))
+                    w.at((c[2] + c[3]) / 2, ty, str(q))
+                    w.at((c[3] + c[4]) / 2, ty, _f107_value(v))
+                for j, line in enumerate(lines):
+                    t = ty + j * F107_PITCH
+                    top, bot = t - 2.3, t + 12.1
+                    base = (top + bot) / 2 + (w.font.ascender + w.font.descender) * size / 2
+                    w.text(c[1] + 2.8, base, line, size)
             if last:
                 ty, cq, cv = F107_TOTAL
                 w.at(cq + dx, ty, str(tot_q))
