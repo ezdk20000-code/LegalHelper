@@ -198,12 +198,90 @@ HELP = {
 
 def show_help(parent, key):
     title, text = HELP.get(key, ("Справка", "Нет справки"))
-    box = QMessageBox(parent)
-    box.setWindowTitle(title)
-    box.setTextFormat(Qt.RichText)
-    box.setText(f"<h3 style='margin:0'>{title}</h3><div style='max-width:520px'>{text}</div>")
-    box.setIcon(QMessageBox.NoIcon)
-    box.exec()
+    HelpPopup(parent, title, text).exec()
+
+
+class HelpPopup(QDialog):
+    """Подсказка к функции (кнопка «?»): заголовок со значком, текст переносится по ширине окна и никогда
+    не обрезается — длинный текст можно прокрутить, окно подстраивает высоту под содержимое."""
+    WIDTH = 600
+
+    def __init__(self, parent, title, text):
+        super().__init__(parent)
+        import modern_ui
+        t = M.T if M else {"accent": "#007aff", "text": "#1c1c1e", "muted": "#8e8e93"}
+        self.setWindowTitle(title)
+        self.setObjectName("tooldlg")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        head = QHBoxLayout()
+        head.setContentsMargins(24, 20, 24, 6)
+        head.setSpacing(14)
+        ic = QLabel()
+        ic.setPixmap(modern_ui.emoji_tile("💡", t["accent"], 44))
+        ic.setFixedSize(44, 44)
+        head.addWidget(ic, 0, Qt.AlignTop)
+        lt = QLabel(title)
+        lt.setObjectName("dlgtitle")
+        lt.setWordWrap(True)
+        head.addWidget(lt, 1)
+        lay.addLayout(head)
+        view = QTextBrowser()
+        view.setObjectName("helppop")
+        view.setOpenExternalLinks(True)
+        view.setFrameShape(QFrame.NoFrame)
+        view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        view.document().setDocumentMargin(0)
+        view.setHtml(f"<html><body style='color:{t['text']}; font-size:10.5pt; line-height:150%'>{text}"
+                     "</body></html>")
+        self.view = view
+        self._scr = (parent.screen() if parent else QApplication.primaryScreen()).availableGeometry()
+        body = QHBoxLayout()
+        body.setContentsMargins(24, 6, 24, 18)
+        body.addWidget(view)
+        lay.addLayout(body)
+        foot = QFrame()
+        foot.setObjectName("dlgfoot")
+        row = QHBoxLayout(foot)
+        row.setContentsMargins(24, 12, 24, 14)
+        row.addStretch(1)
+        ok = QPushButton("Понятно")
+        ok.setObjectName("primary")
+        ok.setDefault(True)
+        ok.setMinimumWidth(110)
+        ok.setCursor(Qt.PointingHandCursor)
+        ok.clicked.connect(self.accept)
+        row.addWidget(ok)
+        lay.addWidget(foot)
+        self.setFixedWidth(self.WIDTH)
+        self._fit()
+
+    def _fit(self):
+        """Высота текста — по содержимому (после того как применены шрифты темы), не выше 62% экрана."""
+        v = self.view
+        v.ensurePolished()
+        v.document().setDefaultFont(v.font())
+        v.document().setTextWidth(self.WIDTH - 48 - 4)
+        h = int(v.document().size().height()) + 12
+        v.setFixedHeight(max(60, min(h, int(self._scr.height() * 0.62))))
+
+    def showEvent(self, e):
+        self._fit()
+        super().showEvent(e)
+        QTimer.singleShot(0, self._refit)
+
+    def _refit(self):
+        """Уже показанное окно: документ разложен по настоящей ширине — подогнать высоту точно."""
+        v = self.view
+        cap = int(self._scr.height() * 0.62)
+        for _ in range(4):                       # пока есть что прокручивать — добавить высоты (до предела)
+            extra = v.verticalScrollBar().maximum()
+            if extra <= 0 or v.height() >= cap:
+                break
+            v.setFixedHeight(min(cap, v.height() + extra + 4))
+            QApplication.processEvents()
+        self.adjustSize()
 
 
 class HelpButton(QToolButton):

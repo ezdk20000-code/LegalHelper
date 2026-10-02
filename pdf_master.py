@@ -44,7 +44,7 @@ import modern_ui
 import word_editor as WE
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.3.2"
+APP_VERSION = "3.3.3"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -6273,6 +6273,7 @@ QDialog#tooldlg QLabel#dlgsub {{ color: {t['muted']}; font-size: 9.5pt; }}
 QDialog#tooldlg QLabel#fieldlabel {{ color: {t['muted']}; font-size: 8.5pt; font-weight: 600; }}
 QDialog#tooldlg QLabel#fieldlabel:disabled {{ color: {t['disabled']}; }}
 QFrame#dlgfoot {{ background: {t['alt']}; border-top: 1px solid {t['border']}; }}
+QTextBrowser#helppop {{ background: transparent; border: none; }}
 QFrame#edside {{ background: {t['side']}; border-right: 1px solid {t['border']}; }}
 QLabel#edtitle {{ font-family: "{SERIF}"; font-size: 13pt; font-weight: 700; padding: 0 6px; }}
 QLabel#edgroup {{ color: {t['muted']}; font-size: 7.5pt; font-weight: 700; letter-spacing: 1px; padding: 8px 8px 3px 8px; }}
