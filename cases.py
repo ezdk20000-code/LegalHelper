@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS laws(
     id INTEGER PRIMARY KEY, case_id INTEGER, parent_id INTEGER DEFAULT 0, pos INTEGER DEFAULT 0,
     kind TEXT DEFAULT 'norm', title TEXT DEFAULT '', body TEXT DEFAULT '', note TEXT DEFAULT '',
     url TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS practice(
+    id INTEGER PRIMARY KEY, case_id INTEGER, parent_id INTEGER DEFAULT 0, pos INTEGER DEFAULT 0,
+    kind TEXT DEFAULT 'act', title TEXT DEFAULT '', act_kind TEXT DEFAULT '', court TEXT DEFAULT '',
+    act_date TEXT DEFAULT '', number TEXT DEFAULT '', case_no TEXT DEFAULT '', summary TEXT DEFAULT '',
+    quote TEXT DEFAULT '', note TEXT DEFAULT '', url TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS boards(
     case_id INTEGER PRIMARY KEY, scene TEXT DEFAULT '', updated TEXT);
 CREATE TABLE IF NOT EXISTS trash(
@@ -258,7 +263,8 @@ class CaseDB:
     # ---------------------------------------------------------------- корзина
     # Удалённое не пропадает сразу: строки всех таблиц сохраняются в «trash» (JSON) и через 30 дней
     # стираются насовсем. Восстановление возвращает строки с теми же номерами — связи не рвутся.
-    CASE_TABLES = ("events", "docs", "time_entries", "payments", "quotes", "laws", "boards", "instances", "packs")
+    CASE_TABLES = ("events", "docs", "time_entries", "payments", "quotes", "laws", "practice", "boards", "instances",
+                   "packs")
     TRASH_DAYS = 30
 
     def _rows(self, table, where, args):
@@ -347,7 +353,7 @@ class CaseDB:
         self._exec("DELETE FROM trash WHERE deleted < ?", (edge,))
 
     def delete_case(self, cid):
-        for t in ("events", "docs", "time_entries", "payments", "quotes", "laws", "boards", "instances"):
+        for t in ("events", "docs", "time_entries", "payments", "quotes", "laws", "practice", "boards", "instances"):
             self.con.execute(f"DELETE FROM {t} WHERE case_id=?", (cid,))
         self.con.execute("DELETE FROM case_links WHERE a=? OR b=?", (cid, cid))
         for p in self.packs(cid):
@@ -733,6 +739,46 @@ def _delete_law(self, lid):
     self._exec("DELETE FROM laws WHERE id=?", (lid,))
 
 
+# ============================================================================
+#  Судебная практика: дерево (довод → судебный акт)
+# ============================================================================
+PRACTICE_FIELDS = ("parent_id", "pos", "kind", "title", "act_kind", "court", "act_date", "number", "case_no",
+                   "summary", "quote", "note", "url")
+
+
+def _practice(self, cid):
+    return self._all("SELECT * FROM practice WHERE case_id=? ORDER BY parent_id, pos, id", (cid,))
+
+
+def _add_practice(self, cid, parent_id=0, kind="act", **kw):
+    r = self._one("SELECT COALESCE(MAX(pos), -1) + 1 AS n FROM practice WHERE case_id=? AND parent_id=?",
+                  (cid, parent_id))
+    data = dict(case_id=cid, parent_id=parent_id, pos=r["n"], kind=kind)
+    data.update({k: v for k, v in kw.items() if k in PRACTICE_FIELDS})
+    return self._exec(f"INSERT INTO practice({','.join(data)}) VALUES ({','.join('?' * len(data))})", list(data.values()))
+
+
+def _update_practice(self, pid, **kw):
+    keys = [k for k in kw if k in PRACTICE_FIELDS]
+    if keys:
+        self._exec(f"UPDATE practice SET {','.join(k + '=?' for k in keys)} WHERE id=?", [kw[k] for k in keys] + [pid])
+
+
+def _practice_subtree(self, pid):
+    ids, todo = [], [pid]
+    while todo:
+        x = todo.pop()
+        ids.append(x)
+        todo += [r["id"] for r in self._all("SELECT id FROM practice WHERE parent_id=?", (x,))]
+    return ids
+
+
+def _delete_practice(self, pid):
+    for x in _practice_subtree(self, pid):
+        self.con.execute("DELETE FROM practice WHERE id=?", (x,))
+    self.con.commit()
+
+
 def _copy_laws(self, src_cid, dst_cid, ids=None):
     """Скопировать нормы из другого дела (всё дерево или выбранные узлы с потомками)."""
     rows = self.laws(src_cid)
@@ -768,5 +814,7 @@ for _n, _f in dict(packs=_packs, add_pack=_add_pack, update_pack=_update_pack, d
                    pack_items=_pack_items, add_pack_item=_add_pack_item, update_pack_item=_update_pack_item,
                    delete_pack_item=_delete_pack_item, reorder_pack_items=_reorder_pack_items,
                    laws=_laws, add_law=_add_law, update_law=_update_law, delete_law=_delete_law,
-                   copy_laws=_copy_laws, board=_board, save_board=_save_board).items():
+                   copy_laws=_copy_laws, board=_board, save_board=_save_board,
+                   practice=_practice, add_practice=_add_practice, update_practice=_update_practice,
+                   delete_practice=_delete_practice, practice_subtree=_practice_subtree).items():
     setattr(CaseDB, _n, _f)

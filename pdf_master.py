@@ -116,7 +116,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.6"
+APP_VERSION = "3.7"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -2116,7 +2116,8 @@ class MainWindow(QMainWindow):
         mv.addSeparator()
         for i, (name, key) in enumerate((("Обзор дела", "overview"), ("Документы", "docs"),
                                          ("Создать документ", "prepare"), ("Сроки", "events"),
-                                         ("Деньги", "money"), ("Сведения", "info"))):
+                                         ("Деньги", "money"), ("Сведения", "info"),
+                                         ("Судебная практика", "practice"))):
             a = mv.addAction(name, lambda key=key: self.open_case_tab(key))
             a.setShortcut(f"Ctrl+{i + 1}")
         mv.addAction(self.a_nav)
@@ -2926,6 +2927,7 @@ class MainWindow(QMainWindow):
         old = getattr(self, "_toast", None)
         if old is not None:                       # новая подсказка заменяет прежнюю, а не ложится поверх
             try:
+                old.hide()
                 old.deleteLater()
             except RuntimeError:
                 pass
@@ -2943,6 +2945,7 @@ class MainWindow(QMainWindow):
         old = getattr(self, "_undo_bar", None)
         if old is not None:
             try:
+                old.hide()
                 old.deleteLater()
             except RuntimeError:
                 pass
@@ -4660,6 +4663,7 @@ class MainWindow(QMainWindow):
         order = [("overview", "Обзор", self.overview), ("docs", "Документы", docs),
                  ("prepare", "Создать документ", prepare), ("events", "Сроки", cp.events_tab),
                  ("money", "Деньги", money), ("info", "Сведения", by_name.get("Сведения")),
+                 ("practice", "Судебная практика", cp.practice_tab),
                  ("board", "Карта дела", cp.board_tab), ("laws", "Нормы права", cp.laws_tab),
                  ("quotes", "Выписки", by_name.get("Выписки"))]
         self.case_tab_keys = {}
@@ -4671,7 +4675,8 @@ class MainWindow(QMainWindow):
                 "prepare": "Документ по шаблону, пакет в суд, опись — и все инструменты для PDF",
                 "events": "Заседания, процессуальные сроки и задачи — с напоминаниями",
                 "money": "Учёт времени и оплат, калькуляторы госпошлины, процентов и сроков",
-                "info": "Суд, номер дела, стороны, инстанции, папка дела"}
+                "info": "Суд, номер дела, стороны, инстанции, папка дела",
+                "practice": "Судебная практика по доводам: вставьте реквизиты акта — остальное заполнится само"}
         for key, tip in tips.items():
             tabs.setTabToolTip(self.case_tab_keys[key], tip)
         self.hidden_tabs = [self.case_tab_keys[k] for k in ("board", "laws", "quotes")]

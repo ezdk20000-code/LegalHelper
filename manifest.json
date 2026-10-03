@@ -2,11 +2,11 @@
 "files": [
 {
 "path": ".github/workflows/release.yml",
-"size": 15432
+"size": 15490
 },
 {
 "path": "CHANGELOG.md",
-"size": 94473
+"size": 96679
 },
 {
 "path": "README.md",
@@ -38,11 +38,11 @@
 },
 {
 "path": "casefile.py",
-"size": 11761
+"size": 12449
 },
 {
 "path": "cases.py",
-"size": 40273
+"size": 42556
 },
 {
 "path": "constraints-build.txt",
@@ -322,7 +322,7 @@
 },
 {
 "path": "help_content.py",
-"size": 37535
+"size": 38405
 },
 {
 "path": "help_ui.py",
@@ -350,7 +350,7 @@
 },
 {
 "path": "legal_ui.py",
-"size": 255909
+"size": 258149
 },
 {
 "path": "modern_ui.py",
@@ -358,7 +358,7 @@
 },
 {
 "path": "palette.py",
-"size": 17266
+"size": 17402
 },
 {
 "path": "pdf_core.py",
@@ -366,11 +366,19 @@
 },
 {
 "path": "pdf_master.py",
-"size": 343012
+"size": 343427
 },
 {
 "path": "phone_export.py",
 "size": 13452
+},
+{
+"path": "practice_auto.py",
+"size": 13887
+},
+{
+"path": "practice_ui.py",
+"size": 26008
 },
 {
 "path": "rename_ui.py",
@@ -410,7 +418,7 @@
 },
 {
 "path": "update.bat",
-"size": 13911
+"size": 13969
 },
 {
 "path": "updater.py",
@@ -418,7 +426,7 @@
 },
 {
 "path": "version.json",
-"size": 911
+"size": 1005
 },
 {
 "path": "word_editor.py",

@@ -30,6 +30,8 @@ import casefile as CF
 import anim
 import folders_ui as FU
 CT.U = _sys.modules[__name__]
+import practice_ui as PU
+PU.bind(_sys.modules[__name__])
 
 M = None          # пространство имён главного модуля (bind)
 _db = None
@@ -86,6 +88,19 @@ HELP = {
         "<li>Картинку (скриншот документа) можно вставить через Ctrl+V.</li>"
         "<li>Карта сохраняется <b>автоматически</b> каждые 2 секунды, отдельно для каждого дела.</li>"
         "<li>Меню ☰ на карте: экспорт в PNG/SVG, сохранение в файл .excalidraw, смена фона.</li></ul>"),
+    "practice": ("Судебная практика",
+        "Практика по делу, разложенная по доводам: под каждым доводом — судебные акты, которые его подкрепляют."
+        "<ul><li><b>Быстро добавить</b>: вставьте в верхнюю строку реквизиты так же, как в иске, — «Определение "
+        "ВС РФ от 12.03.2024 № 305-ЭС23-1234», «постановление АС Московского округа от 01.02.2024 по делу "
+        "№ А40-12345/2023», «п. 7 Обзора судебной практики ВС РФ № 2 (2023), утв. Президиумом ВС РФ 19.07.2023» "
+        "или ссылку на kad.arbitr.ru — и Enter. Вид акта, суд, дата и номер заполнятся сами. Можно вставить "
+        "сразу несколько ссылок.</li>"
+        "<li><b>Довод</b> («Неустойка явно несоразмерна», «Подсудность») — кнопка «+ Довод». Выделите довод — "
+        "новые акты попадут в него. Акты можно перетаскивать мышью между доводами.</li>"
+        "<li>У акта: <b>позиция суда</b> коротко, <b>цитата</b> дословно и <b>как применяем</b> в деле. "
+        "«Открыть» — ссылка на акт, а если её нет — поиск акта в КонсультантПлюс.</li></ul>"
+        "<b>Экспорт</b>: «Скопировать списком» — готовый текст для иска или отзыва (Ctrl+V в Word); «В Word» — "
+        "отдельный документ. Всё сохраняется автоматически."),
     "laws": ("Нормы права",
         "Список всех норм, которые вы применяете в деле, разложенный по полочкам."
         "<br><br><b>Быстро добавить</b> — не нужно создавать акт и статью вручную:"
@@ -2340,9 +2355,11 @@ class CasesPage(QWidget):
         self.sub_tab = CT.KitPanel(main)
         self.board_tab = CT.BoardTab(main)
         self.laws_tab = CT.LawsTab(main)
+        self.practice_tab = PU.PracticeTab(main)
         self.tabs.insertTab(1, self.sub_tab, "Подача")
         self.tabs.insertTab(2, self.board_tab, "Карта дела")
         self.tabs.insertTab(3, self.laws_tab, "Нормы права")
+        self.tabs.insertTab(4, self.practice_tab, "Судебная практика")
         self.tabs.currentChanged.connect(self.on_tab)
         self.stack.addWidget(self.card)
         split.addWidget(self.stack)
@@ -2660,6 +2677,7 @@ class CasesPage(QWidget):
             self.save_timer.stop()
             self.save_info()
         self.laws_tab.save_now()
+        self.practice_tab.save_now()
         self.board_tab.flush()
 
     def restore_last(self):
@@ -2677,6 +2695,7 @@ class CasesPage(QWidget):
             self.save_timer.stop()
             self.save_info()
         self.laws_tab.save_now()
+        self.practice_tab.save_now()
         self.board_tab.flush()
         if it is not None and (it.data(FU.FOLDER_ROLE) is not None or it.data(FU.HINT_ROLE)):
             self.cid = None                           # папка или подсказка — сводку покажет главное окно
@@ -2715,6 +2734,7 @@ class CasesPage(QWidget):
         self.load_docs()
         self.sub_tab.set_case(self.cid)
         self.laws_tab.set_case(self.cid)
+        self.practice_tab.set_case(self.cid)
         self.board_tab.set_case(self.cid)
         if self.tabs.currentWidget() is self.board_tab:
             self.board_tab.activate()

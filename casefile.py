@@ -118,8 +118,11 @@ def case_data(db, cid, folder):
               for t in ("events", "time_entries", "payments", "quotes", "instances")}
     laws = [{k: v for k, v in r.items() if k != "case_id"} for r in
             _rows(db, "SELECT * FROM laws WHERE case_id=? ORDER BY id", (cid,))]
+    practice = [{k: v for k, v in r.items() if k != "case_id"} for r in
+                _rows(db, "SELECT * FROM practice WHERE case_id=? ORDER BY id", (cid,))]
     return {"format": FORMAT, "app": "LegalHelper", "saved": dt.datetime.now().isoformat(timespec="seconds"),
-            "case": c, "docs": docs, "packs": packs, "laws": laws, "board": board[0] if board else "", **tables}
+            "case": c, "docs": docs, "packs": packs, "laws": laws, "practice": practice,
+            "board": board[0] if board else "", **tables}
 
 
 def save_case_file(db, cid):
@@ -259,6 +262,13 @@ def import_case(db, folder, replace_cid=None):
         for law in data.get("laws", []):
             if law.get("parent_id"):
                 con.execute("UPDATE laws SET parent_id=? WHERE id=?", (ids.get(law["parent_id"], 0), ids[law.get("id")]))
+        pids = {}
+        for r in sorted(data.get("practice", []), key=lambda r: r.get("id", 0)):
+            pids[r.get("id")] = _insert(db, "practice", dict({k: v for k, v in r.items() if k != "id"}, case_id=cid,
+                                                             parent_id=0))
+        for r in data.get("practice", []):
+            if r.get("parent_id"):
+                con.execute("UPDATE practice SET parent_id=? WHERE id=?", (pids.get(r["parent_id"], 0), pids[r.get("id")]))
         if data.get("board"):
             con.execute("INSERT OR REPLACE INTO boards(case_id, scene, updated) VALUES (?,?,?)",
                         (cid, data["board"], dt.datetime.now().isoformat(timespec="seconds")))
