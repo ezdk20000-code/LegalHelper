@@ -116,7 +116,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.7"
+APP_VERSION = "3.7.1"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -2604,6 +2604,9 @@ class MainWindow(QMainWindow):
                                  cwd=os.path.dirname(bat), creationflags=0x00000008)   # DETACHED_PROCESS
             else:
                 subprocess.Popen(["sh", bat], cwd=os.path.dirname(bat))
+        except OSError as e:                     # командная строка запрещена (антивирус, настройки компьютера)
+            log_error("Запуск обновления из архива", e)
+            return self.update_blocked()
         except Exception as e:
             return self.error("Не удалось запустить обновление", e)
         self.modified = False
@@ -2840,10 +2843,50 @@ class MainWindow(QMainWindow):
         try:
             subprocess.Popen([path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS",
                               "/NOCANCEL", "/SP-", f"/LOG={log}"], creationflags=0x00000008)   # DETACHED_PROCESS
-        except Exception as e:
-            return self.error("Не удалось запустить установщик обновления", e)
+        except OSError as e:
+            log_error("Запуск установщика обновления", e)
+            try:                                 # иначе — как двойной щелчок по файлу (обычное окно установки)
+                os.startfile(path)
+            except Exception as e2:
+                log_error("Запуск установщика обновления (как двойной щелчок)", e2)
+                return self.update_blocked(path)
         self.modified = False
         QApplication.quit()
+
+    def update_blocked(self, setup=None):
+        """Windows (антивирус или настройки компьютера) не дал запустить установку — объяснить, что делать,
+        вместо «[WinError 5] Отказано в доступе»."""
+        import shutil
+        keep = None
+        if setup and os.path.exists(setup):     # из временной папки — в «Загрузки», откуда запуск обычно разрешён
+            try:
+                dl = os.path.join(os.path.expanduser("~"), "Downloads")
+                os.makedirs(dl, exist_ok=True)
+                keep = os.path.join(dl, "LegalHelper-Setup.exe")
+                shutil.copy2(setup, keep)
+            except Exception as e:
+                log_error("Копия установщика в Загрузки", e)
+                keep = None
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle(APP_NAME)
+        box.setText("<b>Windows не дал программе самой запустить установку.</b>")
+        box.setInformativeText(
+            "Так бывает, когда антивирус или настройки компьютера запрещают программам запускать другие программы. "
+            "Ваши дела и документы в порядке.\n\n"
+            + ("Установщик новой версии уже скачан в папку «Загрузки». Закройте LegalHelper и запустите "
+               "«LegalHelper-Setup.exe» двойным щелчком — дела и настройки сохранятся."
+               if keep else
+               "Скачайте установщик с сайта программы и запустите его двойным щелчком — дела и настройки "
+               "сохранятся."))
+        show = box.addButton("Показать установщик", QMessageBox.AcceptRole) if keep else None
+        site = box.addButton("Открыть сайт программы", QMessageBox.ActionRole)
+        box.addButton("Позже", QMessageBox.RejectRole)
+        box.exec()
+        if show is not None and box.clickedButton() is show:
+            self.show_in_folder(keep)
+        elif box.clickedButton() is site:
+            QDesktopServices.openUrl(QUrl(UPD.SITE))
 
     def _keep_previous(self):
         """Копия нынешней программы для «Вернуть предыдущую версию» (раньше её делал update.bat)."""
@@ -4116,8 +4159,15 @@ class MainWindow(QMainWindow):
                     "if errorlevel 8 powershell -NoProfile -Command \"Start-Process -FilePath robocopy -ArgumentList "
                     f"('\\\"{prev}\\\" \\\"{target}\\\" /MIR /XF unins*.* /R:3 /W:2') -Verb RunAs -Wait -WindowStyle Hidden\"\r\n"
                     f'start "" "{os.path.join(target, exe)}"\r\n')
-        subprocess.Popen(["cmd", "/c", "start", "Возврат версии", "cmd", "/c", cmd], cwd=work,
-                         creationflags=0x00000008)
+        try:
+            subprocess.Popen(["cmd", "/c", "start", "Возврат версии", "cmd", "/c", cmd], cwd=work,
+                             creationflags=0x00000008)
+        except OSError as e:
+            log_error("Возврат предыдущей версии", e)
+            return QMessageBox.warning(self, APP_NAME, "Windows не дал запустить возврат версии (антивирус или "
+                                       "настройки компьютера запрещают командную строку). Ваши дела в порядке.\n\n"
+                                       "Чтобы поставить другую версию, скачайте установщик с сайта программы "
+                                       f"({UPD.SITE}) и запустите его двойным щелчком.")
         self.modified = False
         QApplication.quit()
 

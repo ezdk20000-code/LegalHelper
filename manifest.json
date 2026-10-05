@@ -6,7 +6,7 @@
 },
 {
 "path": "CHANGELOG.md",
-"size": 96679
+"size": 97694
 },
 {
 "path": "README.md",
@@ -334,7 +334,7 @@
 },
 {
 "path": "installer.iss",
-"size": 3994
+"size": 3996
 },
 {
 "path": "laws_auto.py",
@@ -366,7 +366,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 343427
+"size": 347314
 },
 {
 "path": "phone_export.py",
@@ -426,7 +426,7 @@
 },
 {
 "path": "version.json",
-"size": 1005
+"size": 1030
 },
 {
 "path": "word_editor.py",
