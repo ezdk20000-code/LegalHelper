@@ -6,7 +6,7 @@
 },
 {
 "path": "CHANGELOG.md",
-"size": 97694
+"size": 99091
 },
 {
 "path": "README.md",
@@ -366,7 +366,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 347314
+"size": 350324
 },
 {
 "path": "phone_export.py",
@@ -426,7 +426,7 @@
 },
 {
 "path": "version.json",
-"size": 1030
+"size": 888
 },
 {
 "path": "word_editor.py",

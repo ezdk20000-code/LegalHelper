@@ -116,7 +116,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.7.1"
+APP_VERSION = "3.7.2"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -2606,6 +2606,10 @@ class MainWindow(QMainWindow):
                 subprocess.Popen(["sh", bat], cwd=os.path.dirname(bat))
         except OSError as e:                     # командная строка запрещена (антивирус, настройки компьютера)
             log_error("Запуск обновления из архива", e)
+            info = self._update_info
+            if info and not info.get("setup"):   # тогда — готовым установщиком, ему командная строка не нужна
+                info["setup"] = True
+                return QTimer.singleShot(0, lambda: self.download_update(ask=False))
             return self.update_blocked()
         except Exception as e:
             return self.error("Не удалось запустить обновление", e)
@@ -2840,18 +2844,72 @@ class MainWindow(QMainWindow):
             log_error("Резервная копия перед обновлением", e)
         self._keep_previous()
         log = os.path.join(tempfile.gettempdir(), "LegalHelper_setup_log.txt")
-        try:
-            subprocess.Popen([path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS",
-                              "/NOCANCEL", "/SP-", f"/LOG={log}"], creationflags=0x00000008)   # DETACHED_PROCESS
-        except OSError as e:
-            log_error("Запуск установщика обновления", e)
-            try:                                 # иначе — как двойной щелчок по файлу (обычное окно установки)
-                os.startfile(path)
-            except Exception as e2:
-                log_error("Запуск установщика обновления (как двойной щелчок)", e2)
-                return self.update_blocked(path)
+        args = ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/NOCANCEL", "/SP-", f"/LOG={log}"]
+        if not self.launch_setup(path, args):
+            return self.update_blocked(path)
         self.modified = False
         QApplication.quit()
+
+    def launch_setup(self, path, args):
+        """Запустить установщик — по очереди несколькими способами, пока Windows не позволит. Антивирус или
+        настройки компьютера иногда запрещают программам запускать другие программы; тогда установку
+        запускает сам Проводник Windows (как если бы человек щёлкнул по файлу). True — установщик работает."""
+        work = os.path.dirname(path)
+        ways = [("напрямую", lambda: subprocess.Popen([path] + args, cwd=work, creationflags=0x00000008)),
+                ("как двойной щелчок", lambda: os.startfile(path, "open", subprocess.list2cmdline(args), work))]
+        if C.IS_WIN:
+            ways += [("через Проводник, ярлык", lambda: self._open_by_explorer(self._setup_shortcut(path, args))),
+                     ("через Проводник", lambda: self._open_by_explorer(path))]
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            for name, start in ways:
+                self.msg(f"Запускаю установку новой версии ({name})…", 0)
+                QApplication.processEvents()
+                try:
+                    start()
+                except Exception as e:
+                    log_error(f"Запуск установщика: {name}", e)
+                    continue
+                if not C.IS_WIN or self._setup_running(path):
+                    return True
+                log_error(f"Установщик не запустился: {name} (Windows не дал)")
+        finally:
+            QApplication.restoreOverrideCursor()
+        return False
+
+    @staticmethod
+    def _setup_shortcut(path, args):
+        """Ярлык на установщик с ключами тихой установки — Проводник откроет его сам, без нашего процесса."""
+        import win32com.client
+        lnk = os.path.splitext(path)[0] + ".lnk"
+        sc = win32com.client.Dispatch("WScript.Shell").CreateShortcut(lnk)
+        sc.TargetPath = path
+        sc.Arguments = subprocess.list2cmdline(args)
+        sc.WorkingDirectory = os.path.dirname(path)
+        sc.Save()
+        return lnk
+
+    @staticmethod
+    def _open_by_explorer(target):
+        win = os.environ.get("SystemRoot", r"C:\Windows")
+        subprocess.Popen([os.path.join(win, "explorer.exe"), target])
+
+    @staticmethod
+    def _setup_running(path, wait=8.0):
+        """Работает ли уже установщик: файл запущенной программы Windows не даёт открыть на запись."""
+        import time
+        end = time.monotonic() + wait
+        while time.monotonic() < end:
+            try:
+                with open(path, "r+b"):
+                    pass
+            except PermissionError:
+                return True
+            except OSError:
+                return False
+            QApplication.processEvents()
+            time.sleep(0.25)
+        return False
 
     def update_blocked(self, setup=None):
         """Windows (антивирус или настройки компьютера) не дал запустить установку — объяснить, что делать,
