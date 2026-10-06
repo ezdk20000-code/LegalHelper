@@ -6,7 +6,7 @@
 },
 {
 "path": "CHANGELOG.md",
-"size": 99091
+"size": 99413
 },
 {
 "path": "README.md",
@@ -18,7 +18,7 @@
 },
 {
 "path": "app.ico",
-"size": 38663
+"size": 13482
 },
 {
 "path": "app_menu.py",
@@ -353,6 +353,10 @@
 "size": 258149
 },
 {
+"path": "logo.svg",
+"size": 507
+},
+{
 "path": "modern_ui.py",
 "size": 16656
 },
@@ -426,7 +430,7 @@
 },
 {
 "path": "version.json",
-"size": 888
+"size": 981
 },
 {
 "path": "word_editor.py",

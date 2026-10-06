@@ -116,7 +116,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.7.2"
+APP_VERSION = "3.7.3"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
