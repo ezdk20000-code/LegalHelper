@@ -891,8 +891,11 @@ def _f107_layout(items, ff):
     room = F107_COLS[2] - (F107_COLS[1] + 2.8) - 3
     row_h = (F107_ROW_Y[-1] - F107_ROW_Y[0]) / F107_ROWS
     sheets, cur, free = [], [], F107_ROWS
+    fits = [next((sz for sz in (F107_SIZE, 8.5, 8, 7.5, 7) if probe.width(n, sz) <= room), None)
+            for n, _q, _v in items]
+    one = min([sz for sz in fits if sz] or [F107_SIZE])      # однострочные — одним размером, чтобы опись была ровной
     for no, (name, q, v) in enumerate(items, 1):
-        size = next((sz for sz in (F107_SIZE, 8.5, 8) if probe.width(name, sz) <= room), None)
+        size = one if fits[no - 1] else None
         if size:
             chunks = [(1, "one", [name], size)]
         else:
@@ -996,8 +999,7 @@ def f107_pdf(items, sender="", spi="", out=None, **_old):
                         w.at((c[0] + c[1]) / 2, ty, str(no))
                         w.at((c[2] + c[3]) / 2, ty, str(q))
                         w.at((c[3] + c[4]) / 2, ty, _f107_value(v))
-                    t = ty
-                    base = ((t - 2.3) + (t + 12.1)) / 2 + (w.font.ascender + w.font.descender) * size / 2
+                    base = (top + bot) / 2 + (w.font.ascender + w.font.descender) * size / 2
                     w.text(c[1] + 2.8, base, lines[0], size)
                     continue
                 if no is not None:            # номер, количество и ценность — по центру объединённой ячейки

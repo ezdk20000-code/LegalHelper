@@ -6,7 +6,7 @@
 },
 {
 "path": "CHANGELOG.md",
-"size": 106494
+"size": 107034
 },
 {
 "path": "README.md",
@@ -342,7 +342,7 @@
 },
 {
 "path": "installer.iss",
-"size": 4708
+"size": 4710
 },
 {
 "path": "kad_ui.py",
@@ -354,7 +354,7 @@
 },
 {
 "path": "legal_core.py",
-"size": 70902
+"size": 71110
 },
 {
 "path": "legal_data.py",
@@ -382,7 +382,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 351258
+"size": 351260
 },
 {
 "path": "phone_export.py",
@@ -442,7 +442,7 @@
 },
 {
 "path": "version.json",
-"size": 923
+"size": 1037
 },
 {
 "path": "word_editor.py",
