@@ -765,8 +765,8 @@ F107_KINDS = ["ценное письмо", "ценную бандероль", "�
 # тем же шрифтом (Arial Bold 9 пт), что и на бланках с pochta.ru.
 F107_ROWS = 14
 F107_COPY_DX = 417.8                       # сдвиг второго экземпляра вправо
-F107_ROW_Y = (136.1, 150.9, 165.7, 180.5, 195.3, 210.1, 224.8, 239.6, 254.4, 268.6, 282.7, 296.9, 311.1,
-              325.2, 339.4)                # границы 14 строк таблицы
+F107_ROW_Y = (136.1, 151.1, 165.5, 180.0, 194.4, 208.9, 223.4, 237.8, 252.3, 266.7, 281.2, 295.6, 310.1,
+              324.5, 339.4)                # линии между 14 строками таблицы (замерены по отрисовке бланка)
 F107_COLS = (50.5, 77.4, 258.0, 299.6, 376.4)   # № | наименование | кол-во | ценность
 F107_TEXT_TOP = 138.4                     # верх текста 1-й строки; дальше — ровный шаг, как у генератора pochta.ru
 F107_PITCH = 14.5
@@ -892,42 +892,64 @@ def f107_pdf(items, sender="", spi="", out=None, **_old):
     vals = [float(v) for _n, _q, v in items if v not in (None, "")]
     tot_v = _f107_value(sum(vals)) if vals else "0"
     spi = "".join(ch for ch in str(spi or "") if not ch.isspace())[:14]
-    # раскладка по строкам бланка: короткое название — одна строка, длинное переносится на следующие строки
-    # (как в описях, которые делает сайт Почты), ничего не обрезается; пункт не разрывается между листами
+    # раскладка: короткое название — одна строка бланка; длинное переносится внутри своего пункта — ячейки
+    # нескольких строк бланка объединяются (линии между ними убираются), ничего не обрезается;
+    # пункт не разрывается между листами, если только он сам не длиннее листа
     probe = _F107Writer(fitz.open().new_page(), ff)
     room = F107_COLS[2] - (F107_COLS[1] + 2.8) - 3
+    row_h = (F107_ROW_Y[-1] - F107_ROW_Y[0]) / F107_ROWS
     sheets, cur, free = [], [], F107_ROWS
     for no, (name, q, v) in enumerate(items, 1):
         size = next((sz for sz in (F107_SIZE, 8.5, 8) if probe.width(name, sz) <= room), None)
         lines = [name] if size else _wrap_full(probe, name, room, 8)
         size = size or 8
-        parts = [lines[i:i + F107_ROWS] for i in range(0, len(lines), F107_ROWS)]   # больше листа — по листам
+        lh = size * 1.18
+        per_sheet = max(1, int((F107_ROWS * row_h - 3) // lh))
+        parts = [lines[i:i + per_sheet] for i in range(0, len(lines), per_sheet)]   # больше листа — по листам
         for k, part in enumerate(parts):
-            if len(part) > free:
+            rows = 1 if len(part) == 1 else min(F107_ROWS, math.ceil((len(part) * lh + 3) / row_h))
+            if rows > free:
                 sheets.append(cur)
                 cur, free = [], F107_ROWS
-            cur.append((F107_ROWS - free, no if k == 0 else None, part, size, q if k == 0 else None,
+            cur.append((F107_ROWS - free, rows, no if k == 0 else None, part, size, q if k == 0 else None,
                         v if k == 0 else None))
-            free -= len(part)
+            free -= rows
     sheets.append(cur)
     doc = fitz.open()
     tpl = fitz.open(blank)
     for n, placed in enumerate(sheets):
         doc.insert_pdf(tpl)
-        w = _F107Writer(doc[-1], ff)
+        page = doc[-1]
+        w = _F107Writer(page, ff)
         last = n == len(sheets) - 1
         for dx in (0, F107_COPY_DX):
             c = [x + dx for x in F107_COLS]
-            for row, no, lines, size, q, v in placed:
-                ty = F107_TEXT_TOP + row * F107_PITCH
-                if no is not None:
-                    w.at((c[0] + c[1]) / 2, ty, str(no))
-                    w.at((c[2] + c[3]) / 2, ty, str(q))
-                    w.at((c[3] + c[4]) / 2, ty, _f107_value(v))
+            for row, rows, no, lines, size, q, v in placed:
+                top, bot = F107_ROW_Y[row], F107_ROW_Y[row + rows]
+                if rows > 1:                  # одна ячейка на весь пункт: убрать линии между её строками
+                    for y in F107_ROW_Y[row + 1:row + rows]:
+                        for x0, x1 in zip(c, c[1:]):
+                            page.draw_rect(fitz.Rect(x0 + 0.36, y - 0.6, x1 - 0.36, y + 0.6), color=None,
+                                           fill=(1, 1, 1), overlay=True)
+                if rows == 1:
+                    ty = F107_TEXT_TOP + row * F107_PITCH
+                    if no is not None:
+                        w.at((c[0] + c[1]) / 2, ty, str(no))
+                        w.at((c[2] + c[3]) / 2, ty, str(q))
+                        w.at((c[3] + c[4]) / 2, ty, _f107_value(v))
+                    t = ty
+                    base = ((t - 2.3) + (t + 12.1)) / 2 + (w.font.ascender + w.font.descender) * size / 2
+                    w.text(c[1] + 2.8, base, lines[0], size)
+                    continue
+                if no is not None:            # номер, количество и ценность — по центру объединённой ячейки
+                    w.centered(c[0], c[1], top, bot, str(no))
+                    w.centered(c[2], c[3], top, bot, str(q))
+                    w.centered(c[3], c[4], top, bot, _f107_value(v))
+                lh = size * 1.18
+                y0 = (top + bot) / 2 - len(lines) * lh / 2
                 for j, line in enumerate(lines):
-                    t = ty + j * F107_PITCH
-                    top, bot = t - 2.3, t + 12.1
-                    base = (top + bot) / 2 + (w.font.ascender + w.font.descender) * size / 2
+                    lt = y0 + j * lh
+                    base = lt + lh / 2 + (w.font.ascender + w.font.descender) * size / 2
                     w.text(c[1] + 2.8, base, line, size)
             if last:
                 ty, cq, cv = F107_TOTAL
