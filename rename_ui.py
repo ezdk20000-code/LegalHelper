@@ -64,6 +64,13 @@ def _flush(main):
             rows.append(dict(cid=cid, did=did, path=path, stem=s["stem"], kind=s["kind"], checked=True))
     if not rows:
         return
+    if getattr(main, "_hear_pending", False):     # сначала ответят про найденные даты заседаний
+        main._rename_deferred = lambda: _offer(main, rows)
+        return
+    _offer(main, rows)
+
+
+def _offer(main, rows):
     if len(rows) == 1:
         r = rows[0]
         ext = Path(r["path"]).suffix

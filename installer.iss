@@ -1,7 +1,7 @@
 ﻿; Скрипт установщика Inno Setup 6 для «LegalHelper» (до версии 1.6 — «PDF Мастер»)
 #define MyAppName "LegalHelper"
 #ifndef MyAppVersion
-  #define MyAppVersion "3.8"
+  #define MyAppVersion "3.9"
 #endif
 #define MyAppExe "LegalHelper.exe"
 
@@ -51,10 +51,13 @@ Type: files; Name: "{autodesktop}\PDF Мастер.lnk"
 
 [Files]
 Source: "dist\LegalHelper\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; значок ярлыков отдельным файлом с новым именем: Windows кэширует значки по пути, и после смены логотипа
+; ярлык со старым путём показывал бы старый значок
+Source: "app.ico"; DestDir: "{app}"; DestName: "LegalHelper-logo-blue.ico"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; IconFilename: "{app}\LegalHelper-logo-blue.ico"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; IconFilename: "{app}\LegalHelper-logo-blue.ico"; Tasks: desktopicon
 
 [Registry]
 ; «Открыть с помощью» старой версии (PDFMaster.exe)
@@ -68,6 +71,8 @@ Root: HKA; Subkey: "Software\Classes\PDFMaster.pdf\DefaultIcon"; ValueType: stri
 Root: HKA; Subkey: "Software\Classes\PDFMaster.pdf\shell\open\command"; ValueType: string; ValueData: """{app}\{#MyAppExe}"" ""%1"""; Tasks: openwith
 
 [Run]
+; обновить кэш значков Windows — новый логотип сразу на рабочем столе и в «Пуске»
+Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden nowait skipifdoesntexist
 Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 ; обновление из программы (тихая установка /SILENT) — сразу открыть программу снова
 Filename: "{app}\{#MyAppExe}"; Flags: nowait; Check: WizardSilent

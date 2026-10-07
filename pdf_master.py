@@ -38,6 +38,8 @@ import timer_widget as TW
 import extwatch
 import tutorial
 import rename_ui
+import hearings_ui
+import yacal_ui
 import zoom_ui
 import phone_export as PHX
 import palette
@@ -116,7 +118,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.8"
+APP_VERSION = "3.9"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -271,6 +273,7 @@ def changes_html(changes, notes=()):
             if ":" in t[:80]:                                       # «Главное: пояснение» — главное жирным
                 a, b = t.split(":", 1)
                 t = f"<b>{a}:</b>{b}"
+            t = t.replace(" Как пользоваться:", f"<br><span style='color:{T['accent']}'>👉 <b>Как пользоваться:</b></span>")
             lis.append(f"<li style='margin-bottom:6px'>{t}</li>")
         parts.append("<ul style='margin-top:2px'>" + "".join(lis) + "</ul>")
     if not parts:
@@ -1997,6 +2000,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(2500, lambda: tutorial.offer(self))
         self.extwatch = extwatch.ExtWatch(self)
         rename_ui.install(self)
+        hearings_ui.install(self)
+        yacal_ui.install(self)
         self.extwatch.changed.connect(self.on_external_changed)
         self.case_sync_timer = QTimer(self)
         self.case_sync_timer.setInterval(3 * 60 * 1000)      # сведения о деле — в его папку
@@ -2142,6 +2147,8 @@ class MainWindow(QMainWindow):
         ml.addAction("Шаблоны документов…", lambda: U.tool_template(self))
         ml.addAction("Карта дела (Excalidraw)", self.tool_board)
         ml.addAction("Мои реквизиты…", lambda: U.tool_profile(self))
+        ml.addAction("📆 Сроки в Яндекс Календарь…", lambda: yacal_ui.open_dialog(self))
+        ml.addAction("📆 Выгрузить сроки в файл календаря (.ics)…", lambda: yacal_ui.export_ics(self))
         ml.addSeparator()
         for cat, items in TOOLS[:3]:
             for key, label, _tip in items:

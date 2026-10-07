@@ -878,6 +878,75 @@ def _f107_value(v):
     return money(v, cents=abs(v - round(v)) > 0.004)
 
 
+F107_TWO = 6.4                             # шрифт двух строк внутри одной строки бланка
+F107_TWO_LH = 6.6
+
+
+def _f107_layout(items, ff):
+    """Раскладка пунктов по листам бланка: [[(строка, строк, №, [текст], шрифт, вид, кол-во, ценность)]].
+    вид: «one» — одна строка; «two» — две строки мельче внутри одной строки бланка; «merge» — длинный
+    пункт в объединённой ячейке из нескольких строк. Пункт не разрывается между листами, если он сам не
+    длиннее листа."""
+    probe = _F107Writer(fitz.open().new_page(), ff)
+    room = F107_COLS[2] - (F107_COLS[1] + 2.8) - 3
+    row_h = (F107_ROW_Y[-1] - F107_ROW_Y[0]) / F107_ROWS
+    sheets, cur, free = [], [], F107_ROWS
+    for no, (name, q, v) in enumerate(items, 1):
+        size = next((sz for sz in (F107_SIZE, 8.5, 8) if probe.width(name, sz) <= room), None)
+        if size:
+            chunks = [(1, "one", [name], size)]
+        else:
+            two = _wrap_full(probe, name, room, F107_TWO)
+            if len(two) <= 2:
+                chunks = [(1, "two", two, F107_TWO)]
+            else:
+                lines = _wrap_full(probe, name, room, 8)
+                lh = 8 * 1.18
+                per_sheet = max(1, int((F107_ROWS * row_h - 3) // lh))
+                chunks = []
+                for i in range(0, len(lines), per_sheet):
+                    part = lines[i:i + per_sheet]
+                    chunks.append((min(F107_ROWS, math.ceil((len(part) * lh + 3) / row_h)), "merge", part, 8))
+        for k, (rows, kind, part, sz) in enumerate(chunks):
+            if rows > free:
+                sheets.append(cur)
+                cur, free = [], F107_ROWS
+            cur.append((F107_ROWS - free, rows, no if k == 0 else None, part, sz, kind,
+                        q if k == 0 else None, v if k == 0 else None))
+            free -= rows
+    sheets.append(cur)
+    return sheets
+
+
+def f107_sheets(items):
+    """Сколько листов займёт опись (для подсказки в окне)."""
+    items = [(str(n).strip(), int(q or 0), v) for n, q, v in items if str(n).strip()]
+    return len(_f107_layout(items, _f107_font())) if items else 0
+
+
+_F107_SHORT = [
+    (r"\bобществ\w* с ограниченной ответственностью\b", "ООО"), (r"\bпубличн\w* акционерн\w* обществ\w*\b", "ПАО"),
+    (r"\bакционерн\w* обществ\w*\b", "АО"), (r"\bиндивидуальн\w* предпринимател\w*\b", "ИП"),
+    (r"\bРоссийской Федерации\b", "РФ"), (r"\bгосударственной пошлины\b", "госпошлины"),
+    (r"\bплатёжного поручения\b|\bплатежного поручения\b", "п/п"),
+    (r"\bза пользование чужими денежными средствами\b", "по ст. 395 ГК РФ"),
+    (r"\bс доказательств\w* (?:её |его |их )?направления\b", "с док-вом направления"),
+    (r"\b(доверенност\w*) представителя\b", r"\1"),
+    (r"\b(выписк\w*) из Единого государственного реестра юридических лиц\b", r"\1 из ЕГРЮЛ"),
+    (r"(\d{1,2}\.\d{1,2}\.\d{4})\s*(?:г\.|года)", r"\1"), (r"\s+№\s+", " № "), (r"\s{2,}", " "),
+]
+
+
+def f107_shorten(name):
+    """Короче, но без потери смысла: ООО, РФ, госпошлина, п/п, «по ст. 395 ГК РФ», даты без «г.»."""
+    s = str(name)
+    for rx, rep in _F107_SHORT:
+        s = re.sub(rx, rep, s, flags=re.I)
+    s = s.strip()
+    return s[:1].upper() + s[1:] if str(name)[:1].isupper() else s
+
+
+
 def f107_pdf(items, sender="", spi="", out=None, **_old):
     """Опись вложения ф. 107 на официальном бланке Почты России.
     items — [(наименование, количество, ценность руб. или None)]; sender — отправитель (ФИО или организация);
@@ -892,29 +961,7 @@ def f107_pdf(items, sender="", spi="", out=None, **_old):
     vals = [float(v) for _n, _q, v in items if v not in (None, "")]
     tot_v = _f107_value(sum(vals)) if vals else "0"
     spi = "".join(ch for ch in str(spi or "") if not ch.isspace())[:14]
-    # раскладка: короткое название — одна строка бланка; длинное переносится внутри своего пункта — ячейки
-    # нескольких строк бланка объединяются (линии между ними убираются), ничего не обрезается;
-    # пункт не разрывается между листами, если только он сам не длиннее листа
-    probe = _F107Writer(fitz.open().new_page(), ff)
-    room = F107_COLS[2] - (F107_COLS[1] + 2.8) - 3
-    row_h = (F107_ROW_Y[-1] - F107_ROW_Y[0]) / F107_ROWS
-    sheets, cur, free = [], [], F107_ROWS
-    for no, (name, q, v) in enumerate(items, 1):
-        size = next((sz for sz in (F107_SIZE, 8.5, 8) if probe.width(name, sz) <= room), None)
-        lines = [name] if size else _wrap_full(probe, name, room, 8)
-        size = size or 8
-        lh = size * 1.18
-        per_sheet = max(1, int((F107_ROWS * row_h - 3) // lh))
-        parts = [lines[i:i + per_sheet] for i in range(0, len(lines), per_sheet)]   # больше листа — по листам
-        for k, part in enumerate(parts):
-            rows = 1 if len(part) == 1 else min(F107_ROWS, math.ceil((len(part) * lh + 3) / row_h))
-            if rows > free:
-                sheets.append(cur)
-                cur, free = [], F107_ROWS
-            cur.append((F107_ROWS - free, rows, no if k == 0 else None, part, size, q if k == 0 else None,
-                        v if k == 0 else None))
-            free -= rows
-    sheets.append(cur)
+    sheets = _f107_layout(items, ff)
     doc = fitz.open()
     tpl = fitz.open(blank)
     for n, placed in enumerate(sheets):
@@ -924,13 +971,25 @@ def f107_pdf(items, sender="", spi="", out=None, **_old):
         last = n == len(sheets) - 1
         for dx in (0, F107_COPY_DX):
             c = [x + dx for x in F107_COLS]
-            for row, rows, no, lines, size, q, v in placed:
+            for row, rows, no, lines, size, kind, q, v in placed:
                 top, bot = F107_ROW_Y[row], F107_ROW_Y[row + rows]
                 if rows > 1:                  # одна ячейка на весь пункт: убрать линии между её строками
                     for y in F107_ROW_Y[row + 1:row + rows]:
                         for x0, x1 in zip(c, c[1:]):
                             page.draw_rect(fitz.Rect(x0 + 0.36, y - 0.6, x1 - 0.36, y + 0.6), color=None,
                                            fill=(1, 1, 1), overlay=True)
+                if kind == "two":             # две строки мельче — внутри одной строки бланка
+                    ty = F107_TEXT_TOP + row * F107_PITCH
+                    if no is not None:
+                        w.at((c[0] + c[1]) / 2, ty, str(no))
+                        w.at((c[2] + c[3]) / 2, ty, str(q))
+                        w.at((c[3] + c[4]) / 2, ty, _f107_value(v))
+                    y0 = (top + bot) / 2 - len(lines) * F107_TWO_LH / 2
+                    for j, line in enumerate(lines):
+                        lt = y0 + j * F107_TWO_LH
+                        base = lt + F107_TWO_LH / 2 + (w.font.ascender + w.font.descender) * size / 2
+                        w.text(c[1] + 2.8, base, line, size)
+                    continue
                 if rows == 1:
                     ty = F107_TEXT_TOP + row * F107_PITCH
                     if no is not None:

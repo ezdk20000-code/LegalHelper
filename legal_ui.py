@@ -1264,6 +1264,12 @@ class ReminderDialog(QDialog):
         self.accept()
 
 
+def is_arbitr(case):
+    num = (case.get("number") or "").strip()
+    return ("арбитраж" in (case.get("court") or "").lower() or "kad.arbitr" in (case.get("court_url") or "")
+            or bool(re.match(r"[АA]\d{1,2}-\d+/\d{2,4}", num)))
+
+
 def court_search_targets(case):
     """Куда можно пойти искать дело по номеру: [(подпись, адрес)]."""
     num = (case.get("number") or "").strip()
@@ -1287,6 +1293,10 @@ def court_menu(main, cid, anchor):
     m = QMenu(anchor)
     if url:
         m.addAction("🌐 Открыть карточку дела", lambda: QDesktopServices.openUrl(QUrl(url)))
+    if is_arbitr(c):
+        m.addAction("📥 Проверить дело на kad.arbitr.ru — новые заседания и акты",
+                    lambda: __import__("kad_ui").open_window(main, cid))
+    if url or is_arbitr(c):
         m.addSeparator()
     num = (c.get("number") or "").strip()
 
@@ -2447,12 +2457,31 @@ class CasesPage(QWidget):
         v.addWidget(self.ev_stack, 1)
         r = QHBoxLayout()
         for text, fn in (("+ Заседание", lambda: self.add_event("Заседание")), ("+ Срок", lambda: self.add_event("Срок")),
-                         ("+ Задача", lambda: self.add_event("Задача")), ("Отметить выполненным", self.toggle_done),
+                         ("+ Задача", lambda: self.add_event("Задача")), ("✓ Выполнено", self.toggle_done),
                          ("Удалить", self.del_event)):
             b = QPushButton(text)
             b.clicked.connect(fn)
             r.addWidget(b)
         r.addStretch(1)
+        cal = QPushButton("📆  Календарь")
+        cal.setToolTip("Сроки и заседания — в Яндекс Календарь на телефоне или в файл для Google и Outlook")
+        cm = QMenu(cal)
+        cm.addAction("Яндекс Календарь — синхронизация…", lambda: __import__("yacal_ui").open_dialog(self.main))
+        cm.addAction("Выгрузить сроки этого дела в файл (.ics)…",
+                     lambda: __import__("yacal_ui").export_ics(self.main, self.cid))
+        cm.addAction("Выгрузить сроки всех дел в файл (.ics)…", lambda: __import__("yacal_ui").export_ics(self.main))
+        cal.setMenu(cm)
+        r.addWidget(cal)
+        kad = QPushButton("🔎  Картотека kad")
+        kad.setToolTip("Проверить дело на kad.arbitr.ru: открыть карточку дела в картотеке прямо в программе и забрать оттуда новые заседания "
+                       "и судебные акты")
+        kad.clicked.connect(lambda: __import__("kad_ui").open_window(self.main, self.cid))
+        r.addWidget(kad)
+        scan = QPushButton("📄  Даты из документов")
+        scan.setToolTip("Найти в определениях и других документах дела даты заседаний («назначить судебное заседание "
+                        "на…») и сроки («представить отзыв в срок до…») и добавить их сюда")
+        scan.clicked.connect(lambda: __import__("hearings_ui").scan_case(self.main, self.cid))
+        r.addWidget(scan)
         calc = QPushButton("⏱  Посчитать срок")
         calc.setToolTip("Калькулятор процессуальных сроков с учётом выходных и праздников; "
                         "результат можно сразу добавить в дело")
@@ -3414,7 +3443,7 @@ class F107Dialog(QDialog):
         v.addLayout(title_row("Опись вложения ф. 107", "f107", big=True))
         s = M.settings()
         note = QLabel("Официальный бланк Почты России (как на pochta.ru): альбомный лист, два экземпляра рядом, "
-                      "14 строк на листе, длинные названия переносятся целиком. Получатель и адрес в описи ф. 107 не указываются — они на конверте.")
+                      "14 строк на листе. Короткое название — одной строкой, подлиннее — двумя строками мельче в той же строке, совсем длинное — одной ячейкой на несколько строк. Получатель и адрес в описи ф. 107 не указываются — они на конверте.")
         note.setObjectName("note")
         note.setWordWrap(True)
         v.addWidget(note)
@@ -3440,13 +3469,21 @@ class F107Dialog(QDialog):
             b = QPushButton(text)
             b.clicked.connect(fn)
             r.addWidget(b)
+        self.b_short = QPushButton("✂ Сократить названия")
+        self.b_short.setToolTip("ООО вместо «общество с ограниченной ответственностью», госпошлина, п/п, «по ст. 395 ГК РФ», "
+                                "даты без «г.».\nПосле сокращения любое название можно поправить вручную — двойной щелчок.")
+        self.b_short.clicked.connect(self.shorten)
+        r.addWidget(self.b_short)
         r.addStretch(1)
         hint = QLabel("Пустая ценность — прочерк")
         hint.setObjectName("hint")
         r.addWidget(hint)
         v.addLayout(r)
         bb = QHBoxLayout()
-        bb.addStretch(1)
+        self.sheets = QLabel()
+        self.sheets.setObjectName("hint")
+        self.sheets.setWordWrap(True)
+        bb.addWidget(self.sheets, 1)
         bc = QPushButton("Закрыть")
         bc.clicked.connect(self.reject)
         bs = QPushButton("Сохранить PDF…")
@@ -3459,6 +3496,48 @@ class F107Dialog(QDialog):
             self.add_row(*row)
         if not rows:
             self.add_row("", 1, 1)
+        self._count_timer = QTimer(self)
+        self._count_timer.setSingleShot(True)
+        self._count_timer.timeout.connect(self.update_count)
+        self.t.itemChanged.connect(lambda *_: self._count_timer.start(250))
+        self.t.model().rowsRemoved.connect(lambda *_: self._count_timer.start(250))
+        self.update_count()
+
+    def _rows(self):
+        out = []
+        for r in range(self.t.rowCount()):
+            name = (self.t.item(r, 0) or QTableWidgetItem("")).text().strip()
+            if name:
+                q = (self.t.item(r, 1) or QTableWidgetItem("1")).text().strip() or "1"
+                val = (self.t.item(r, 2) or QTableWidgetItem("")).text().strip().replace(",", ".")
+                out.append((r, name, q, val))
+        return out
+
+    def update_count(self):
+        """«Опись займёт N листов»: короткое — одной строкой, подлиннее — двумя строками мельче в той же строке
+        бланка, совсем длинное — в объединённой ячейке на несколько строк."""
+        items = [(n, int(q) if q.isdigit() else 1, None) for _r, n, q, _v in self._rows()]
+        n = L.f107_sheets(items) if items else 0
+        if not n:
+            return self.sheets.setText("")
+        tip = "Опись займёт <b>%d %s</b>" % (n, L.plural(n, "лист", "листа", "листов"))
+        if n > 1 and any(L.f107_shorten(name) != name for name, _q, _v in items):
+            tip += " — чтобы уместить на меньшем числе листов, нажмите «Сократить названия»"
+        self.sheets.setText(tip)
+
+    def shorten(self):
+        changed = 0
+        for r in range(self.t.rowCount()):
+            it = self.t.item(r, 0)
+            if it and it.text().strip():
+                new = L.f107_shorten(it.text())
+                if new != it.text().strip():
+                    it.setText(new)
+                    changed += 1
+        self.update_count()
+        self.b_short.setText("✂ Сокращено: %d — поправьте, если нужно" % changed if changed else
+                             "✂ Сокращать нечего")
+        QTimer.singleShot(3500, lambda: self.b_short.setText("✂ Сократить названия"))
 
     def add_row(self, name, q, val):
         r = self.t.rowCount()
@@ -3469,12 +3548,7 @@ class F107Dialog(QDialog):
 
     def save(self):
         items = []
-        for r in range(self.t.rowCount()):
-            name = (self.t.item(r, 0) or QTableWidgetItem("")).text().strip()
-            if not name:
-                continue
-            q = (self.t.item(r, 1) or QTableWidgetItem("1")).text().strip() or "1"
-            val = (self.t.item(r, 2) or QTableWidgetItem("")).text().strip().replace(",", ".")
+        for r, name, q, val in self._rows():
             try:
                 items.append((name, int(q), float(val) if val else None))
             except ValueError:

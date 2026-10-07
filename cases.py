@@ -444,7 +444,7 @@ class CaseDB:
 
     # ---------------------------------------------------------------- события
     def events(self, cid=None, upcoming_days=None, include_done=True):
-        sql, args = "SELECT e.*, c.title AS case_title, c.number AS case_number FROM events e " \
+        sql, args = "SELECT e.*, c.title AS case_title, c.number AS case_number, c.archived AS archived FROM events e " \
                     "LEFT JOIN cases c ON c.id=e.case_id WHERE 1=1", []
         if cid is not None:
             sql += " AND e.case_id=?"
