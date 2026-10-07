@@ -116,7 +116,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.7.5"
+APP_VERSION = "3.8"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -2117,7 +2117,8 @@ class MainWindow(QMainWindow):
         for i, (name, key) in enumerate((("Обзор дела", "overview"), ("Документы", "docs"),
                                          ("Создать документ", "prepare"), ("Сроки", "events"),
                                          ("Деньги", "money"), ("Сведения", "info"),
-                                         ("Судебная практика", "practice"))):
+                                         ("Судебная практика", "practice"), ("Нормы права", "laws"),
+                                         ("Карта дела", "board"))):
             a = mv.addAction(name, lambda key=key: self.open_case_tab(key))
             a.setShortcut(f"Ctrl+{i + 1}")
         mv.addAction(self.a_nav)
@@ -4770,9 +4771,9 @@ class MainWindow(QMainWindow):
         # понятные названия; редкое — в «Ещё ▾»
         order = [("overview", "Обзор", self.overview), ("docs", "Документы", docs),
                  ("prepare", "Создать документ", prepare), ("events", "Сроки", cp.events_tab),
+                 ("laws", "Нормы права", cp.laws_tab), ("practice", "Судебная практика", cp.practice_tab),
+                 ("board", "Карта дела", cp.board_tab),
                  ("money", "Деньги", money), ("info", "Сведения", by_name.get("Сведения")),
-                 ("practice", "Судебная практика", cp.practice_tab),
-                 ("board", "Карта дела", cp.board_tab), ("laws", "Нормы права", cp.laws_tab),
                  ("quotes", "Выписки", by_name.get("Выписки"))]
         self.case_tab_keys = {}
         for key, title, w in order:
@@ -4784,10 +4785,12 @@ class MainWindow(QMainWindow):
                 "events": "Заседания, процессуальные сроки и задачи — с напоминаниями",
                 "money": "Учёт времени и оплат, калькуляторы госпошлины, процентов и сроков",
                 "info": "Суд, номер дела, стороны, инстанции, папка дела",
-                "practice": "Судебная практика по доводам: вставьте реквизиты акта — остальное заполнится само"}
+                "practice": "Судебная практика по доводам: вставьте реквизиты акта — остальное заполнится само",
+                "laws": "Нормы права для позиции: напишите «ст. 395 ГК РФ» — статья добавится сама",
+                "board": "Интеллект-карта дела: факты, позиции сторон, доказательства, риски. Можно на весь экран"}
         for key, tip in tips.items():
             tabs.setTabToolTip(self.case_tab_keys[key], tip)
-        self.hidden_tabs = [self.case_tab_keys[k] for k in ("board", "laws", "quotes")]
+        self.hidden_tabs = [self.case_tab_keys[k] for k in ("quotes",)]
         for i in self.hidden_tabs:
             tabs.setTabVisible(i, False)
         more = QToolButton()
@@ -4795,7 +4798,7 @@ class MainWindow(QMainWindow):
         more.setText("Ещё ▾")
         more.setPopupMode(QToolButton.InstantPopup)
         mm = QMenu(more)
-        for key, title in (("board", "🗺️ Карта дела"), ("laws", "📚 Нормы права"), ("quotes", "✂️ Выписки")):
+        for key, title in (("quotes", "✂️ Выписки — цитаты из документов с номером листа"),):
             mm.addAction(title, lambda k=key: self.open_case_tab(k))
         mm.addSeparator()
         mm.addAction("📁 Открыть папку дела", lambda: U.open_case_folder(self.mode_cid))

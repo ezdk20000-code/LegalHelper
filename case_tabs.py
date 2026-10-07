@@ -965,8 +965,8 @@ class BoardTab(QWidget):
         self.state.setMinimumWidth(10)
         top.addWidget(self.state)
         top.addWidget(_btn("Новая карта из шаблона", self.new_map))
-        self.b_win = _btn("В отдельном окне", self.fullscreen, tip="Открыть карту в большом отдельном окне. "
-                                                               "Закройте окно — карта вернётся во вкладку.")
+        self.b_win = _btn("⛶  На весь экран", self.fullscreen, tip="Карта на весь экран (F11). Esc или F11 — "
+                                                                  "вернуть во вкладку.")
         top.addWidget(self.b_win)
         v.addLayout(top)
         self.host = QVBoxLayout()
@@ -1125,7 +1125,7 @@ class BoardTab(QWidget):
             self.view.page().runJavaScript(f"PM.setTheme({_js(name)})")
 
     def fullscreen(self):
-        """Вынести карту в отдельное окно; при закрытии окна она возвращается во вкладку."""
+        """Карта на весь экран; «Вернуть во вкладку», Esc или F11 — обратно во вкладку."""
         if not self._ensure_view():
             return
         if getattr(self, "win", None) is not None:
@@ -1147,6 +1147,7 @@ class BoardTab(QWidget):
                     tab.release_timer.start()
                 e.accept()
 
+        from PySide6.QtGui import QShortcut, QKeySequence
         self.win = BoardWindow()
         self.win.setAttribute(Qt.WA_DeleteOnClose)
         title = (db().case(self.cid) or {}).get("title", "Дело") if self.cid else "Дело"
@@ -1154,11 +1155,33 @@ class BoardTab(QWidget):
         self.win.setWindowIcon(self.main.windowIcon())
         lay = QVBoxLayout(self.win)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        bar = QFrame()
+        bar.setObjectName("boardbar")
+        bar.setStyleSheet("QFrame#boardbar { background: palette(window); border-bottom: 1px solid rgba(128,128,128,.25); }")
+        bh = QHBoxLayout(bar)
+        bh.setContentsMargins(14, 6, 8, 6)
+        cap = QLabel(f"🗺️  Карта дела — {title}")
+        f = cap.font()
+        f.setBold(True)
+        cap.setFont(f)
+        bh.addWidget(cap)
+        bh.addStretch(1)
+        hint = QLabel("Esc или F11 — вернуть во вкладку")
+        hint.setObjectName("hint")
+        bh.addWidget(hint)
+        back = _btn("✕  Вернуть во вкладку", self.win.close, primary=True)
+        bh.addWidget(back)
+        lay.addWidget(bar)
         self.host.removeWidget(self.view)
-        lay.addWidget(self.view)
+        lay.addWidget(self.view, 1)
+        for key in ("Esc", "F11"):
+            sc = QShortcut(QKeySequence(key), self.win)
+            sc.setContext(Qt.WindowShortcut)
+            sc.activated.connect(self.win.close)
         self.b_win.setEnabled(False)
-        self.win.resize(1400, 900)
-        self.win.showMaximized()
+        self.win.showFullScreen()
+        self.view.setFocus()
 
     def shutdown(self):
         """Перед выходом: остановить автосохранение (сама карта уже сохранена в flush)."""

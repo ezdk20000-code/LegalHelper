@@ -6,7 +6,7 @@
 },
 {
 "path": "CHANGELOG.md",
-"size": 100152
+"size": 101052
 },
 {
 "path": "README.md",
@@ -34,7 +34,7 @@
 },
 {
 "path": "case_tabs.py",
-"size": 86016
+"size": 86954
 },
 {
 "path": "casefile.py",
@@ -334,7 +334,7 @@
 },
 {
 "path": "installer.iss",
-"size": 3996
+"size": 3994
 },
 {
 "path": "laws_auto.py",
@@ -370,7 +370,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 350324
+"size": 350752
 },
 {
 "path": "phone_export.py",
