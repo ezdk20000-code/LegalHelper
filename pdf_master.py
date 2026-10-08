@@ -42,6 +42,7 @@ import rename_ui
 import hearings_ui
 import yacal_ui
 import outline_ui
+import titlebar
 import zoom_ui
 import phone_export as PHX
 import palette
@@ -120,7 +121,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.10.5"
+APP_VERSION = "3.11"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -2132,8 +2133,24 @@ class MainWindow(QMainWindow):
         if value != was:
             QTimer.singleShot(0, self._sync_save_button)
 
+    def set_custom_titlebar(self, on):
+        settings().setValue(titlebar.KEY, "1" if on else "0")
+        if QMessageBox.question(self, APP_NAME, ("Включить свою полосу заголовка" if on else
+                                                 "Вернуть обычную рамку Windows") +
+                                " — нужен перезапуск программы (2–3 секунды, откроется там же). Перезапустить сейчас?"
+                                ) == QMessageBox.Yes:
+            if not self.save_all_ws():
+                return
+            self._shutdown_data()
+            self.save_place()
+            settings().sync()
+            restart_app()
+
     def _sync_save_button(self):
         """Кнопка «Сохранить» видна только при изменениях; появление — с коротким «выездом», чтобы заметили."""
+        tb = getattr(self, "titlebar", None)
+        if tb is not None:
+            tb.refresh()
         a = getattr(self, "a_save_tb", None)
         if a is None or a.isVisible() == self.modified:
             return
@@ -2353,6 +2370,10 @@ class MainWindow(QMainWindow):
         mv.addSeparator()
         ah = mv.addAction("Главная", self.show_home)
         ah.setShortcut("Ctrl+H")
+        a_tb = mv.addAction("Своя полоса заголовка (как в VS Code)")
+        a_tb.setCheckable(True)
+        a_tb.setChecked(titlebar.enabled(settings))
+        a_tb.toggled.connect(self.set_custom_titlebar)
         a0 = mv.addAction("Без дела — просто PDF", lambda: self.enter_loose())
         a0.setShortcut("Ctrl+0")
         mt = mb.addMenu("Инструменты")
@@ -2723,6 +2744,10 @@ class MainWindow(QMainWindow):
         ch.addWidget(self._build_rail())
         ch.addWidget(right, 1)
         self.setCentralWidget(central)
+        try:
+            titlebar.install(self, settings)          # своя верхняя полоса вместо рамки Windows
+        except Exception as ex:
+            log_error("Своя полоса заголовка", ex)
         self.addAction(self.a_nav)
         self.set_sidebar(str(settings().value("sidebar_collapsed", "0")) != "1", animate=False)
         QTimer.singleShot(60, self._initial_mode)
@@ -6682,6 +6707,18 @@ QToolButton#appmenu::menu-indicator {{ image: none; width: 0; }}
 QToolButton#railbtn {{ border: none; border-radius: 10px; font-size: 14pt; background: transparent; color: {t['text']}; }}
 QToolButton#railbtn:hover {{ background: {t['side_hover']}; }}
 QWidget#sidebar {{ background: {t['side']}; border-right: 1px solid {t['border']}; }}
+QWidget#framebox {{ background: {t['win']}; border: 1px solid {t['border']}; }}
+QWidget#titlebar {{ background: {t['side']}; border-bottom: 1px solid {t['border']}; }}
+QLabel#tbcrumb {{ color: {t['text']}; font-size: 9.5pt; }}
+QLabel#tbstate {{ color: {t['muted']}; font-size: 9pt; padding-right: 10px; }}
+QLabel#tbstate[dirty="true"] {{ color: {A}; font-weight: 600; }}
+QPushButton#tbsearch {{ text-align: left; padding: 4px 12px; border-radius: 8px; background: {t['fill']};
+    color: {t['muted']}; border: 1px solid {t['border']}; font-size: 9pt; }}
+QPushButton#tbsearch:hover {{ border-color: {A}; color: {t['text']}; }}
+QToolButton#tbbtn, QToolButton#tbclose {{ border: none; border-radius: 0; background: transparent; color: {t['text']};
+    font-size: 11pt; }}
+QToolButton#tbbtn:hover {{ background: {t['side_hover']}; }}
+QToolButton#tbclose:hover {{ background: #e81123; color: white; }}
 QLabel#brand {{ color: {t['text']}; font-family: "{S}"; font-size: 14.5pt; font-weight: 700; }}
 QLabel#brandsub {{ color: {t['muted']}; font-size: 8.5pt; }}
 QToolButton#seg {{ background: transparent; color: {t['text']}; border: none; border-radius: 7px;
