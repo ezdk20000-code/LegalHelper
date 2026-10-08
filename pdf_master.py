@@ -5,6 +5,7 @@ LegalHelper — рабочее место юриста и настольный �
 """
 import os
 import sys
+import re
 import html
 import tempfile
 import traceback
@@ -40,6 +41,7 @@ import tutorial
 import rename_ui
 import hearings_ui
 import yacal_ui
+import outline_ui
 import zoom_ui
 import phone_export as PHX
 import palette
@@ -118,7 +120,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.9.2"
+APP_VERSION = "3.10"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -1931,6 +1933,29 @@ class CaseNavigator(QWidget):
 
 
 class MainWindow(QMainWindow):
+    @property
+    def modified(self):
+        return self.__dict__.get("_modified", False)
+
+    @modified.setter
+    def modified(self, value):
+        value = bool(value)
+        was = self.__dict__.get("_modified", False)
+        self.__dict__["_modified"] = value
+        if value != was:
+            QTimer.singleShot(0, self._sync_save_button)
+
+    def _sync_save_button(self):
+        """Кнопка «Сохранить» видна только при изменениях; появление — с коротким «выездом», чтобы заметили."""
+        a = getattr(self, "a_save_tb", None)
+        if a is None or a.isVisible() == self.modified:
+            return
+        a.setVisible(self.modified)
+        if self.modified:
+            btn = self.toolbar.widgetForAction(a)
+            if btn is not None:                        # после раскладки панели — иначе кнопка «уедет» не туда
+                QTimer.singleShot(40, lambda: anim.slide_in(btn, dx=0, dy=-8, ms=320))
+
     updateChecked = Signal(object, str, bool)      # сведения о версии | ошибка | тихая проверка
     updateProgress = Signal(int, int)
     updateDownloaded = Signal(str, str)            # путь к архиву | ошибка
@@ -2069,9 +2094,15 @@ class MainWindow(QMainWindow):
         sep_w = QWidget()
         sep_w.setFixedWidth(10)
         tb.addWidget(sep_w)
-        for a in (self.a_open, self.a_add, self.a_save):
+        # «Сохранить» на панели появляется, только когда есть несохранённые изменения (Ctrl+S работает всегда)
+        self.a_save_tb = QAction("💾 Сохранить", self)
+        self.a_save_tb.setToolTip("Есть несохранённые изменения — сохранить их (Ctrl+S)")
+        self.a_save_tb.triggered.connect(self.save)
+        self.addAction(self.a_save)
+        for a in (self.a_open, self.a_add, self.a_save_tb):
             tb.addAction(a)
-        tb.widgetForAction(self.a_save).setObjectName("tbprimary")
+        tb.widgetForAction(self.a_save_tb).setObjectName("tbprimary")
+        self.a_save_tb.setVisible(bool(self.modified))
         mb = self.menuBar()
         mf = mb.addMenu("Файл")
         for a in (self.a_open, self.a_add, self.a_save, self.a_saveas):
@@ -2369,13 +2400,22 @@ class MainWindow(QMainWindow):
         self.toolbar.removeAction(self.a_nav)
         self.docarea = QWidget()
         dv = QVBoxLayout(self.docarea)
-        dv.setContentsMargins(0, 0, 0, 0)
+        dv.setContentsMargins(0, 8, 0, 0)             # вровень с переключателем «Документы | Комплект» слева
         dv.setSpacing(0)
-        dv.addWidget(self.toolbar)
-        dv.addWidget(self.toolbar2)
+        bars = QWidget()                              # оба ряда кнопок — в одну строку: больше места страницам
+        bars.setObjectName("docbars")
+        bars.setAttribute(Qt.WA_StyledBackground, True)
+        bh2 = QHBoxLayout(bars)
+        bh2.setContentsMargins(0, 0, 0, 0)
+        bh2.setSpacing(0)
+        bh2.addWidget(self.toolbar, 0)
+        bh2.addWidget(self.toolbar2, 1)
+        self._tb_spacer.setVisible(False)
+        dv.addWidget(bars)
         self.page_split = QSplitter()
         self.page_split.setChildrenCollapsible(False)
-        self.page_split.addWidget(self.pages)
+        self.pages_box = outline_ui.PagesWithOutline(self, self.pages)    # «Страницы | Структура»
+        self.page_split.addWidget(self.pages_box)
         self.preview = PagePreview(self)
         self.preview.setMinimumWidth(280)
         self.page_split.addWidget(self.preview)
@@ -3307,7 +3347,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- thumbnails
     def cell_size(self):
-        return QSize(self.thumb_w + 16, int(self.thumb_w * 1.42) + 34)
+        return QSize(self.thumb_w + 16, int(self.thumb_w * 1.42) + 48)     # снизу — место под имя файла в 2 строки
 
     def apply_thumb_geometry(self):
         s = self.cell_size()
@@ -3366,7 +3406,7 @@ class MainWindow(QMainWindow):
         p = QPainter(pm)
         p.setRenderHint(QPainter.Antialiasing)
         img = self.thumbs[i] if i < len(self.thumbs) else None
-        area_h = s.height() - 30
+        area_h = s.height() - 44
         if img is not None:
             w, h = img.width() / dpr, img.height() / dpr
         else:
@@ -3406,8 +3446,33 @@ class MainWindow(QMainWindow):
         f.setBold(selected)
         p.setFont(f)
         label = str(i + 1)
-        if head:
-            label = p.fontMetrics().elidedText(f"{head[0]} · {head[1]} стр.", Qt.ElideMiddle, int(s.width() - 6))
+        if head:                       # свёрнутый файл: имя в две строки («_» — пробелами), число страниц — на стопке
+            name = re.sub(r"_+", " ", os.path.splitext(head[0])[0]).strip() or head[0]
+            label = U.two_lines(name, f, int(s.width() - 10)).replace("\u2028", "\n")
+            badge = f"{head[1]} стр."
+            bf = QFont(f)
+            bf.setPointSize(8)
+            bf.setBold(True)
+            p.setFont(bf)
+            bwid = p.fontMetrics().horizontalAdvance(badge) + 12
+            brr = QRectF(x + w - bwid + 4, y - 4, bwid, 17)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(T["accent"]))
+            p.drawRoundedRect(brr, 8.5, 8.5)
+            p.setPen(QColor("#ffffff"))
+            p.drawText(brr, Qt.AlignCenter, badge)
+            p.setFont(f)
+            tr = QRectF(3, s.height() - 40, s.width() - 6, 38)
+            if selected:
+                p.setPen(Qt.NoPen)
+                p.setBrush(acc)
+                p.drawRoundedRect(tr.adjusted(2, 0, -2, 0), 8, 8)
+                p.setPen(QColor("#ffffff"))
+            else:
+                p.setPen(QColor(T["text"]))
+            p.drawText(tr, Qt.AlignHCenter | Qt.AlignVCenter, label)
+            p.end()
+            return pm
         bw = min(s.width() - 2, max(24, p.fontMetrics().horizontalAdvance(label) + 14))
         br = QRectF((s.width() - bw) / 2, s.height() - 24, bw, 19)
         if selected:                                              # номер-«оттиск»
@@ -4777,24 +4842,24 @@ class MainWindow(QMainWindow):
         mv.addWidget(self.money_stack, 1)
         # понятные названия; редкое — в «Ещё ▾»
         order = [("overview", "Обзор", self.overview), ("docs", "Документы", docs),
-                 ("prepare", "Создать документ", prepare), ("events", "Сроки", cp.events_tab),
-                 ("laws", "Нормы права", cp.laws_tab), ("practice", "Судебная практика", cp.practice_tab),
-                 ("board", "Карта дела", cp.board_tab),
+                 ("prepare", "Создать", prepare), ("events", "Сроки", cp.events_tab),
+                 ("laws", "Нормы", cp.laws_tab), ("practice", "Практика", cp.practice_tab),
+                 ("board", "Карта", cp.board_tab),
                  ("money", "Деньги", money), ("info", "Сведения", by_name.get("Сведения")),
                  ("quotes", "Выписки", by_name.get("Выписки"))]
         self.case_tab_keys = {}
         for key, title, w in order:
             self.case_tab_keys[key] = tabs.addTab(w, title)
         self.case_tab_keys["calc"] = self.case_tab_keys["money"]
-        tips = {"overview": "Главное по делу: ближайшие сроки, заметки к заседанию, последние документы",
+        tips = {"overview": "Обзор. Главное по делу: ближайшие сроки, заметки к заседанию, последние документы",
                 "docs": "Документы дела и «PDF дела» — все документы одним файлом",
-                "prepare": "Документ по шаблону, пакет в суд, опись — и все инструменты для PDF",
+                "prepare": "Создать документ: по шаблону, пакет в суд, опись — и все инструменты для PDF",
                 "events": "Заседания, процессуальные сроки и задачи — с напоминаниями",
                 "money": "Учёт времени и оплат, калькуляторы госпошлины, процентов и сроков",
                 "info": "Суд, номер дела, стороны, инстанции, папка дела",
-                "practice": "Судебная практика по доводам: вставьте реквизиты акта — остальное заполнится само",
+                "practice": "Судебная практика: по доводам: вставьте реквизиты акта — остальное заполнится само",
                 "laws": "Нормы права для позиции: напишите «ст. 395 ГК РФ» — статья добавится сама",
-                "board": "Интеллект-карта дела: факты, позиции сторон, доказательства, риски. Можно на весь экран"}
+                "board": "Карта дела — интеллект-карта: факты, позиции сторон, доказательства, риски. Можно на весь экран"}
         for key, tip in tips.items():
             tabs.setTabToolTip(self.case_tab_keys[key], tip)
         self.hidden_tabs = [self.case_tab_keys[k] for k in ("quotes",)]
@@ -4813,7 +4878,19 @@ class MainWindow(QMainWindow):
         mm.addSeparator()
         mm.addAction("🗑 Удалить дело (в корзину)", lambda: cp.delete_case(self.mode_cid))
         more.setMenu(mm)
-        tabs.setCornerWidget(more, Qt.TopRightCorner)
+        # шапка дела в одну строку: название (мельче, с «…») — слева от вкладок, «Ещё ▾» и «В архив» — справа
+        right = QWidget()
+        rh = QHBoxLayout(right)
+        rh.setContentsMargins(6, 0, 0, 0)
+        rh.setSpacing(4)
+        rh.addWidget(more)
+        cp.b_arch.setParent(None)
+        cp.b_arch.setObjectName("moretabs")
+        rh.addWidget(cp.b_arch)
+        tabs.setCornerWidget(right, Qt.TopRightCorner)
+        cp.h_title.setParent(None)                    # название дела не дублируем — оно выделено в списке слева
+        cp.h_title.hide()
+        cp.card.layout().setContentsMargins(16, 12, 16, 8)
         cp._restoring = False
         tabs.currentChanged.connect(self._on_case_tab)
         tabs.currentChanged.connect(lambda *_: anim.slide_in(tabs.currentWidget(), dx=14, dy=0, ms=220))
@@ -6431,6 +6508,10 @@ QToolButton#help:hover {{ background: {A}; color: white; }}
 QToolBar {{ background: {t['panel']}; border: none; border-bottom: 1px solid {t['border']}; padding: 6px 10px; spacing: 2px; }}
 QToolBar::separator {{ width: 1px; background: {t['border']}; margin: 8px 8px; }}
 QToolBar#pagebar {{ padding: 2px 10px; }}
+QWidget#docbars {{ background: {t['panel']}; border-bottom: 1px solid {t['border']}; }}
+QWidget#docbars QToolBar {{ background: transparent; border: none; padding: 4px 4px; spacing: 0px; }}
+QWidget#docbars QToolBar QToolButton {{ padding: 5px 8px; }}
+QLabel#casetitle {{ font-family: "{S}"; font-size: 14pt; font-weight: 700; }}
 QToolBar#pagebar QToolButton {{ padding: 3px 9px; }}
 QToolBar QToolButton {{ padding: 6px 11px; border-radius: 8px; color: {A}; }}
 QToolBar QToolButton:hover {{ background: {t['fill']}; }}

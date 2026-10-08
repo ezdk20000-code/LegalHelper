@@ -2,11 +2,11 @@
 "files": [
 {
 "path": ".github/workflows/release.yml",
-"size": 15613
+"size": 15640
 },
 {
 "path": "CHANGELOG.md",
-"size": 108333
+"size": 111576
 },
 {
 "path": "README.md",
@@ -330,7 +330,7 @@
 },
 {
 "path": "help_content.py",
-"size": 41209
+"size": 42240
 },
 {
 "path": "help_ui.py",
@@ -342,7 +342,7 @@
 },
 {
 "path": "installer.iss",
-"size": 4710
+"size": 4709
 },
 {
 "path": "kad_ui.py",
@@ -362,7 +362,7 @@
 },
 {
 "path": "legal_ui.py",
-"size": 266133
+"size": 267059
 },
 {
 "path": "logo.svg",
@@ -371,6 +371,10 @@
 {
 "path": "modern_ui.py",
 "size": 16656
+},
+{
+"path": "outline_ui.py",
+"size": 21651
 },
 {
 "path": "palette.py",
@@ -382,7 +386,7 @@
 },
 {
 "path": "pdf_master.py",
-"size": 351260
+"size": 355805
 },
 {
 "path": "phone_export.py",
@@ -430,11 +434,11 @@
 },
 {
 "path": "tutorial.py",
-"size": 39511
+"size": 39585
 },
 {
 "path": "update.bat",
-"size": 14092
+"size": 14119
 },
 {
 "path": "updater.py",
@@ -442,7 +446,7 @@
 },
 {
 "path": "version.json",
-"size": 1117
+"size": 721
 },
 {
 "path": "word_editor.py",

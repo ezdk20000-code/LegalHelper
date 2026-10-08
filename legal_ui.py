@@ -876,6 +876,37 @@ class SentDialog(QDialog):
         self.accept()
 
 
+class ElideLabel(QLabel):
+    """Одна строка: что не влезает — «…», полный текст во всплывающей подсказке."""
+
+    def __init__(self, text=""):
+        super().__init__()
+        self._full = ""
+        self.setMinimumWidth(80)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.setText(text)
+
+    def setText(self, text):
+        self._full = text or ""
+        self.setToolTip(self._full)
+        self._fit()
+
+    def text(self):
+        return self._full
+
+    def sizeHint(self):
+        sh = super().sizeHint()
+        sh.setWidth(self.fontMetrics().horizontalAdvance(self._full) + 8)
+        return sh
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit()
+
+    def _fit(self):
+        QLabel.setText(self, self.fontMetrics().elidedText(self._full, Qt.ElideRight, max(20, self.width() - 4)))
+
+
 class WrapTitleDelegate(QStyledItemDelegate):
     """Название документа в узкой колонке: до двух строк, «_» показываются пробелами (само название не меняется),
     что не влезло — «…» в конце второй строки; полностью — во всплывающей подсказке."""
@@ -2393,8 +2424,8 @@ class CasesPage(QWidget):
         cv = QVBoxLayout(self.card)
         cv.setContentsMargins(22, 16, 22, 16)
         head = QHBoxLayout()
-        self.h_title = QLabel()
-        self.h_title.setObjectName("title")
+        self.h_title = ElideLabel()
+        self.h_title.setObjectName("casetitle")
         head.addWidget(self.h_title, 1)
         self.b_arch = QPushButton("В архив")
         self.b_arch.clicked.connect(self.toggle_archive)
