@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
     QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox, QDateEdit, QCheckBox, QTextBrowser, QPlainTextEdit,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QListWidget, QListWidgetItem,
     QTabWidget, QMessageBox, QFileDialog, QDialogButtonBox, QApplication, QSplitter, QFrame, QInputDialog,
-    QRadioButton, QButtonGroup, QScrollArea, QSizePolicy, QMenu, QSystemTrayIcon, QStackedWidget)
+    QRadioButton, QButtonGroup, QScrollArea, QSizePolicy, QMenu, QSystemTrayIcon, QStackedWidget,
+    QStyledItemDelegate, QStyleOptionViewItem)
 
 import pdf_core as C
 import legal_core as L
@@ -772,6 +773,15 @@ def fmt_sent_short(s):
     return d.strftime("%d.%m %H:%M" if d.year == dt.date.today().year else "%d.%m.%y %H:%M")
 
 
+def fmt_sent_day(s):
+    """Совсем коротко, для узкого столбца с галочкой: «23.09» (или «23.09.25» в прошлом году)."""
+    try:
+        d = dt.datetime.fromisoformat(s)
+    except Exception:
+        return ""
+    return d.strftime("%d.%m" if d.year == dt.date.today().year else "%d.%m.%y")
+
+
 def fmt_sent(s):
     if not s:
         return ""
@@ -866,6 +876,45 @@ class SentDialog(QDialog):
         self.accept()
 
 
+class WrapTitleDelegate(QStyledItemDelegate):
+    """Название документа в узкой колонке: до двух строк, «_» показываются пробелами (само название не меняется),
+    что не влезло — «…» в конце второй строки; полностью — во всплывающей подсказке."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        text = re.sub(r"_+", " ", option.text or "")
+        option.text = re.sub(r"([,\-–—]|(?<!\d)\.)(?=[^\s\d])", "\\1\u200b", text)     # можно переносить и после точки, дефиса
+        option.features |= QStyleOptionViewItem.WrapText
+        option.textElideMode = Qt.ElideRight
+        width = option.rect.width() - 30                     # поля ячейки из оформления
+        if width > 20 and option.fontMetrics.horizontalAdvance(option.text) > width:
+            option.text = two_lines(option.text, option.font, width)
+
+
+def two_lines(text, font, width):
+    """Текст в две строки по ширине: вторая, если не влезает, заканчивается «…»."""
+    from PySide6.QtGui import QTextLayout, QTextOption, QFontMetrics
+    lay = QTextLayout(text, font)
+    o = QTextOption()
+    o.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+    lay.setTextOption(o)
+    lay.beginLayout()
+    starts = []
+    while len(starts) < 2:
+        line = lay.createLine()
+        if not line.isValid():
+            break
+        line.setLineWidth(width)
+        starts.append((line.textStart(), line.textLength()))
+    lay.endLayout()
+    if len(starts) < 2:
+        return text
+    a, n = starts[0]
+    first = text[a:a + n].rstrip()
+    second = QFontMetrics(font).elidedText(text[starts[1][0]:].strip(), Qt.ElideRight, width)
+    return first + "\u2028" + second
+
+
 class DocsTable(QTableWidget):
     """Документы дела: значок, название (редактируется), отметка «отправлен» галочкой, файл.
     Щелчок — выделить; двойной щелчок или перетаскивание вправо, в рабочую область — открыть.
@@ -896,16 +945,19 @@ class DocsTable(QTableWidget):
         self.setDragEnabled(True)
         self.setDragDropMode(QAbstractItemView.DragOnly)
         self.setDefaultDropAction(Qt.CopyAction)
-        self.setWordWrap(False)
+        self.setWordWrap(True)
+        self.setItemDelegateForColumn(1, WrapTitleDelegate(self))
         h = self.horizontalHeader()
         h.setSectionResizeMode(0, QHeaderView.Fixed)
         self.setColumnWidth(0, 46)
         h.setSectionResizeMode(1, QHeaderView.Stretch)
         h.setSectionResizeMode(2, QHeaderView.Fixed)
-        self.setColumnWidth(2, 170)
+        self.setColumnWidth(2, 76)                               # галочка и дата — узко, чтобы осталось место названию
+        self.horizontalHeaderItem(2).setText("✉")
+        self.horizontalHeaderItem(2).setToolTip("Отправлен: галочка и дата отправки")
         h.setSectionResizeMode(3, QHeaderView.Interactive)
         self.setColumnWidth(3, 220)
-        self.verticalHeader().setDefaultSectionSize(40)
+        self.verticalHeader().setDefaultSectionSize(max(44, self.fontMetrics().lineSpacing() * 2 + 12))
         self.cellClicked.connect(self.on_click)
         self.cellDoubleClicked.connect(self.on_double)
         self.itemChanged.connect(self.on_changed)
@@ -943,9 +995,10 @@ class DocsTable(QTableWidget):
             else:
                 title.setToolTip("Ещё не в PDF дела. Двойной щелчок или перетаскивание вправо — добавить. "
                                  "F2 — переименовать")
+            title.setToolTip(d["title"] + "\n\n" + title.toolTip())
             title.setData(Qt.UserRole, d["path"])
             title.setData(Qt.UserRole + 1, d["id"])
-            sent = QTableWidgetItem(fmt_sent_short(d.get("sent")) if d.get("sent") else "нет")
+            sent = QTableWidgetItem(fmt_sent_day(d.get("sent")) if d.get("sent") else "")
             sent.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
             sent.setCheckState(Qt.Checked if d.get("sent") else Qt.Unchecked)
             sent.setToolTip((f"Отправлен {fmt_sent(d.get('sent'))}. Снимите галочку, если не отправлен. "
