@@ -120,7 +120,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.10.1"
+APP_VERSION = "3.10.2"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -3549,6 +3549,7 @@ class MainWindow(QMainWindow):
                 frac = 0.62 if k in (3, 8) else 1.0
                 p.drawRoundedRect(QRectF(lx, ly, lw * frac, h * 0.022), 1.5, 1.5)
                 ly += h * 0.055
+        self._draw_group_chip(p, i, x, y, head)
         acc = QColor(T["accent"])
         if selected:
             p.setPen(QPen(acc, 2.2))
@@ -4486,6 +4487,13 @@ class MainWindow(QMainWindow):
         """Подсказка «Отпустите — …» и над страницами (они сами принимают файлы и событие до окна не доходит).
         Фильтр стоит только на области страниц, а не на всём приложении: так он не мешает встроенному браузеру."""
         t = ev.type()
+        if t == QEvent.MouseButtonPress and obj is self.pages.viewport() and ev.button() == Qt.LeftButton:
+            pos = ev.position().toPoint()
+            it = self.pages.itemAt(pos)
+            k = self.chip_hit(it, pos) if it is not None else None
+            if k is not None:                           # щелчок по «▸»/«▾» — свернуть или развернуть файл
+                self.toggle_group(k)
+                return True
         if t == QEvent.DragEnter and self._drop_paths(ev.mimeData()) and ev.source() is None:
             self.show_drop_overlay(True)
         elif t == QEvent.DragLeave:
@@ -4828,6 +4836,50 @@ class MainWindow(QMainWindow):
         coll = self._collapsed()
         self._heads = {a: (name, b - a + 1) for g, name, a, b in runs if g and g in coll and b > a}
         self._hidden = {k for g, name, a, b in runs if g and g in coll and b > a for k in range(a + 1, b + 1)}
+
+    def _draw_group_chip(self, p, i, x, y, head):
+        """Значок у каждого файла: «▸ 1–3» — свёрнут в стопку (страницы с 1 по 3), «▾ 1–3» — развёрнут, страницы с 1 по 3;
+        на остальных страницах файла — «2/3». Щелчок по «▸»/«▾» сворачивает и разворачивает файл."""
+        run = self._run_of(i)
+        if not run or not run[0] or run[3] == run[2]:
+            return
+        a, b = run[2], run[3]
+        if head:
+            text, strong = f"▸ {a + 1}–{b + 1}", True
+        elif i == a:
+            text, strong = f"▾ {a + 1}–{b + 1}", True
+        else:
+            text, strong = f"{i - a + 1}/{b - a + 1}", False
+        f = QFont()
+        f.setPointSize(8)
+        f.setBold(True)
+        p.save()
+        p.setFont(f)
+        fm = p.fontMetrics()
+        cw = max(20, fm.horizontalAdvance(text) + 12)
+        r = QRectF(x - 4, y - 4, cw, 18)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(T["accent"]) if strong else QColor(0, 0, 0, 120))
+        p.drawRoundedRect(r, 9, 9)
+        p.setPen(QColor("#ffffff"))
+        p.drawText(r, Qt.AlignCenter, text)
+        p.restore()
+        if strong:
+            self._chip_rects = getattr(self, "_chip_rects", {})
+            self._chip_rects[i] = r
+
+    def chip_hit(self, item, pos):
+        """Щелчок попал в значок «▸»/«▾» на миниатюре?"""
+        i = self.pages.row(item)
+        r = getattr(self, "_chip_rects", {}).get(i)
+        if r is None or not (i in getattr(self, "_heads", {}) or (self._run_of(i) or (0, 0, -1))[2] == i):
+            return None
+        vr = self.pages.visualItemRect(item)
+        s = self.cell_size()
+        ox = vr.x() + (vr.width() - s.width()) / 2
+        oy = vr.y() + max(0, (vr.height() - s.height()) / 2) if vr.height() > s.height() + 20 else vr.y() + 2
+        hit = r.adjusted(-6, -6, 6, 6).translated(ox, oy)
+        return i if hit.contains(QPointF(pos)) else None
 
     def _run_of(self, i):
         return next((r for r in getattr(self, "_runs", []) if r[2] <= i <= r[3]), None)
