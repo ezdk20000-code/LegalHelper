@@ -120,7 +120,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.10.2"
+APP_VERSION = "3.10.3"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -924,7 +924,7 @@ class PageList(QListWidget):
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
-        self.setSpacing(6)
+        self.setSpacing(7)
         self.setUniformItemSizes(True)
         self.setObjectName("pages")
 
@@ -950,8 +950,76 @@ class PageList(QListWidget):
         super().dropEvent(e)
         QTimer.singleShot(0, self.orderChanged.emit)
 
+    group_info = None                 # () -> [(первая, последняя, имя, свёрнут)] — файлы из нескольких страниц
+
+    def _segments(self):
+        """Подложки файлов: [(прямоугольник ряда, первая, последняя, имя, свёрнут, первый ли кусок)]."""
+        out = []
+        groups = self.group_info() if self.group_info else []
+        for a, b, name, coll in groups:
+            rows = {}
+            for k in range(a, (a if coll else b) + 1):
+                it = self.item(k)
+                if it is None or it.isHidden():
+                    continue
+                r = QRectF(self.visualItemRect(it))
+                key = round(r.top())
+                rows[key] = r if key not in rows else rows[key].united(r)
+            for n, key in enumerate(sorted(rows)):
+                out.append((rows[key].adjusted(-2, -1, 2, 2), a, b, name, coll, n == 0))
+        return out
+
+    def legend_hit(self, pos):
+        for r, a in getattr(self, "_legends", []):
+            if r.adjusted(-4, -4, 4, 4).contains(QPointF(pos)):
+                return a
+        return None
+
     def paintEvent(self, e):
+        segs = self._segments() if self.count() else []
+        if segs:                                      # подложки — под страницами
+            p = QPainter(self.viewport())
+            p.setRenderHint(QPainter.Antialiasing)
+            acc = QColor(T["accent"])
+            for r, _a, _b, _n, coll, _first in segs:
+                fill = QColor(acc)
+                fill.setAlpha(22 if coll else 34)
+                line = QColor(acc)
+                line.setAlpha(70 if coll else 120)
+                p.setPen(QPen(line, 1.2, Qt.DashLine if coll else Qt.SolidLine))
+                p.setBrush(fill)
+                p.drawRoundedRect(r, 12, 12)
+            p.end()
         super().paintEvent(e)
+        if segs:                                      # ярлыки — поверх, на верхней кромке подложки
+            p = QPainter(self.viewport())
+            p.setRenderHint(QPainter.Antialiasing)
+            f = QFont(self.font())
+            f.setPointSizeF(8.5)
+            f.setBold(True)
+            p.setFont(f)
+            fm = p.fontMetrics()
+            self._legends = []
+            for r, a, b, name, coll, first in segs:
+                rng = f"стр. {a + 1}–{b + 1}"
+                nm = re.sub(r"_+", " ", os.path.splitext(str(name or ""))[0]).strip()
+                if first:
+                    text = f"▸  {rng}" if coll else f"▾  {nm}  ·  {rng}"
+                else:                                 # файл продолжается на следующем ряду
+                    text = f"↳  {nm}"
+                text = fm.elidedText(text, Qt.ElideMiddle if first and not coll else Qt.ElideRight, int(r.width() - 16))
+                w = fm.horizontalAdvance(text) + 18
+                lr = QRectF(r.left() + 8, r.top() + 4, w, 19)
+                p.setPen(Qt.NoPen)
+                bg = QColor(T["accent"])
+                if not first:
+                    bg.setAlpha(150)
+                p.setBrush(bg)
+                p.drawRoundedRect(lr, 9.5, 9.5)
+                p.setPen(QColor("#ffffff"))
+                p.drawText(lr, Qt.AlignCenter, text)
+                self._legends.append((lr, a))
+            p.end()
         if self.count() == 0:
             p = QPainter(self.viewport())
             p.setPen(QColor(T["muted"]))
@@ -2398,6 +2466,8 @@ class MainWindow(QMainWindow):
         self.tree.setUniformRowHeights(True)
 
         self.pages = PageList()
+        self.pages.group_info = lambda: [(a, b, name, a in getattr(self, "_heads", {}))
+                                         for g, name, a, b in getattr(self, "_runs", []) if g and b > a]
         self.pages.orderChanged.connect(self.on_reorder)
         self.pages.filesDropped.connect(lambda paths, idx: self.open_paths(paths, insert_at=idx))
         self.pages.installEventFilter(self)
@@ -3460,7 +3530,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- thumbnails
     def cell_size(self):
-        return QSize(self.thumb_w + 16, int(self.thumb_w * 1.42) + 48)     # снизу — место под имя файла в 2 строки
+        return QSize(self.thumb_w + 16, int(self.thumb_w * 1.42) + 62)     # сверху — ярлык файла, снизу — имя в 2 строки
 
     def apply_thumb_geometry(self):
         s = self.cell_size()
@@ -3519,14 +3589,14 @@ class MainWindow(QMainWindow):
         p = QPainter(pm)
         p.setRenderHint(QPainter.Antialiasing)
         img = self.thumbs[i] if i < len(self.thumbs) else None
-        area_h = s.height() - 44
+        area_h = s.height() - 44 - 14
         if img is not None:
             w, h = img.width() / dpr, img.height() / dpr
         else:
             r = self.doc[i].rect
             z = min(self.thumb_w / r.width, self.thumb_w * 1.42 / r.height)
             w, h = r.width * z, r.height * z
-        x, y = (s.width() - w) / 2, (area_h - h) / 2 + 6
+        x, y = (s.width() - w) / 2, (area_h - h) / 2 + 6 + 14
         p.drawPixmap(0, 0, self._shadow_pm(s, dpr, x, y, w, h))   # мягкая тень листа (готовая, из запаса)
         p.setPen(Qt.NoPen)
         head = getattr(self, "_heads", {}).get(i)
@@ -3549,7 +3619,6 @@ class MainWindow(QMainWindow):
                 frac = 0.62 if k in (3, 8) else 1.0
                 p.drawRoundedRect(QRectF(lx, ly, lw * frac, h * 0.022), 1.5, 1.5)
                 ly += h * 0.055
-        self._draw_group_chip(p, i, x, y, head)
         acc = QColor(T["accent"])
         if selected:
             p.setPen(QPen(acc, 2.2))
@@ -3563,18 +3632,6 @@ class MainWindow(QMainWindow):
         if head:                       # свёрнутый файл: имя в две строки («_» — пробелами), число страниц — на стопке
             name = re.sub(r"_+", " ", os.path.splitext(head[0])[0]).strip() or head[0]
             label = U.two_lines(name, f, int(s.width() - 10)).replace("\u2028", "\n")
-            badge = f"{head[1]} стр."
-            bf = QFont(f)
-            bf.setPointSize(8)
-            bf.setBold(True)
-            p.setFont(bf)
-            bwid = p.fontMetrics().horizontalAdvance(badge) + 12
-            brr = QRectF(x + w - bwid + 4, y - 4, bwid, 17)
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(T["accent"]))
-            p.drawRoundedRect(brr, 8.5, 8.5)
-            p.setPen(QColor("#ffffff"))
-            p.drawText(brr, Qt.AlignCenter, badge)
             p.setFont(f)
             tr = QRectF(3, s.height() - 40, s.width() - 6, 38)
             if selected:
@@ -4489,9 +4546,8 @@ class MainWindow(QMainWindow):
         t = ev.type()
         if t == QEvent.MouseButtonPress and obj is self.pages.viewport() and ev.button() == Qt.LeftButton:
             pos = ev.position().toPoint()
-            it = self.pages.itemAt(pos)
-            k = self.chip_hit(it, pos) if it is not None else None
-            if k is not None:                           # щелчок по «▸»/«▾» — свернуть или развернуть файл
+            k = self.pages.legend_hit(pos)
+            if k is not None:                           # щелчок по ярлыку файла — свернуть или развернуть
                 self.toggle_group(k)
                 return True
         if t == QEvent.DragEnter and self._drop_paths(ev.mimeData()) and ev.source() is None:
@@ -4836,50 +4892,6 @@ class MainWindow(QMainWindow):
         coll = self._collapsed()
         self._heads = {a: (name, b - a + 1) for g, name, a, b in runs if g and g in coll and b > a}
         self._hidden = {k for g, name, a, b in runs if g and g in coll and b > a for k in range(a + 1, b + 1)}
-
-    def _draw_group_chip(self, p, i, x, y, head):
-        """Значок у каждого файла: «▸ 1–3» — свёрнут в стопку (страницы с 1 по 3), «▾ 1–3» — развёрнут, страницы с 1 по 3;
-        на остальных страницах файла — «2/3». Щелчок по «▸»/«▾» сворачивает и разворачивает файл."""
-        run = self._run_of(i)
-        if not run or not run[0] or run[3] == run[2]:
-            return
-        a, b = run[2], run[3]
-        if head:
-            text, strong = f"▸ {a + 1}–{b + 1}", True
-        elif i == a:
-            text, strong = f"▾ {a + 1}–{b + 1}", True
-        else:
-            text, strong = f"{i - a + 1}/{b - a + 1}", False
-        f = QFont()
-        f.setPointSize(8)
-        f.setBold(True)
-        p.save()
-        p.setFont(f)
-        fm = p.fontMetrics()
-        cw = max(20, fm.horizontalAdvance(text) + 12)
-        r = QRectF(x - 4, y - 4, cw, 18)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(T["accent"]) if strong else QColor(0, 0, 0, 120))
-        p.drawRoundedRect(r, 9, 9)
-        p.setPen(QColor("#ffffff"))
-        p.drawText(r, Qt.AlignCenter, text)
-        p.restore()
-        if strong:
-            self._chip_rects = getattr(self, "_chip_rects", {})
-            self._chip_rects[i] = r
-
-    def chip_hit(self, item, pos):
-        """Щелчок попал в значок «▸»/«▾» на миниатюре?"""
-        i = self.pages.row(item)
-        r = getattr(self, "_chip_rects", {}).get(i)
-        if r is None or not (i in getattr(self, "_heads", {}) or (self._run_of(i) or (0, 0, -1))[2] == i):
-            return None
-        vr = self.pages.visualItemRect(item)
-        s = self.cell_size()
-        ox = vr.x() + (vr.width() - s.width()) / 2
-        oy = vr.y() + max(0, (vr.height() - s.height()) / 2) if vr.height() > s.height() + 20 else vr.y() + 2
-        hit = r.adjusted(-6, -6, 6, 6).translated(ox, oy)
-        return i if hit.contains(QPointF(pos)) else None
 
     def _run_of(self, i):
         return next((r for r in getattr(self, "_runs", []) if r[2] <= i <= r[3]), None)
