@@ -120,7 +120,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.10"
+APP_VERSION = "3.10.1"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -441,20 +441,108 @@ def font_combo(default=None):
     return cb
 
 
+class _PreviewCanvas(QWidget):
+    """Все страницы документа одна под другой; рисуются только видимые (и запоминаются)."""
+    GAP = 12
+
+    def __init__(self, preview):
+        super().__init__()
+        self.pv = preview
+        self.width_px = 400
+        self.tops, self.heights = [], []
+        self.cache = {}
+        self.todo = QTimer(self)
+        self.todo.setSingleShot(True)
+        self.todo.timeout.connect(self._render_some)
+
+    def relayout(self, width_px):
+        doc = self.pv.main.doc
+        self.width_px = int(width_px)
+        self.tops, self.heights = [], []
+        y = self.GAP
+        for i in range(doc.page_count):
+            r = doc[i].rect
+            h = int(self.width_px * r.height / max(r.width, 1))
+            self.tops.append(y)
+            self.heights.append(h)
+            y += h + self.GAP
+        self.setFixedSize(self.width_px + 2 * self.GAP, max(y, 10))
+        self.update()
+
+    def page_at(self, y):
+        for i, t in enumerate(self.tops):
+            if y < t + self.heights[i] + self.GAP:
+                return i
+        return len(self.tops) - 1 if self.tops else None
+
+    def _visible(self):
+        r = self.visibleRegion().boundingRect()
+        return [i for i, t in enumerate(self.tops) if t + self.heights[i] >= r.top() - 200 and t <= r.bottom() + 200]
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        clip = e.rect()
+        missing = False
+        for i, t in enumerate(self.tops):
+            h = self.heights[i]
+            if t + h < clip.top() or t > clip.bottom():
+                continue
+            rect = QRectF(self.GAP, t, self.width_px, h)
+            pm = self.cache.get((i, self.width_px))
+            if pm is None:
+                p.fillRect(rect, QColor("#ffffff"))
+                missing = True
+            else:
+                p.drawPixmap(rect.toRect(), pm)
+            p.setPen(QPen(QColor(0, 0, 0, 40), 1))
+            p.drawRect(rect)
+        p.end()
+        if missing and not self.todo.isActive():
+            self.todo.start(0)
+
+    def _render_some(self):
+        doc = self.pv.main.doc
+        dpr = self.devicePixelRatioF()
+        done = 0
+        for i in self._visible():
+            if (i, self.width_px) in self.cache or i >= doc.page_count:
+                continue
+            page = doc[i]
+            z = self.width_px / page.rect.width * dpr
+            try:
+                pix = page.get_pixmap(matrix=fitz.Matrix(z, z), alpha=False)
+            except Exception:
+                continue
+            pm = QPixmap.fromImage(to_qimage(pix))
+            pm.setDevicePixelRatio(dpr)
+            if len(self.cache) > 40:
+                self.cache.clear()
+            self.cache[(i, self.width_px)] = pm
+            done += 1
+            self.update(QRectF(self.GAP, self.tops[i], self.width_px, self.heights[i]).toRect())
+            if done >= 2:                         # по две страницы за раз — окно не подвисает
+                self.todo.start(0)
+                break
+
+
 class PagePreview(QWidget):
-    """Крупный просмотр выбранной страницы справа от миниатюр: прочитать и рассмотреть."""
+    """🔍 Крупный просмотр справа от миниатюр: все страницы документа подряд, листаются колёсиком;
+    щелчок по миниатюре переносит к этой странице."""
 
     def __init__(self, main):
         super().__init__()
         self.main = main
         self.index = None
+        self._jump = False
         self.zoom = 1.0                           # 1.0 — по ширине окна
         v = QVBoxLayout(self)
         v.setContentsMargins(8, 8, 8, 8)
         v.setSpacing(6)
         h = QHBoxLayout()
-        self.title = QLabel("Выберите страницу")
+        self.title = QLabel("🔍 Выберите страницу")
         self.title.setObjectName("hint")
+        self.title.setMinimumWidth(0)
+        self.title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         h.addWidget(self.title, 1)
         for text, tip, fn in (("−", "Мельче", lambda: self.set_zoom(self.zoom / 1.25)),
                               ("По ширине", "Вписать по ширине", lambda: self.set_zoom(1.0)),
@@ -466,7 +554,7 @@ class PagePreview(QWidget):
             h.addWidget(b)
         close = QPushButton("✕")
         close.setObjectName("compact")
-        close.setToolTip("Скрыть просмотр («Вид ▾ → Просмотр страницы крупно»)")
+        close.setToolTip("Скрыть крупный просмотр (кнопка «🔍 Крупно» над страницами или F3)")
         close.clicked.connect(lambda: main.set_preview(False))
         h.addWidget(close)
         v.addLayout(h)
@@ -474,21 +562,27 @@ class PagePreview(QWidget):
         self.sc.setWidgetResizable(False)
         self.sc.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
         self.sc.setObjectName("canvasArea")
-        self.img = QLabel()
-        self.img.setAlignment(Qt.AlignCenter)
-        self.sc.setWidget(self.img)
+        self.sc.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)   # иначе ширина «прыгает» и вылезает полоса снизу
+        self.canvas = _PreviewCanvas(self)
+        self.sc.setWidget(self.canvas)
+        self.sc.verticalScrollBar().valueChanged.connect(self._scrolled)
         v.addWidget(self.sc, 1)
+        self._sig = None
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.setInterval(90)
         self.timer.timeout.connect(self.render)
 
     def show_page(self, i):
+        if i != self.index:
+            self._jump = True
         self.index = i
+        self.canvas.cache.clear()                 # страницу могли повернуть или поправить — перерисовать
         self.timer.start()
 
     def set_zoom(self, z):
         self.zoom = max(0.3, min(4.0, z))
+        self._jump = True
         self.render()
 
     def resizeEvent(self, e):
@@ -498,20 +592,39 @@ class PagePreview(QWidget):
     def render(self):
         doc = self.main.doc
         i = self.index
-        if not self.isVisible() or i is None or not (0 <= i < doc.page_count):
-            self.img.clear()
-            self.title.setText("Выберите страницу слева" if doc.page_count else "Документ не открыт")
+        if not self.isVisible() or not doc.page_count:
+            self.canvas.relayout(200) if doc.page_count else self.canvas.setFixedSize(10, 10)
+            self.title.setText("🔍 Документ не открыт")
             return
-        page = doc[i]
-        dpr = self.devicePixelRatioF()
-        width = max(200, self.sc.viewport().width() - 16) * self.zoom
-        z = width / page.rect.width
-        pix = page.get_pixmap(matrix=fitz.Matrix(z * dpr, z * dpr), alpha=False)
-        pm = QPixmap.fromImage(to_qimage(pix))
-        pm.setDevicePixelRatio(dpr)
-        self.img.setPixmap(pm)
-        self.img.resize(int(pix.width / dpr), int(pix.height / dpr))
-        self.title.setText(f"Страница {i + 1} из {doc.page_count}")
+        width = max(200, self.sc.viewport().width() - 2 * _PreviewCanvas.GAP - 4) * self.zoom
+        sig = (id(doc), doc.page_count, int(width))
+        if sig != self._sig:
+            self._sig = sig
+            self.canvas.relayout(width)
+        if i is not None and 0 <= i < doc.page_count and self._jump:
+            self._jump = False
+            self.sc.verticalScrollBar().setValue(max(0, self.canvas.tops[i] - _PreviewCanvas.GAP))
+        self.canvas.update()
+        self._scrolled()
+
+    def _scrolled(self, *_):
+        doc = self.main.doc
+        if not doc.page_count or not self.canvas.tops:
+            return
+        sb = self.sc.verticalScrollBar()
+        k = self.canvas.page_at(sb.value() + self.sc.viewport().height() // 3)
+        if k is None:
+            return
+        text = f"🔍 Страница {k + 1} из {doc.page_count}"
+        try:
+            g, name = self.main._page_group(k)
+        except Exception:
+            g, name = None, None
+        if name:
+            nm = re.sub(r"_+", " ", os.path.splitext(str(name))[0])
+            text += f"  ·  {nm}"
+        self.title.setText(text)
+        self.title.setToolTip(text)
 
 
 class GrowEdit(QPlainTextEdit):
@@ -4628,7 +4741,7 @@ class MainWindow(QMainWindow):
             grp.addAction(a)
             a.triggered.connect(lambda _=False, w=w: self.set_thumb_size_saved(w))
         m.addSeparator()
-        self.a_preview = m.addAction("Просмотр страницы крупно")
+        self.a_preview = m.addAction("🔍 Просмотр страницы крупно")
         self.a_preview.setCheckable(True)
         self.a_preview.setChecked(str(settings().value("preview_on", "0")) == "1")
         self.a_preview.setShortcut("F3")
@@ -4638,14 +4751,18 @@ class MainWindow(QMainWindow):
         m.addAction("Свернуть все файлы", lambda: self.collapse_all(True))
         m.addAction("Развернуть все файлы", lambda: self.collapse_all(False))
         b.setMenu(m)
-        pv = QToolButton()
-        pv.setDefaultAction(self.a_preview)
-        pv.setObjectName("toolsbtn")
+        pv = QToolButton()                             # своя кнопка (не defaultAction) — чтобы надпись была короткой
+        pv.setCheckable(True)
+        pv.setChecked(self.a_preview.isChecked())
+        pv.toggled.connect(self.a_preview.setChecked)
+        self.a_preview.toggled.connect(lambda on: pv.setChecked(on) if pv.isChecked() != on else None)
         pv.setToolTip("Показать выбранную страницу крупно рядом с миниатюрами (F3)")
         self.preview_btn = pv
-        pv.setText("🔍")                               # во втором ряду тесно — только значок, пояснение в подсказке
-        pv.setToolTip("Крупно: показать выбранную страницу крупно справа, чтобы прочитать (F3)")
-        self.toolbar2.addWidget(pv)
+        pv.setText("🔍 Крупно")
+        pv.setToolTip("Крупный просмотр справа: все страницы документа подряд, листаются колёсиком (F3)")
+        pv.setObjectName("moretabs")
+        pv.setCursor(Qt.PointingHandCursor)
+        self.pages_box.add_tool(pv)                    # над миниатюрами, рядом со «Свернуть / Развернуть всё»
         self.toolbar.addWidget(b)                      # «Вид» — в первый ряд: во втором на узком экране тесно
 
     def set_thumb_size_saved(self, w):
@@ -4668,6 +4785,10 @@ class MainWindow(QMainWindow):
         on = self.a_preview.isChecked() and self.doc.page_count > 0
         if self.preview.isHidden() == on:
             self.preview.setVisible(on)
+            if on:                                     # крупному просмотру — больше половины ширины
+                total = sum(self.page_split.sizes()) or self.page_split.width()
+                if total > 0 and self.page_split.sizes()[-1] < total * 0.5:
+                    self.page_split.setSizes([int(total * 0.42), int(total * 0.58)])
         self._preview_current()
 
     def _preview_current(self):
@@ -6572,6 +6693,7 @@ QToolButton#primarytool {{ background: {A}; color: white; border: none; border-r
 QToolButton#primarytool::menu-indicator, QToolButton#moretabs::menu-indicator, QToolButton#toolsbtn::menu-indicator {{ image: none; width: 0; }}
 QToolButton#moretabs {{ border: none; border-radius: 8px; color: {A}; padding: 6px 12px; background: transparent; }}
 QToolButton#moretabs:hover {{ background: {t['fill']}; }}
+QToolButton#moretabs:checked {{ background: {t['accent_soft']}; font-weight: 700; }}
 QToolButton#toolsbtn {{ padding: 6px 11px; border-radius: 8px; }}
 
 /* навигатор дел */

@@ -8,8 +8,7 @@
 import re
 from collections import Counter
 
-from PySide6.QtCore import Qt, QTimer, QEvent, QPoint
-from PySide6.QtGui import QImage, QPixmap, QCursor, QGuiApplication
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTreeWidget, QTreeWidgetItem,
                                QLabel, QStackedWidget, QTabBar, QAbstractItemView,
                                QToolButton)
@@ -322,14 +321,17 @@ class PagesWithOutline(QWidget):
         self.seg.setExpanding(False)
         self.seg.addTab("▦  Страницы")
         self.seg.addTab("☰  Структура")
+        self.seg.setUsesScrollButtons(False)
+        self.seg.setElideMode(Qt.ElideNone)
         self.seg.setTabToolTip(0, "Миниатюры страниц")
         self.seg.setTabToolTip(1, "Оглавление документа и поиск по тексту — щелчок по заголовку переходит к нему")
-        h.addWidget(self.seg)
+        h.addWidget(self.seg, 0)
+        QTimer.singleShot(0, lambda: self.seg.setMinimumWidth(self.seg.sizeHint().width()))
         h.addStretch(1)
         self.page_tools = []
-        for text, tip, fn in (("⊟ Свернуть всё", "Каждый файл — одной стопкой (удобно двигать файлы целиком)",
+        for text, tip, fn in (("⊟ Свернуть", "Свернуть всё: каждый файл — одной стопкой (удобно двигать файлы целиком)",
                                lambda: main.collapse_all(True)),
-                              ("⊞ Развернуть всё", "Показать все страницы всех файлов",
+                              ("⊞ Развернуть", "Развернуть всё: показать все страницы всех файлов",
                                lambda: main.collapse_all(False))):
             b = QToolButton()
             b.setText(text)
@@ -339,28 +341,8 @@ class PagesWithOutline(QWidget):
             b.clicked.connect(fn)
             h.addWidget(b)
             self.page_tools.append(b)
-        self.b_lens = QToolButton()
-        self.b_lens.setText("🔎 Лупа")
-        self.b_lens.setObjectName("moretabs")
-        self.b_lens.setCheckable(True)
-        self.b_lens.setCursor(Qt.PointingHandCursor)
-        self.b_lens.setToolTip("Лупа: наведите мышь на страницу — она покажется крупно, открывать не нужно.\n"
-                               "Без лупы: выделите страницу и нажмите пробел — крупный просмотр, ещё раз пробел или Esc "
-                               "— закрыть.")
-        self.b_lens.toggled.connect(self._lens_toggled)
-        h.addWidget(self.b_lens)
-        self.page_tools.append(self.b_lens)
         v.addWidget(bar)
-        self.pages = pages
-        self.lens = Magnifier(main)
-        pages.viewport().setMouseTracking(True)
-        pages.viewport().installEventFilter(self)
-        pages.installEventFilter(self)
-        try:
-            import legal_ui as U
-            self.b_lens.setChecked(str(U.M.settings().value("lens_on", "0")) == "1")
-        except Exception:
-            pass
+        self._bar = h
         self.stack = QStackedWidget()
         self.outline = OutlinePanel(main)
         self.stack.addWidget(pages)
@@ -368,48 +350,9 @@ class PagesWithOutline(QWidget):
         v.addWidget(self.stack, 1)
         self.seg.currentChanged.connect(self.show_part)
 
-    def _lens_toggled(self, on):
-        try:
-            import legal_ui as U
-            U.M.settings().setValue("lens_on", "1" if on else "0")
-        except Exception:
-            pass
-        if not on:
-            self.lens.hide()
-
-    def eventFilter(self, obj, e):
-        t = e.type()
-        if obj is self.pages.viewport():
-            if t == QEvent.MouseMove and self.b_lens.isChecked() and not e.buttons():
-                it = self.pages.itemAt(e.position().toPoint())
-                if it is None:
-                    self.lens.hide()
-                else:
-                    self.lens.show_page(self.pages.row(it), QCursor.pos())
-            elif t in (QEvent.Leave, QEvent.MouseButtonPress, QEvent.Wheel):
-                self.lens.hide()
-        elif obj is self.pages and t == QEvent.KeyPress:
-            if e.key() == Qt.Key_Space and not e.modifiers():
-                if self.lens.isVisible():
-                    self.lens.hide()
-                else:
-                    row = self.pages.currentRow()
-                    if row >= 0:
-                        r = self.pages.visualItemRect(self.pages.item(row))
-                        self.lens.show_page(row, self.pages.viewport().mapToGlobal(r.center()), big=True)
-                return True
-            if e.key() == Qt.Key_Escape and self.lens.isVisible():
-                self.lens.hide()
-                return True
-            if self.lens.isVisible() and e.key() in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down):
-                QTimer.singleShot(0, lambda: self._follow())
-        return False
-
-    def _follow(self):
-        row = self.pages.currentRow()
-        if row >= 0 and self.lens.isVisible():
-            r = self.pages.visualItemRect(self.pages.item(row))
-            self.lens.show_page(row, self.pages.viewport().mapToGlobal(r.center()), big=True)
+    def add_tool(self, w):
+        """Кнопка, видная и в «Страницах», и в «Структуре» (например, «🔍 Крупно»)."""
+        self._bar.addWidget(w)
 
     def show_part(self, i):
         if self.seg.currentIndex() != i:
@@ -417,71 +360,8 @@ class PagesWithOutline(QWidget):
             return
         for b in self.page_tools:
             b.setVisible(i == 0)
-        self.lens.hide()
         self.stack.setCurrentIndex(i)
         if i == 1:
             self.outline.refresh()
             self.outline.find.setFocus()
 
-
-class Magnifier(QLabel):
-    """Крупный просмотр страницы поверх окна — без открытия документа."""
-
-    def __init__(self, main):
-        super().__init__(None, Qt.ToolTip | Qt.FramelessWindowHint)
-        self.main = main
-        self.setObjectName("lens")
-        self.setStyleSheet("QLabel#lens { background: white; border: 1px solid #9aa4b2; }")
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self._cache = {}
-        self._want = None
-        self.timer = QTimer(self)
-        self.timer.setSingleShot(True)
-        self.timer.timeout.connect(self._render)
-
-    def show_page(self, i, at, big=False):
-        self._want = (i, at, big)
-        if self.isVisible():
-            self._render()
-        else:
-            self.timer.start(220)                 # короткая задержка: не мигать, когда мышь просто проходит мимо
-
-    def hide(self):
-        self.timer.stop()
-        self._want = None
-        super().hide()
-
-    def _render(self):
-        if not self._want:
-            return
-        i, at, big = self._want
-        doc = getattr(self.main, "doc", None)
-        if doc is None or not (0 <= i < doc.page_count):
-            return self.hide()
-        scr = QGuiApplication.screenAt(at) or QGuiApplication.primaryScreen()
-        geo = scr.availableGeometry()
-        hmax = int(geo.height() * (0.92 if big else 0.8))
-        key = (id(doc), doc.page_count, i, hmax)
-        pm = self._cache.get(key)
-        if pm is None:
-            page = doc[i]
-            dpr = self.devicePixelRatioF()
-            z = min(hmax / page.rect.height, geo.width() * 0.6 / page.rect.width) * dpr
-            pix = page.get_pixmap(matrix=__import__("pymupdf").Matrix(z, z), alpha=False)
-            img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888).copy()
-            pm = QPixmap.fromImage(img)
-            pm.setDevicePixelRatio(dpr)
-            if len(self._cache) > 12:
-                self._cache.clear()
-            self._cache[key] = pm
-        self.setPixmap(pm)
-        self.resize(int(pm.width() / pm.devicePixelRatio()) + 2, int(pm.height() / pm.devicePixelRatio()) + 2)
-        # справа от курсора, если есть место, иначе слева; по высоте — в пределах экрана
-        x = at.x() + 24 if at.x() + 24 + self.width() <= geo.right() else at.x() - 24 - self.width()
-        if big:
-            x = geo.left() + (geo.width() - self.width()) // 2
-        x = max(geo.left(), x)
-        y = min(max(geo.top(), at.y() - self.height() // 2), geo.bottom() - self.height())
-        self.move(QPoint(x, y))
-        self.show()
-        self.raise_()
