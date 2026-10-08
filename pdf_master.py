@@ -120,7 +120,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.10.3"
+APP_VERSION = "3.10.4"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -966,7 +966,7 @@ class PageList(QListWidget):
                 key = round(r.top())
                 rows[key] = r if key not in rows else rows[key].united(r)
             for n, key in enumerate(sorted(rows)):
-                out.append((rows[key].adjusted(-2, -1, 2, 2), a, b, name, coll, n == 0))
+                out.append((rows[key].adjusted(0, 0, 0, 2), a, b, name, coll, n == 0))
         return out
 
     def legend_hit(self, pos):
@@ -977,48 +977,54 @@ class PageList(QListWidget):
 
     def paintEvent(self, e):
         segs = self._segments() if self.count() else []
-        if segs:                                      # подложки — под страницами
+        if segs:                                      # карточка файла — под страницами
             p = QPainter(self.viewport())
             p.setRenderHint(QPainter.Antialiasing)
             acc = QColor(T["accent"])
             for r, _a, _b, _n, coll, _first in segs:
                 fill = QColor(acc)
-                fill.setAlpha(22 if coll else 34)
+                fill.setAlpha(16)
                 line = QColor(acc)
-                line.setAlpha(70 if coll else 120)
-                p.setPen(QPen(line, 1.2, Qt.DashLine if coll else Qt.SolidLine))
+                line.setAlpha(55)
+                p.setPen(QPen(line, 1, Qt.DashLine if coll else Qt.SolidLine))
                 p.setBrush(fill)
-                p.drawRoundedRect(r, 12, 12)
+                p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 12, 12)
+                sep = QColor(acc)                     # тонкая линия под заголовком
+                sep.setAlpha(35)
+                p.setPen(QPen(sep, 1))
+                p.drawLine(QPointF(r.left() + 10, r.top() + 26.5), QPointF(r.right() - 10, r.top() + 26.5))
             p.end()
         super().paintEvent(e)
-        if segs:                                      # ярлыки — поверх, на верхней кромке подложки
+        if segs:                                      # заголовки — поверх: «▾ Название» слева, «стр. 1–3» справа
             p = QPainter(self.viewport())
             p.setRenderHint(QPainter.Antialiasing)
             f = QFont(self.font())
-            f.setPointSizeF(8.5)
+            f.setPointSizeF(9)
             f.setBold(True)
-            p.setFont(f)
-            fm = p.fontMetrics()
+            fs = QFont(self.font())
+            fs.setPointSizeF(8.5)
             self._legends = []
             for r, a, b, name, coll, first in segs:
-                rng = f"стр. {a + 1}–{b + 1}"
                 nm = re.sub(r"_+", " ", os.path.splitext(str(name or ""))[0]).strip()
+                one = a == b
+                rng = f"стр. {a + 1}" if one else f"стр. {a + 1}–{b + 1}"
+                hr = QRectF(r.left() + 10, r.top() + 3, r.width() - 20, 22)
+                p.setFont(fs)
+                rw = p.fontMetrics().horizontalAdvance(rng) + 6
                 if first:
-                    text = f"▸  {rng}" if coll else f"▾  {nm}  ·  {rng}"
-                else:                                 # файл продолжается на следующем ряду
-                    text = f"↳  {nm}"
-                text = fm.elidedText(text, Qt.ElideMiddle if first and not coll else Qt.ElideRight, int(r.width() - 16))
-                w = fm.horizontalAdvance(text) + 18
-                lr = QRectF(r.left() + 8, r.top() + 4, w, 19)
-                p.setPen(Qt.NoPen)
-                bg = QColor(T["accent"])
-                if not first:
-                    bg.setAlpha(150)
-                p.setBrush(bg)
-                p.drawRoundedRect(lr, 9.5, 9.5)
-                p.setPen(QColor("#ffffff"))
-                p.drawText(lr, Qt.AlignCenter, text)
-                self._legends.append((lr, a))
+                    p.setPen(QColor(T["muted"]))
+                    p.drawText(hr, Qt.AlignRight | Qt.AlignVCenter, rng)
+                arrow = "" if one else ("▸ " if coll else "▾ ")
+                title = (arrow + nm) if first else ("↳ " + nm)
+                p.setFont(f)
+                fm = p.fontMetrics()
+                avail = hr.width() - (rw + 8 if first else 0)
+                title = fm.elidedText(title, Qt.ElideRight, int(max(20, avail)))
+                tc = QColor(T["accent"]) if first else QColor(T["muted"])
+                p.setPen(tc)
+                p.drawText(hr, Qt.AlignLeft | Qt.AlignVCenter, title)
+                if not one:
+                    self._legends.append((QRectF(r.left(), r.top(), r.width(), 26), a))
             p.end()
         if self.count() == 0:
             p = QPainter(self.viewport())
@@ -2467,7 +2473,7 @@ class MainWindow(QMainWindow):
 
         self.pages = PageList()
         self.pages.group_info = lambda: [(a, b, name, a in getattr(self, "_heads", {}))
-                                         for g, name, a, b in getattr(self, "_runs", []) if g and b > a]
+                                         for g, name, a, b in getattr(self, "_runs", []) if g]
         self.pages.orderChanged.connect(self.on_reorder)
         self.pages.filesDropped.connect(lambda paths, idx: self.open_paths(paths, insert_at=idx))
         self.pages.installEventFilter(self)
@@ -3530,7 +3536,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- thumbnails
     def cell_size(self):
-        return QSize(self.thumb_w + 16, int(self.thumb_w * 1.42) + 62)     # сверху — ярлык файла, снизу — имя в 2 строки
+        return QSize(self.thumb_w + 16, int(self.thumb_w * 1.42) + 44 + 30)   # сверху — заголовок файла, снизу — имя
 
     def apply_thumb_geometry(self):
         s = self.cell_size()
@@ -3589,22 +3595,22 @@ class MainWindow(QMainWindow):
         p = QPainter(pm)
         p.setRenderHint(QPainter.Antialiasing)
         img = self.thumbs[i] if i < len(self.thumbs) else None
-        area_h = s.height() - 44 - 14
+        area_h = s.height() - 44 - 30
         if img is not None:
             w, h = img.width() / dpr, img.height() / dpr
         else:
             r = self.doc[i].rect
             z = min(self.thumb_w / r.width, self.thumb_w * 1.42 / r.height)
             w, h = r.width * z, r.height * z
-        x, y = (s.width() - w) / 2, (area_h - h) / 2 + 6 + 14
+        x, y = (s.width() - w) / 2, (area_h - h) / 2 + 32
         p.drawPixmap(0, 0, self._shadow_pm(s, dpr, x, y, w, h))   # мягкая тень листа (готовая, из запаса)
         p.setPen(Qt.NoPen)
         head = getattr(self, "_heads", {}).get(i)
         if head:                                                  # свёрнутый файл — стопка листов
             p.setPen(QPen(QColor(T["thumb_border"]), 1))
             p.setBrush(QColor("#ffffff"))
-            for k in (8, 4):
-                p.drawRect(QRectF(x + k, y - k, w, h))
+            for k in (6, 3):                                    # листы «выглядывают» справа снизу
+                p.drawRect(QRectF(x + k, y + k, w, h))
             p.setPen(Qt.NoPen)
         if img is not None:
             p.drawImage(QRectF(x, y, w, h), img)
@@ -3630,20 +3636,7 @@ class MainWindow(QMainWindow):
         p.setFont(f)
         label = str(i + 1)
         if head:                       # свёрнутый файл: имя в две строки («_» — пробелами), число страниц — на стопке
-            name = re.sub(r"_+", " ", os.path.splitext(head[0])[0]).strip() or head[0]
-            label = U.two_lines(name, f, int(s.width() - 10)).replace("\u2028", "\n")
-            p.setFont(f)
-            tr = QRectF(3, s.height() - 40, s.width() - 6, 38)
-            if selected:
-                p.setPen(Qt.NoPen)
-                p.setBrush(acc)
-                p.drawRoundedRect(tr.adjusted(2, 0, -2, 0), 8, 8)
-                p.setPen(QColor("#ffffff"))
-            else:
-                p.setPen(QColor(T["text"]))
-            p.drawText(tr, Qt.AlignHCenter | Qt.AlignVCenter, label)
-            p.end()
-            return pm
+            label = f"{head[1]} стр."                     # название — в заголовке карточки над стопкой
         bw = min(s.width() - 2, max(24, p.fontMetrics().horizontalAdvance(label) + 14))
         br = QRectF((s.width() - bw) / 2, s.height() - 24, bw, 19)
         if selected:                                              # номер-«оттиск»
