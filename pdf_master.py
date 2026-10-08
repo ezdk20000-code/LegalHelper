@@ -120,7 +120,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.10.4"
+APP_VERSION = "3.10.5"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -2497,26 +2497,42 @@ class MainWindow(QMainWindow):
         sv = QVBoxLayout(side)
         sv.setContentsMargins(12, 16, 12, 10)
         sv.setSpacing(0)
+        # шапка панели: логотип и название слева, «☰» и ««» — аккуратные кнопки справа
+        logo = QLabel()
+        logo.setObjectName("brandlogo")
+        dpr = self.devicePixelRatioF()
+        lpm = QIcon(resource("app.ico")).pixmap(QSize(64, 64)).scaled(int(32 * dpr), int(32 * dpr),
+                                                                          Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        lpm.setDevicePixelRatio(dpr)
+        logo.setPixmap(lpm)
+        logo.setFixedSize(34, 34)
         brand = QLabel(APP_NAME)
         brand.setObjectName("brand")
-        sub = QLabel("документы, дела и сроки")
+        sub = QLabel("рабочее место юриста")
         sub.setObjectName("brandsub")
         bh = QHBoxLayout()
-        bh.setContentsMargins(0, 0, 0, 0)
+        bh.setContentsMargins(2, 0, 0, 0)
+        bh.setSpacing(10)
         bcol = QVBoxLayout()
         bcol.setSpacing(0)
+        bcol.setContentsMargins(0, 0, 0, 0)
+        bcol.addStretch(1)
         bcol.addWidget(brand)
         bcol.addWidget(sub)
-        bh.addWidget(self._build_app_menu_button(), 0, Qt.AlignTop)
-        bh.addSpacing(6)
+        bcol.addStretch(1)
+        bh.addWidget(logo, 0, Qt.AlignVCenter)
         bh.addLayout(bcol, 1)
+        menu_btn = self._build_app_menu_button()
         b_fold = QToolButton()
         b_fold.setText("«")
         b_fold.setObjectName("sidefold")
         b_fold.setCursor(Qt.PointingHandCursor)
         b_fold.setToolTip("Свернуть левую панель — больше места для работы (Ctrl+B)")
         b_fold.clicked.connect(lambda: self.set_sidebar(False))
-        bh.addWidget(b_fold, 0, Qt.AlignTop)
+        for b in (menu_btn, b_fold):
+            b.setFixedSize(32, 32)
+            bh.addWidget(b, 0, Qt.AlignVCenter)
+        bh.setSpacing(6)
         sv.addLayout(bh)
         sv.addSpacing(10)
         gs = QPushButton("🔍   Найти что угодно…        Ctrl+K")
@@ -2555,6 +2571,7 @@ class MainWindow(QMainWindow):
         self.b_loose.setToolTip("Открыть и отредактировать PDF, не связанный с делом (Ctrl+0)")
         self.b_loose.clicked.connect(self.enter_loose)
         sv.addWidget(self.b_loose)
+        self.b_loose.hide()                           # «Без дела» — с Главной («Быстрые действия») и Ctrl+0
         sv.addSpacing(6)
         left = self.cases_page.left
         left.setParent(None)
@@ -6657,18 +6674,16 @@ QMenu::item:disabled {{ color: {t['disabled']}; }}
 QMenu::separator {{ height: 1px; background: {t['border']}; margin: 5px 10px; }}
 
 /* боковая панель — как в iPadOS */
-QToolButton#appmenu {{ border: none; border-radius: 8px; padding: 2px 8px; font-size: 15pt; color: {t['text']};
-    background: transparent; }}
-QToolButton#appmenu:hover, QToolButton#appmenu:pressed {{ background: {t['side_hover']}; }}
+QToolButton#appmenu, QToolButton#sidefold {{ border: 1px solid {t['border']}; border-radius: 9px; padding: 0;
+    font-size: 13pt; color: {t['text']}; background: {t['panel']}; }}
+QToolButton#appmenu:hover, QToolButton#appmenu:pressed, QToolButton#sidefold:hover {{ background: {t['side_hover']};
+    border-color: {A}; color: {A}; }}
 QToolButton#appmenu::menu-indicator {{ image: none; width: 0; }}
-QToolButton#sidefold {{ border: none; border-radius: 8px; padding: 2px 8px; font-size: 15pt; color: {t['muted']};
-    background: transparent; }}
-QToolButton#sidefold:hover {{ background: {t['side_hover']}; color: {t['text']}; }}
 QToolButton#railbtn {{ border: none; border-radius: 10px; font-size: 14pt; background: transparent; color: {t['text']}; }}
 QToolButton#railbtn:hover {{ background: {t['side_hover']}; }}
 QWidget#sidebar {{ background: {t['side']}; border-right: 1px solid {t['border']}; }}
-QLabel#brand {{ color: {t['text']}; font-family: "{S}"; font-size: 18pt; font-weight: 700; }}
-QLabel#brandsub {{ color: {t['muted']}; font-size: 9pt; }}
+QLabel#brand {{ color: {t['text']}; font-family: "{S}"; font-size: 14.5pt; font-weight: 700; }}
+QLabel#brandsub {{ color: {t['muted']}; font-size: 8.5pt; }}
 QToolButton#seg {{ background: transparent; color: {t['text']}; border: none; border-radius: 7px;
     padding: 6px 2px; font-size: 9pt; }}
 QToolButton#seg:hover {{ background: {t['fill']}; }}
@@ -6727,10 +6742,10 @@ QWidget#sidebar QListWidget#caselist::item:selected {{ background: {A}; color: w
 QWidget#sidebar QListWidget#upcoming {{ background: transparent; border: none; }}
 QWidget#sidebar QListWidget#upcoming::item {{ color: {t['muted']}; border-bottom: 1px solid {t['border']}; padding: 7px 4px; }}
 QWidget#sidebar QCheckBox {{ color: {t['muted']}; }}
-QPushButton#loosebtn {{ text-align: left; background: {t['panel']}; color: {t['text']}; border: none;
-    border-radius: 10px; padding: 10px 12px; }}
-QPushButton#loosebtn:hover {{ background: {t['hover']}; }}
-QPushButton#loosebtn:checked {{ background: {A}; color: white; font-weight: 600; }}
+QPushButton#loosebtn {{ text-align: left; background: transparent; color: {t['text']}; border: none;
+    border-radius: 9px; padding: 9px 12px; font-weight: 600; }}
+QPushButton#loosebtn:hover {{ background: {t['side_hover']}; }}
+QPushButton#loosebtn:checked {{ background: {t['accent_soft']}; color: {A}; }}
 QPushButton#sidelink {{ text-align: left; border: none; background: transparent; color: {A}; padding: 8px 4px; }}
 QPushButton#sidelink:hover {{ text-decoration: underline; }}
 
