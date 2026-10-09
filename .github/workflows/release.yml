@@ -85,7 +85,7 @@ jobs:
           --hidden-import legal_ui --hidden-import legal_core --hidden-import cases --hidden-import legal_data
           --hidden-import templates_lib --hidden-import help_ui --hidden-import updater --hidden-import timecheck
           --hidden-import backup --hidden-import casefile --hidden-import anim --hidden-import timer_widget
-          --hidden-import extwatch --hidden-import tutorial --hidden-import help_content --hidden-import phone_export --hidden-import palette --hidden-import app_menu --hidden-import modern_ui --hidden-import folders_ui --hidden-import laws_auto --hidden-import doc_names --hidden-import rename_ui --hidden-import outline_ui --hidden-import titlebar --hidden-import hearings --hidden-import hearings_ui --hidden-import kad_ui --hidden-import yacal --hidden-import yacal_ui --hidden-import zoom_ui --hidden-import practice_auto --hidden-import practice_ui --hidden-import word_editor
+          --hidden-import extwatch --hidden-import tutorial --hidden-import help_content --hidden-import phone_export --hidden-import palette --hidden-import app_menu --hidden-import modern_ui --hidden-import folders_ui --hidden-import laws_auto --hidden-import doc_names --hidden-import rename_ui --hidden-import outline_ui --hidden-import titlebar --hidden-import PySide6.QtQuickWidgets --hidden-import hearings --hidden-import hearings_ui --hidden-import kad_ui --hidden-import yacal --hidden-import yacal_ui --hidden-import zoom_ui --hidden-import practice_auto --hidden-import practice_ui --hidden-import word_editor
           --exclude-module onnxruntime --exclude-module pymupdf.layout --exclude-module pymupdf4llm
           pdf_master.py
 

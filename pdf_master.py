@@ -121,7 +121,7 @@ def cleanup_undo_files(max_age=24 * 3600):
 
 
 APP_NAME = "LegalHelper"
-APP_VERSION = "3.11"
+APP_VERSION = "3.11.1"
 DEV_EMAIL = "axis.juris@bk.ru"
 DEV_TELEGRAM = "axis_juris"
 CLOCK_OFFSET = 0.0          # поправка к часам компьютера по точному времени, сек (см. timecheck.py)
@@ -2133,6 +2133,26 @@ class MainWindow(QMainWindow):
         if value != was:
             QTimer.singleShot(0, self._sync_save_button)
 
+    def _prewarm_rhi(self):
+        """Карта дела (встроенный браузер) рисуется через видеокарту. Если такой виджет впервые появляется в уже
+        открытом окне, Windows пересоздаёт окно — оно мигает, будто программа закрылась и открылась. Поэтому
+        невидимый «заготовочный» виджет того же вида ставим в окно сразу, ещё до показа: окно с самого начала
+        создаётся подходящим, и открытие карты проходит без мигания."""
+        if os.environ.get("LH_NO_PREWARM"):
+            return
+        try:
+            import importlib.util
+            if importlib.util.find_spec("PySide6.QtWebEngineWidgets") is None:
+                return
+            from PySide6.QtQuickWidgets import QQuickWidget
+            w = QQuickWidget(self)
+            w.setFixedSize(1, 1)
+            w.setAttribute(Qt.WA_TransparentForMouseEvents)
+            w.hide()
+            self._rhi_keepalive = w
+        except Exception as ex:
+            log_error("Подготовка окна для карты дела", ex)
+
     def set_custom_titlebar(self, on):
         settings().setValue(titlebar.KEY, "1" if on else "0")
         if QMessageBox.question(self, APP_NAME, ("Включить свою полосу заголовка" if on else
@@ -2743,11 +2763,16 @@ class MainWindow(QMainWindow):
         ch.addWidget(side)
         ch.addWidget(self._build_rail())
         ch.addWidget(right, 1)
-        self.setCentralWidget(central)
         try:
-            titlebar.install(self, settings)          # своя верхняя полоса вместо рамки Windows
+            central = titlebar.wrap(self, central, settings)   # своя верхняя полоса вместо рамки Windows
         except Exception as ex:
             log_error("Своя полоса заголовка", ex)
+        self.setCentralWidget(central)
+        try:
+            titlebar.finish(self)
+        except Exception as ex:
+            log_error("Своя полоса заголовка", ex)
+        self._prewarm_rhi()
         self.addAction(self.a_nav)
         self.set_sidebar(str(settings().value("sidebar_collapsed", "0")) != "1", animate=False)
         QTimer.singleShot(60, self._initial_mode)

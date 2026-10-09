@@ -6,7 +6,7 @@
 щелчок разворачивает, края тянутся мышью. Вернуть обычную рамку: ☰ → Вид → «Своя полоса заголовка».
 """
 from PySide6.QtCore import Qt, QObject, QEvent, QTimer, QPoint, QSize
-from PySide6.QtGui import QIcon, QCursor
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, QToolButton, QPushButton, QApplication,
                                QSizePolicy)
 
@@ -144,6 +144,9 @@ class TitleBar(QWidget):
             scr = m.screen() or QApplication.primaryScreen()
             m.setGeometry(scr.availableGeometry())
         self.refresh()
+        g = getattr(m, "_grips", None)
+        if g is not None:
+            g.place()
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
@@ -184,76 +187,64 @@ class TitleBar(QWidget):
             e.accept()
 
 
-class EdgeResizer(QObject):
-    """Растягивание окна без рамки: у краёв курсор меняется, нажатие — системное растягивание."""
+class Grip(QWidget):
+    """Невидимая полоска по краю окна: курсор-стрелка и растягивание мышью (системное — плавное)."""
+
+    def __init__(self, main, edges, shape):
+        super().__init__(main)
+        self.main, self.edges = main, edges
+        self.setCursor(shape)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+
+    def paintEvent(self, e):
+        pass
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            h = self.main.windowHandle()
+            if h is not None:
+                h.startSystemResize(self.edges)
+            e.accept()
+
+
+class Grips(QObject):
+    """Восемь полосок по краям и углам; следим только за размером самого окна (без слежки за всей программой —
+    она мешала встроенному браузеру карты дела)."""
 
     def __init__(self, main, bar):
         super().__init__(main)
         self.main, self.bar = main, bar
-        self._cursor = None
+        E = Qt.Edge
+        spec = [(E.LeftEdge, Qt.SizeHorCursor), (E.RightEdge, Qt.SizeHorCursor), (E.TopEdge, Qt.SizeVerCursor),
+                (E.BottomEdge, Qt.SizeVerCursor), (E.LeftEdge | E.TopEdge, Qt.SizeFDiagCursor),
+                (E.RightEdge | E.BottomEdge, Qt.SizeFDiagCursor), (E.RightEdge | E.TopEdge, Qt.SizeBDiagCursor),
+                (E.LeftEdge | E.BottomEdge, Qt.SizeBDiagCursor)]
+        self.grips = [Grip(main, Qt.Edges(e), c) for e, c in spec]
+        main.installEventFilter(self)
+        QTimer.singleShot(0, self.place)
 
-    def _edges(self, gp):
+    def place(self):
         m = self.main
-        if m.isMaximized() or m.isFullScreen() or self.bar._normal_geo is not None:
-            return Qt.Edges()
-        g = m.frameGeometry()
-        x, y = gp.x() - g.left(), gp.y() - g.top()
-        if not (-1 <= x <= g.width() + 1 and -1 <= y <= g.height() + 1):
-            return Qt.Edges()
-        e = Qt.Edges()
-        if x <= EDGE:
-            e |= Qt.LeftEdge
-        elif x >= g.width() - EDGE:
-            e |= Qt.RightEdge
-        if y <= EDGE - 2:
-            e |= Qt.TopEdge
-        elif y >= g.height() - EDGE:
-            e |= Qt.BottomEdge
-        return e
-
-    @staticmethod
-    def _shape(e):
-        if e in (Qt.LeftEdge | Qt.TopEdge, Qt.RightEdge | Qt.BottomEdge):
-            return Qt.SizeFDiagCursor
-        if e in (Qt.RightEdge | Qt.TopEdge, Qt.LeftEdge | Qt.BottomEdge):
-            return Qt.SizeBDiagCursor
-        if e & (Qt.LeftEdge | Qt.RightEdge):
-            return Qt.SizeHorCursor
-        return Qt.SizeVerCursor
+        w, h, k, c = m.width(), m.height(), EDGE, EDGE * 2
+        off = m.isMaximized() or m.isFullScreen() or self.bar._normal_geo is not None
+        geo = [(0, c, k, h - 2 * c), (w - k, c, k, h - 2 * c), (c, 0, w - 2 * c, k - 2), (c, h - k, w - 2 * c, k),
+               (0, 0, c, c), (w - c, h - c, c, c), (w - c, 0, c, c), (0, h - c, c, c)]
+        for g, (x, y, gw, gh) in zip(self.grips, geo):
+            g.setGeometry(x, y, max(1, gw), max(1, gh))
+            g.setVisible(not off)
+            g.raise_()
 
     def eventFilter(self, obj, ev):
-        t = ev.type()
-        if t not in (QEvent.MouseMove, QEvent.MouseButtonPress, QEvent.HoverMove):
-            return False
-        w = obj if isinstance(obj, QWidget) else None
-        if w is None or w.window() is not self.main:
-            return False
-        gp = QCursor.pos()
-        edges = self._edges(gp)
-        if t in (QEvent.MouseMove, QEvent.HoverMove):
-            if edges:
-                shape = self._shape(edges)
-                if self._cursor != shape:
-                    if self._cursor is not None:
-                        QApplication.restoreOverrideCursor()
-                    QApplication.setOverrideCursor(shape)
-                    self._cursor = shape
-            elif self._cursor is not None:
-                QApplication.restoreOverrideCursor()
-                self._cursor = None
-            return False
-        if t == QEvent.MouseButtonPress and edges and ev.button() == Qt.LeftButton:
-            h = self.main.windowHandle()
-            if h is not None and h.startSystemResize(edges):
-                return True
+        if obj is self.main and ev.type() in (QEvent.Resize, QEvent.WindowStateChange, QEvent.Show):
+            QTimer.singleShot(0, self.place)
         return False
 
 
-def install(main, settings):
-    """Убрать стандартную рамку и поставить свою полосу сверху (если не выключено в настройках)."""
+def wrap(main, central, settings):
+    """Положить полосу над содержимым окна (до setCentralWidget — без пересадки готового содержимого:
+    пересадка ломала встроенный браузер карты дела). Возвращает то, что ставить в окно."""
     if not enabled(settings):
-        return None
-    central = main.takeCentralWidget()
+        return central
     box = QWidget()
     box.setObjectName("framebox")
     box.setAttribute(Qt.WA_StyledBackground, True)
@@ -263,19 +254,24 @@ def install(main, settings):
     bar = TitleBar(main)
     v.addWidget(bar)
     v.addWidget(central, 1)
-    main.setCentralWidget(box)
-    main.setWindowFlags(main.windowFlags() | Qt.FramelessWindowHint | Qt.WindowMinMaxButtonsHint)
     main.titlebar = bar
+    return box
+
+
+def finish(main):
+    """Убрать стандартную рамку (до первого показа окна) и включить растягивание за края."""
+    bar = getattr(main, "titlebar", None)
+    if bar is None:
+        return None
+    main.setWindowFlags(main.windowFlags() | Qt.FramelessWindowHint | Qt.WindowMinMaxButtonsHint)
+    main._grips = Grips(main, bar)
     try:
         main.b_global_search.hide()                 # поиск теперь в верхней полосе
     except Exception:
         pass
-    main._edge_resizer = EdgeResizer(main, bar)
-    QApplication.instance().installEventFilter(main._edge_resizer)
     try:
-        m = main
-        m.stack.currentChanged.connect(lambda *_: bar.refresh())
-        m.cases_page.tabs.currentChanged.connect(lambda *_: bar.refresh())
+        main.stack.currentChanged.connect(lambda *_: bar.refresh())
+        main.cases_page.tabs.currentChanged.connect(lambda *_: bar.refresh())
     except Exception:
         pass
     return bar
